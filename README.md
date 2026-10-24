@@ -20,10 +20,29 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 |---|---|
 | `docs/architecture.md` | Module map, SQLite schema, package format, LAN protocol, test strategy |
 | `docs/dependencies.md` | Dependency register (what / why / licence / size) |
+| `docs/limitations.md` | Known limitations and measured performance on the target laptop |
 ***REMOVED***
 | `eval/benchmark-plan.md` | Controlled benchmark: find-time, duplicate/conflict detection accuracy, package verification |
+| `installer/` | PyInstaller spec + one-command build script (`build.bat`) |
 
-Source code and tests land here as milestones complete.
+## Run and build
+
+From source (Python 3.12+, SQLite and the packages in `docs/dependencies.md`):
+
+```
+python -m venv .venv
+.venv/Scripts/pip install PySide6-Essentials jdatetime pytest
+.venv/Scripts/pip install -e .          # or add src/ to PYTHONPATH
+.venv/Scripts/python -m darspack
+```
+
+Tests: `.venv/Scripts/python -m pytest tests/`
+
+Windows build (produces `dist/DarsPack/DarsPack.exe`, a portable app folder):
+
+```
+installer\build.bat
+```
 
 ## License
 

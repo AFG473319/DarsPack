@@ -15,6 +15,7 @@ import ipaddress
 import json
 import secrets
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -23,7 +24,12 @@ from pathlib import Path
 
 from ..core.library import Library
 
-CLIENT_DIR = Path(__file__).parent / "client"
+CLIENT_DIR: Path
+if getattr(sys, "frozen", False):
+    # PyInstaller build: data files unpack under sys._MEIPASS
+    CLIENT_DIR = Path(sys._MEIPASS) / "darspack" / "web" / "client"
+else:
+    CLIENT_DIR = Path(__file__).parent / "client"
 MAX_UPLOAD = 200 * 1024 * 1024          # 200 MB — bigger files via USB
 LOCKOUT_SECONDS = 30
 MAX_FAILS = 5
