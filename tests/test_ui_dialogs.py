@@ -5,6 +5,7 @@ The metadata dialog crashed on open when the file had no subject
 column is missing). These tests would have caught it.
 """
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -74,3 +75,33 @@ def test_metadata_dialog_opens_for_unclassified_file(tmp_path, qapp):
         file_id = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
         dlg = MetadataDialog(None, lib, file_id)
         assert dlg.subject.currentText() == ""
+
+
+def test_save_feedback_writes_jsonl(lib_with_file, qapp):
+    """The feedback form's save path: one JSON line per entry."""
+    import json
+    from darspack.ui.dialogs import save_feedback
+    lib, _, tmp_path = lib_with_file
+
+    class Parent:                       # minimal stand-in for MainWindow
+        pass
+    Parent.lib = lib
+    save_feedback(Parent(), "سؤال: می‌شود فصل را حذف کرد؟")
+
+    lines = (tmp_path / "lib" / "feedback.jsonl").read_text(
+        encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["text"].startswith("سؤال")
+    logged = lib.conn.execute(
+        "SELECT action FROM activity_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()["action"]
+    assert logged == "feedback"
+
+
+def test_feedback_button_is_lambda_wired():
+    """Qt's clicked signal passes `checked` to plain-function slots —
+    wiring feedback_dialog directly crashed (QDialog(False)). Guard the
+    wiring so it stays a zero-arg lambda."""
+    source = Path("src/darspack/ui/main_window.py").read_text(encoding="utf-8")
+    assert '(tr("btn_feedback"), dialogs.feedback_dialog)' not in source
+    assert '(tr("btn_feedback"), lambda: dialogs.feedback_dialog(self))' in source

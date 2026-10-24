@@ -99,7 +99,7 @@ class MainWindow(QMainWindow):
                 (tr("btn_dups"), self.show_duplicates),
                 (tr("btn_edit_meta"), self.edit_metadata),
                 (tr("btn_share"), self.toggle_share),
-                (tr("btn_feedback"), dialogs.feedback_dialog),
+                (tr("btn_feedback"), lambda: dialogs.feedback_dialog(self)),
                 (tr("btn_help"), lambda: dialogs.text_dialog(
                     self, tr("btn_help"), tr("help_text"))),
                 (tr("btn_about"), lambda: dialogs.text_dialog(

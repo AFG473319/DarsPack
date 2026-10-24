@@ -33,8 +33,20 @@ def text_dialog(parent, title: str, text: str) -> None:
     QMessageBox.information(parent, title, text)
 
 
-def feedback_dialog(parent) -> None:
-    """In-app feedback form: saved to feedback.jsonl in the library root."""
+def save_feedback(parent, text: str) -> None:
+    """Persist one feedback entry (in-app form → feedback.jsonl)."""
+    target = Path(parent.lib.root) / "feedback.jsonl"
+    with open(target, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "text": text}, ensure_ascii=False) + "\n")
+    db.log(parent.lib.conn, "feedback", "")
+
+
+def feedback_dialog(parent=None) -> None:
+    """In-app feedback form. parent=None default: Qt's clicked signal
+    passes its `checked` bool to plain-function slots, so the wiring
+    uses a lambda — this default is the second line of defense."""
     dlg = QDialog(parent)
     dlg.setWindowTitle(tr("btn_feedback"))
     box = QTextEdit()
@@ -45,12 +57,7 @@ def feedback_dialog(parent) -> None:
     layout.addWidget(save)
     save.clicked.connect(dlg.accept)
     if dlg.exec() and box.toPlainText().strip():
-        target = Path(parent.lib.root) / "feedback.jsonl"
-        with open(target, "a", encoding="utf-8") as f:
-            f.write(json.dumps({
-                "ts": datetime.now().isoformat(timespec="seconds"),
-                "text": box.toPlainText().strip()}, ensure_ascii=False) + "\n")
-        db.log(parent.lib.conn, "feedback", "")
+        save_feedback(parent, box.toPlainText().strip())
         QMessageBox.information(parent, tr("btn_feedback"), tr("feedback_thanks"))
 
 
