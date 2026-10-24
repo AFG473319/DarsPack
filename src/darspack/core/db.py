@@ -60,8 +60,15 @@ CREATE TABLE IF NOT EXISTS activity_log (
 
 
 def connect(db_path) -> sqlite3.Connection:
-    """Open the catalog with sensible, explainable pragmas."""
-    conn = sqlite3.connect(db_path)
+    """Open the catalog with sensible, explainable pragmas.
+
+    check_same_thread=False is deliberate: the discipline is ONE
+    connection per thread (UI thread, import worker, each HTTP worker);
+    the only cross-thread use is closing a thread's connection after
+    that thread is gone (server stop). SQLite serializes concurrent
+    writers with the busy timeout below.
+    """
+    conn = sqlite3.connect(db_path, timeout=5.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")   # readers never block the writer
     conn.execute("PRAGMA foreign_keys=ON")
@@ -79,3 +86,21 @@ def log(conn: sqlite3.Connection, action: str, detail: str = "") -> None:
     now = _dt.datetime.now().isoformat(timespec="seconds")
     conn.execute("INSERT INTO activity_log(ts, action, detail) VALUES (?,?,?)",
                  (now, action, detail))
+
+
+def get_or_create(conn: sqlite3.Connection, table: str, name: str) -> int | None:
+    """Return the id of subjects/teachers/tags row `name`, creating it if new.
+
+    Matching uses the normalized key, so «رياضي» (Arabic ي) finds «ریاضی».
+    """
+    from .normalize import match_key  # local import avoids a cycle at import time
+    key = match_key(name)
+    if not key:
+        return None
+    row = conn.execute(
+        f"SELECT id FROM {table} WHERE normalized=?", (key,)).fetchone()
+    if row is not None:
+        return row["id"]
+    cur = conn.execute(
+        f"INSERT INTO {table}(name, normalized) VALUES (?,?)", (name.strip(), key))
+    return cur.lastrowid

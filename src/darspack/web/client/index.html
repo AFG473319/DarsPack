@@ -1,0 +1,107 @@
+<!doctype html>
+<!-- Phone web client (کلاینت گوشی). One static page: no framework, no
+     build step. dir="rtl" Persian-first. The PIN is kept in localStorage
+     after the first successful call, so it is asked once per device. -->
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>درس‌پک</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: Tahoma, sans-serif; margin: 0; background: #1e1f24; color: #e8e8ea; }
+  header { background: #2d3f6e; padding: 12px 16px; font-size: 18px; font-weight: bold; }
+  main { padding: 12px 16px; max-width: 640px; margin: 0 auto; }
+  #pinbox, #files { display: none; }
+  input, button {
+    font-family: inherit; font-size: 16px; border-radius: 8px;
+    border: 1px solid #3a3b42; padding: 10px 12px; background: #2a2b31; color: inherit;
+  }
+  button { background: #3a5290; border: none; width: 100%; margin-top: 10px; }
+  input { width: 100%; box-sizing: border-box; }
+  .file { background: #23242a; border: 1px solid #3a3b42; border-radius: 8px;
+          padding: 10px 12px; margin: 8px 0; }
+  .file .name { font-weight: bold; word-break: break-all; }
+  .file .meta { color: #a0a0a8; font-size: 13px; margin-top: 4px; }
+  .file a { color: #9db4ef; text-decoration: none; float: left; }
+  #status { color: #a0a0a8; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>درس‌پک — کتابخانه‌ی هم‌کلاسی</header>
+<main>
+  <div id="pinbox">
+    <p>رمز اتصال را از صاحب کتابخانه بگیرید:</p>
+    <input id="pin" inputmode="numeric" maxlength="6" placeholder="PIN (۶ رقم)">
+    <button onclick="savePin()">اتصال</button>
+    <p id="pinerr" style="color:#e08080"></p>
+  </div>
+  <div id="files">
+    <input id="q" placeholder="جست‌جو…" oninput="debouncedSearch()">
+    <div id="list"></div>
+    <p id="status"></p>
+    <hr>
+    <p>افزودن فایل به کتابخانه:</p>
+    <input type="file" id="up" onchange="upload()">
+    <p id="upstatus"></p>
+  </div>
+</main>
+<script>
+let timer = null;
+const pin = () => localStorage.getItem('darspack-pin') || '';
+
+async function api(path, options) {
+  const sep = path.includes('?') ? '&' : '?';
+  const res = await fetch(path + sep + 'pin=' + encodeURIComponent(pin()), options);
+  if (res.status === 403) { showPin(); throw new Error('pin'); }
+  return res;
+}
+
+function showPin() { pinbox.style.display = 'block'; files.style.display = 'none'; }
+
+function savePin() {
+  localStorage.setItem('darspack-pin', pin_input.value.trim());
+  search();
+  files.style.display = 'block'; pinbox.style.display = 'none';
+}
+
+function render(rows) {
+  list.innerHTML = rows.map(f =>
+    `<div class="file"><div class="name">${escapeHtml(f.name)}</div>
+     <div class="meta">${escapeHtml(f.subject || '—')} · فصل ${f.chapter ?? '—'} · ${escapeHtml(f.kind || '—')}</div>
+     <a href="/api/file/${f.id}?pin=${encodeURIComponent(pin())}">دانلود ⬇</a></div>`).join('')
+    || '<p style="color:#a0a0a8">چیزی پیدا نشد.</p>';
+}
+
+function search() {
+  const q = document.getElementById('q').value;
+  api('/api/search?q=' + encodeURIComponent(q))
+    .then(r => r.json()).then(d => render(d.files))
+    .catch(() => {});
+}
+
+function debouncedSearch() {
+  clearTimeout(timer);
+  timer = setTimeout(search, 300);
+}
+
+async function upload() {
+  const file = document.getElementById('up').files[0];
+  if (!file) return;
+  upstatus.textContent = 'در حال ارسال: ' + file.name;
+  const res = await api('/api/upload?name=' + encodeURIComponent(file.name),
+                        { method: 'POST', body: file });
+  const data = await res.json();
+  upstatus.textContent = data.message || data.status;
+  search();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+(pin() ? (files.style.display='block', search()) : showPin());
+</script>
+</body>
+</html>

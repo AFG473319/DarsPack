@@ -36,8 +36,14 @@ def _now() -> str:
 
 
 def import_file(lib, src, meta: dict | None = None,
-                keep_duplicate: bool = False, progress=None) -> ImportResult:
-    """Import one file into the library. See the module docstring."""
+                keep_duplicate: bool = False, progress=None,
+                display_name: str | None = None) -> ImportResult:
+    """Import one file into the library. See the module docstring.
+
+    display_name: what the file should be called in the catalog. It
+    differs from src.name for web uploads, which arrive as temporary
+    files with a random prefix.
+    """
     src = Path(src)
     if not src.is_file():
         return ImportResult("error", f"فایل پیدا نشد: {src}")
@@ -45,9 +51,14 @@ def import_file(lib, src, meta: dict | None = None,
     sha = sha256_file(src, progress)
     size = src.stat().st_size
 
-    suggestion = suggest(src.stem)
+    shown_name = display_name or src.name
+    suggestion = suggest(Path(shown_name).stem)
     meta = meta or {}
     kind = meta.get("kind") or suggestion["kind"]
+    subject_id = (db.get_or_create(conn, "subjects",
+                                   meta.get("subject")
+                                   or suggestion["subject"])
+                  if (meta.get("subject") or suggestion["subject"]) else None)
 
     with conn:  # one transaction — everything commits, or nothing does
         dup = conn.execute(
@@ -56,14 +67,16 @@ def import_file(lib, src, meta: dict | None = None,
         if dup and not keep_duplicate:
             return ImportResult(
                 "duplicate",
-                f"«{src.name}» از قبل در کتابخانه هست",
+                f"«{shown_name}» از قبل در کتابخانه هست",
                 path=src, existing_id=dup["id"])
 
         cur = conn.execute(
             """INSERT INTO files(stored_name, original_name, name_norm,
-               size_bytes, sha256, imported_at, chapter, school_year, kind)
-               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (src.name, match_key(src.name), size, sha, _now(),
+               size_bytes, sha256, imported_at, subject_id, chapter,
+               school_year, kind)
+               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (shown_name, match_key(shown_name), size, sha, _now(),
+             subject_id,
              meta.get("chapter", suggestion["chapter"]),
              meta.get("school_year", current_school_year()),
              kind))
@@ -75,8 +88,8 @@ def import_file(lib, src, meta: dict | None = None,
         os.replace(tmp, final)  # atomic rename on the same volume
         conn.execute("UPDATE files SET stored_name=? WHERE id=?",
                      (final.name, file_id))
-        db.log(conn, "import", f"{src.name} → {final.name}")
-    return ImportResult("imported", f"«{src.name}» وارد شد",
+        db.log(conn, "import", f"{shown_name} → {final.name}")
+    return ImportResult("imported", f"«{shown_name}» وارد شد",
                         path=src, file_id=file_id)
 
 
