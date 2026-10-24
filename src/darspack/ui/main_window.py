@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, __version__, i18n
 from ..core.dedup import duplicate_groups, rename_hints, version_conflicts
 from ..core.search import search as catalog_search
+from ..core.search import unclassified_count
 from ..core import manifest as manifest_core
 from ..i18n import tr
 from ..web.server import ShareServer
@@ -127,6 +128,7 @@ class MainWindow(QMainWindow):
         self.kind_combo.blockSignals(True)
         self.subject_combo.clear()
         self.subject_combo.addItem(tr("all_subjects"), None)
+        self.subject_combo.addItem(tr("unclassified"), -1)  # files missing info
         for row in self.lib.conn.execute(
                 "SELECT id, name FROM subjects ORDER BY name"):
             self.subject_combo.addItem(row["name"], row["id"])
@@ -138,11 +140,13 @@ class MainWindow(QMainWindow):
         self.kind_combo.blockSignals(False)
 
     def refresh(self) -> None:
+        subject_data = self.subject_combo.currentData()
         rows = catalog_search(
             self.lib.conn,
             self.search_box.text(),
-            subject_id=self.subject_combo.currentData(),
+            subject_id=subject_data if isinstance(subject_data, int) and subject_data > 0 else None,
             kind=self.kind_combo.currentData(),
+            unclassified_only=(subject_data == -1),
             limit=2000)
         self.last_rows = rows
         self.table.setRowCount(len(rows))
@@ -156,7 +160,11 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.UserRole, row["id"])
                 self.table.setItem(i, col, item)
-        self.statusBar().showMessage(tr("status_files").format(len(rows)))
+        self.statusBar().showMessage(
+            tr("status_files").format(len(rows))
+            + ("  ·  " + tr("status_unclassified").format(
+                unclassified_count(self.lib.conn))
+               if unclassified_count(self.lib.conn) else ""))
 
     def selected_file_id(self) -> int | None:
         selected = self.table.selectedItems()
@@ -189,9 +197,16 @@ class MainWindow(QMainWindow):
         self._worker.done.connect(self._import_finished)
         self._worker.start()
 
-    def _import_finished(self, imported, duplicates, errors, messages) -> None:
+    def _import_finished(self, imported, duplicates, errors, messages,
+                         new_ids) -> None:
         self.reload_filters()
         self.refresh()
+        # Categorizing is the app's main job — ask for the new files' info
+        # right away, pre-filled with the filename suggestions.
+        if new_ids:
+            dialogs.ClassifyDialog(self, self.lib, new_ids).exec()
+            self.reload_filters()
+            self.refresh()
         text = tr("import_done").format(imported, duplicates, errors)
         if messages:
             text += "\n" + "\n".join(messages[:5])

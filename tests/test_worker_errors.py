@@ -68,6 +68,7 @@ def test_import_worker_always_emits_done(tmp_path, batch):
         time.sleep(0.02)
     worker.wait(5000)
     assert received, "done never emitted — the UI would hang on 'importing'"
-    imported, duplicates, errors, messages = received[0]
+    imported, duplicates, errors, messages, new_ids = received[0]
     assert (imported, duplicates, errors) == (2, 0, 1)
     assert any("bad.pdf" in m for m in messages)
+    assert len(new_ids) == 2            # ids for the classification dialog

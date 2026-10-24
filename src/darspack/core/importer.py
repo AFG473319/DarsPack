@@ -55,10 +55,11 @@ def import_file(lib, src, meta: dict | None = None,
     suggestion = suggest(Path(shown_name).stem)
     meta = meta or {}
     kind = meta.get("kind") or suggestion["kind"]
-    subject_id = (db.get_or_create(conn, "subjects",
-                                   meta.get("subject")
-                                   or suggestion["subject"])
-                  if (meta.get("subject") or suggestion["subject"]) else None)
+    # The SUBJECT is deliberately NOT auto-applied: categorizing is the
+    # app's main job and belongs to the user. Suggestions only pre-fill
+    # the classification dialog; until then the file counts as
+    # unclassified («بدون درس») so the app keeps asking.
+    subject_id = None
 
     with conn:  # one transaction — everything commits, or nothing does
         dup = conn.execute(

@@ -104,7 +104,7 @@ Import is crash-safe: copy to `files/tmp_…` → verify size → atomic rename 
 ### 4.2 Filename heuristic 
 Parse common Persian school patterns to *suggest* (never auto-apply without the import-review step): subject from a fixed list (ریاضی، علوم، فارسی، عربی، دینی، انگلیسی، علوم تجربی، مطالعات، هنر، کار و فناوری، تربیت بدنی، آمادگی دفاعی), chapter from «فصل ۳/فصل سه/ف3/بدون فصل», kind from keywords (نمونه سوال→نمونه‌سوال، جزوه، کاربرگ، تکلیف/تمرین). Confidence shown; review dialog always allows editing.
 
-Implementation note: at import time the suggestions are applied automatically (subject/chapter/kind) and stay editable per file afterwards in the metadata dialog — a second review pass rather than a blocking wizard.
+**Import flow (revised 2026-10-24 — a deliberate architectural decision): categorizing is the app's main job, so the app asks.** Import copies + hashes + dedups silently, then a **classification review dialog** opens for every newly imported file, pre-filled from the filename heuristic — the user confirms or fixes subject/chapter/kind. The importer itself applies only chapter/kind hints; the **subject is never auto-applied**, so any file the user hasn't classified counts as unclassified. Unclassified files stay visible: a «بدون درس» filter in the subject dropdown plus a status-bar count keeps nudging until the catalog is complete. Phone uploads (no dialog on the phone) land unclassified and are completed on the desktop through the same filter.
 
 ### 4.3 Duplicate & conflict rules (core algorithm)
 - **R1 — exact duplicate:** same `sha256`. Grouped; UI shows groups and total wasted bytes.

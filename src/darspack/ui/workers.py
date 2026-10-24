@@ -23,10 +23,15 @@ from ..core.library import Library
 
 
 class ImportWorker(QThread):
-    """Import a list of files/folders in the background."""
+    """Import a list of files/folders in the background.
+
+    `done` also carries the ids of the freshly imported files so the UI
+    can open the classification review dialog — entering the file info
+    is the app's main job, not a side effect.
+    """
 
     progress = Signal(int, int, str)          # done, total, current name
-    done = Signal(int, int, int, list)        # imported, duplicates, errors, messages
+    done = Signal(int, int, int, list, list)  # imported, dups, errors, messages, new ids
 
     def __init__(self, library_root, paths, keep_duplicates=False, parent=None):
         super().__init__(parent)
@@ -37,6 +42,7 @@ class ImportWorker(QThread):
     def run(self) -> None:
         imported = duplicates = errors = 0
         messages: list[str] = []
+        new_ids: list[int] = []
         lib = None
         try:
             lib = Library(self.library_root).open()
@@ -52,6 +58,7 @@ class ImportWorker(QThread):
                     continue
                 if result.status == "imported":
                     imported += 1
+                    new_ids.append(result.file_id)
                 elif result.status == "duplicate":
                     duplicates += 1
                 else:
@@ -67,7 +74,7 @@ class ImportWorker(QThread):
                     lib.close()
                 except Exception:
                     pass
-            self.done.emit(imported, duplicates, errors, messages)
+            self.done.emit(imported, duplicates, errors, messages, new_ids)
 
     def _write_error_log(self) -> None:
         """The windowed exe has no console — keep the traceback somewhere."""

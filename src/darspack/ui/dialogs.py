@@ -18,7 +18,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QMainWindow, QMessageBox, QPushButton,
-    QSpinBox, QTabWidget, QTextEdit, QVBoxLayout,
+    QSpinBox, QTableWidget, QTabWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout,
 )
 
 from .. import __version__
@@ -123,6 +124,95 @@ class ExportDialog(QDialog):
         QMessageBox.information(
             self, tr("export_title"),
             tr("export_done").format(info["count"], info["manifest_sha256"][:16]))
+        self.accept()
+
+
+class ClassifyDialog(QDialog):
+    """Review the info of freshly imported files (بازبینی اطلاعات).
+
+    Categorizing IS the app's main job, so after every import this
+    dialog asks for each new file's subject / chapter / kind, pre-filled
+    from the filename heuristic. Saving is one bulk update; «بعداً»
+    leaves files unclassified (the «بدون درس» filter finds them again).
+    """
+
+    def __init__(self, parent, lib, file_ids: list):
+        super().__init__(parent)
+        self.lib = lib
+        self.setWindowTitle(tr("classify_title"))
+        self.resize(860, 520)
+
+        headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
+                   tr("meta_kind")]
+        self.table = QTableWidget(len(file_ids), len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setColumnWidth(0, 380)
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+        subjects = [r["name"] for r in lib.conn.execute(
+            "SELECT name FROM subjects ORDER BY name")]
+        self.rows = []                            # (file_id, widgets)
+        for r, fid in enumerate(file_ids):
+            file_row = lib.conn.execute(
+                """SELECT f.*, s.name AS subject_name
+                   FROM files f LEFT JOIN subjects s ON s.id=f.subject_id
+                   WHERE f.id=?""", (fid,)).fetchone()
+
+            name_item = QTableWidgetItem(file_row["original_name"])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(r, 0, name_item)
+
+            # Pre-fill: the stored subject, or the filename heuristic's
+            # suggestion for files the importer left unclassified.
+            from ..core.suggest import suggest
+            suggested = suggest(Path(file_row["original_name"]).stem)
+            subject = QComboBox()
+            subject.setEditable(True)
+            subject.addItem("")                   # «no subject» stays possible
+            subject.addItems(subjects)
+            subject.setCurrentText(
+                file_row["subject_name"] or suggested["subject"] or "")
+            self.table.setCellWidget(r, 1, subject)
+
+            chapter = QSpinBox()
+            chapter.setRange(0, 40)
+            chapter.setValue(file_row["chapter"] or 0)
+            self.table.setCellWidget(r, 2, chapter)
+
+            kind = QComboBox()
+            kind.addItems(("جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر"))
+            kind.setCurrentText(file_row["kind"] or "سایر")
+            self.table.setCellWidget(r, 3, kind)
+
+            self.rows.append((fid, subject, chapter, kind))
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(tr("classify_hint")))
+        layout.addWidget(self.table)
+        buttons = QHBoxLayout()
+        later = QPushButton(tr("classify_later"))
+        later.clicked.connect(self.reject)
+        save = QPushButton(tr("classify_save"))
+        save.setDefault(True)
+        save.clicked.connect(self._save_all)
+        buttons.addWidget(later)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+    def _save_all(self) -> None:
+        conn = self.lib.conn
+        with conn:
+            for fid, subject, chapter, kind in self.rows:
+                name = subject.currentText().strip()
+                subject_id = (db.get_or_create(conn, "subjects", name)
+                              if name else None)
+                conn.execute(
+                    "UPDATE files SET subject_id=?, chapter=?, kind=? WHERE id=?",
+                    (subject_id, chapter.value() or None,
+                     kind.currentText(), fid))
+            db.log(conn, "classify", f"{len(self.rows)} files")
         self.accept()
 
 

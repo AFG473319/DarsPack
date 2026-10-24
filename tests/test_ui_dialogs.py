@@ -34,9 +34,11 @@ def test_metadata_dialog_opens_with_suggestion(lib_with_file, qapp):
     from darspack.ui.dialogs import MetadataDialog
     lib, file_id, _ = lib_with_file
     dlg = MetadataDialog(None, lib, file_id)          # used to crash here
-    assert dlg.subject.currentText() == "ریاضی"       # suggestion pre-filled
-    assert dlg.chapter.value() == 3
-    assert dlg.kind.currentText() == "نمونه‌سوال"
+    # The importer no longer auto-applies the SUBJECT (the user classifies
+    # in the ClassifyDialog); it shows the stored one — empty here.
+    assert dlg.subject.currentText() == ""
+    assert dlg.chapter.value() == 3                   # chapter hint kept
+    assert dlg.kind.currentText() == "نمونه‌سوال"     # kind hint kept
 
 
 def test_metadata_dialog_save_updates_catalog(lib_with_file, qapp):
