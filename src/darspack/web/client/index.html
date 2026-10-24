@@ -47,53 +47,74 @@
   </div>
 </main>
 <script>
+// Every element is fetched explicitly with $() — no reliance on the
+// browser's implicit id-globals (a mismatch there caused a silent
+// ReferenceError: the PIN button did nothing, 2026-10-24).
+const $ = id => document.getElementById(id);
 let timer = null;
-const pin = () => localStorage.getItem('darspack-pin') || '';
+const currentPin = () => localStorage.getItem('darspack-pin') || '';
 
 async function api(path, options) {
   const sep = path.includes('?') ? '&' : '?';
-  const res = await fetch(path + sep + 'pin=' + encodeURIComponent(pin()), options);
-  if (res.status === 403) { showPin(); throw new Error('pin'); }
+  const res = await fetch(path + sep + 'pin=' + encodeURIComponent(currentPin()), options);
+  if (res.status === 403) {
+    localStorage.removeItem('darspack-pin');
+    showPin();
+    throw new Error('bad pin');
+  }
   return res;
 }
 
-function showPin() { pinbox.style.display = 'block'; files.style.display = 'none'; }
+function showPin() {
+  $('pinbox').style.display = 'block';
+  $('files').style.display = 'none';
+}
 
-function savePin() {
-  localStorage.setItem('darspack-pin', pin_input.value.trim());
-  search();
-  files.style.display = 'block'; pinbox.style.display = 'none';
+async function savePin() {
+  $('pinerr').textContent = '';
+  localStorage.setItem('darspack-pin', $('pin').value.trim());
+  try {
+    await search();                       // rejects on a wrong PIN
+    $('files').style.display = 'block';
+    $('pinbox').style.display = 'none';
+  } catch (e) {
+    localStorage.removeItem('darspack-pin');
+    $('pinerr').textContent = 'رمز درست نیست؛ دوباره امتحان کنید.';
+  }
 }
 
 function render(rows) {
-  list.innerHTML = rows.map(f =>
+  $('list').innerHTML = rows.map(f =>
     `<div class="file"><div class="name">${escapeHtml(f.name)}</div>
      <div class="meta">${escapeHtml(f.subject || '—')} · فصل ${f.chapter ?? '—'} · ${escapeHtml(f.kind || '—')}</div>
-     <a href="/api/file/${f.id}?pin=${encodeURIComponent(pin())}">دانلود ⬇</a></div>`).join('')
+     <a href="/api/file/${f.id}?pin=${encodeURIComponent(currentPin())}">دانلود ⬇</a></div>`).join('')
     || '<p style="color:#a0a0a8">چیزی پیدا نشد.</p>';
 }
 
-function search() {
-  const q = document.getElementById('q').value;
-  api('/api/search?q=' + encodeURIComponent(q))
-    .then(r => r.json()).then(d => render(d.files))
-    .catch(() => {});
+async function search() {
+  const q = $('q').value;
+  const res = await api('/api/search?q=' + encodeURIComponent(q));
+  render((await res.json()).files);
 }
 
 function debouncedSearch() {
   clearTimeout(timer);
-  timer = setTimeout(search, 300);
+  timer = setTimeout(() => search().catch(() => {}), 300);
 }
 
 async function upload() {
-  const file = document.getElementById('up').files[0];
+  const file = $('up').files[0];
   if (!file) return;
-  upstatus.textContent = 'در حال ارسال: ' + file.name;
-  const res = await api('/api/upload?name=' + encodeURIComponent(file.name),
-                        { method: 'POST', body: file });
-  const data = await res.json();
-  upstatus.textContent = data.message || data.status;
-  search();
+  $('upstatus').textContent = 'در حال ارسال: ' + file.name;
+  try {
+    const res = await api('/api/upload?name=' + encodeURIComponent(file.name),
+                          { method: 'POST', body: file });
+    const data = await res.json();
+    $('upstatus').textContent = data.message || data.status;
+    await search();
+  } catch (e) {
+    $('upstatus').textContent = 'ارسال نشد — دوباره امتحان کنید.';
+  }
 }
 
 function escapeHtml(s) {
@@ -101,7 +122,8 @@ function escapeHtml(s) {
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-(pin() ? (files.style.display='block', search()) : showPin());
+(currentPin() ? ($('files').style.display = 'block', search().catch(() => {}))
+              : showPin());
 </script>
 </body>
 </html>
