@@ -12,3 +12,5 @@ Project rule: every dependency is registered here **before** installation — wh
 **Whole development environment: 270 MB** (`.venv/` including all of the above). Built output: 104 MB app folder, 2.4 MB launcher exe — see `docs/limitations.md` for measured numbers. The full `PySide6` distribution is intentionally NOT installed — its Addons half (WebEngine, 3D, multimedia, …) would add hundreds of megabytes DarsPack never uses; `PySide6-Essentials` ships exactly the widgets we need.
 
 Everything else is the Python standard library: `sqlite3`, `hashlib`, `zipfile`, `http.server`, `json`, `threading`, `hmac`, `tempfile`. No other third-party packages are planned for v1; adding one requires an entry here first and a size check.
+
+Dev-machine tools (not app dependencies): Node.js is used only by the test suite to syntax-check the phone client's JavaScript (`node --check` in `tests/test_web_client.py`); the app itself never touches it.

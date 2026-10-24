@@ -1,6 +1,6 @@
 # DarsPack Architecture (Phase B)
 
-Status: v1 core + desktop UI + LAN server implemented and tested (2026-10-24, 50 tests green); packaging (M9) pending.
+Status: **working v0.1** — core, desktop UI, LAN server + phone client, and the Windows build are implemented; 66 tests green (2026-10-24). Now in a real-use bug-fixing phase (the built exe is dogfooded and reports crashes via the in-app error dialog).
 Stack and platform constraints are locked and documented below.
 
 ## 1. Design principles
@@ -158,11 +158,18 @@ No secrets exist pre-cloud (none stored, none asked). No telemetry, no auto netw
 |---|---|
 | test_normalize.py | the normalization table; ي/ی, ك/ک, ZWNJ, ۰-۹/0-9, mixed |
 | test_schoolyear.py | Mehr boundary, leap Esfand, Shahrivar tail |
-| test_importer.py | copy-in, crash-safe rename, dedup-at-import, metadata suggestion |
+| test_importer.py | copy-in, crash-safe rename, dedup-at-import, per-file error containment |
 | test_dedup.py | R1/R2/R3 on the planted-labelled fixture set |
 | test_manifest.py | export→verify round-trip; tamper (one flipped byte → exact file named); missing member |
-| test_search.py | normalized matching, Persian/Latin digit queries, ranking |
-| test_server.py | PIN gate, lockout, upload→importer path, manifest endpoint |
+| test_search.py | normalized matching, Persian/Latin digit queries, ranking, unclassified filter |
+| test_classify.py | the classification flow: prefill from heuristic, bulk save, unclassified tracking |
+| test_server.py | PIN gate, lockout, upload→importer path, manifest endpoint, per-thread libraries |
+| test_sync.py | catalog manifest + the pure diff |
+| test_worker_errors.py | the import worker ALWAYS emits done; one bad file never hangs the UI |
+| test_ui_dialogs.py | every dialog constructs offscreen; metadata/classify save paths; button-wiring guards |
+| test_web_client.py | phone client: JS parses (`node --check`), every `$('id')` exists, no implicit globals |
+
+Lessons learned while dogfooding (all now test-enforced): background threads must always report completion even on failure; SQLite connections stay on their creating thread (server uses per-thread connections); Qt's `clicked` passes `checked` to plain-function slots (wire zero-arg lambdas); the browser client must not rely on implicit id-globals.
 
 Every reported performance number (startup, RAM, export/verify time) is measured on the target laptop by an `eval/` script.
 

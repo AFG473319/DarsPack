@@ -4,7 +4,16 @@
 
 DarsPack (درس‌پک) helps Iranian middle-school students keep their class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) in one findable place. It is a Windows desktop app that also serves a phone-friendly web client over local Wi-Fi. Persian-first RTL interface with an English toggle.
 
-> Status: **early development** — architecture and evaluation plan are in place (see below); implementation is starting.
+> Status: **working v0.1** — core engine, RTL desktop UI, LAN phone client, and Windows build are implemented and covered by 66 automated tests; see `docs/limitations.md` for known limitations.
+
+## What works
+
+- Import files/folders into an app-managed library (copy + SHA-256 + crash-safe), with a **classification review dialog** after every import — categorizing is the app's main job; the subject is never guessed behind your back.
+- Normalized Persian search («فصل ۳» = «فصل 3», Arabic ي finds Persian ی), subject/chapter/kind filters, tags, notes.
+- Duplicate detection (same content) and version-conflict detection (same name, different content) — **flagged, never auto-deleted**.
+- Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
+- Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, download, upload).
+- Dark RTL desktop UI, Persian/English toggle, feedback form, activity log; one-command Windows build.
 
 ## Key ideas
 
