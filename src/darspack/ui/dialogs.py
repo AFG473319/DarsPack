@@ -190,8 +190,11 @@ class MetadataDialog(QDialog):
         super().__init__(parent)
         self.lib, self.file_id = lib, file_id
         self.setWindowTitle(tr("meta_title"))
+        # join subjects so the dialog can show the current subject's NAME
         self.row = lib.conn.execute(
-            "SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+            """SELECT f.*, s.name AS subject_name
+               FROM files f LEFT JOIN subjects s ON s.id = f.subject_id
+               WHERE f.id=?""", (file_id,)).fetchone()
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
