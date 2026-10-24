@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Local databases / libraries created at runtime
+*.db
+library/
+
+# Classmates' survey data stays out of any public repo
+eval/survey-results.md
+eval/timed-test-results.md
+
+# OS noise
+Thumbs.db
+desktop.ini
