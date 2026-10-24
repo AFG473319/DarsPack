@@ -4,21 +4,15 @@ The metadata dialog crashed on open when the file had no subject
 (IndexError: No item with that key — sqlite3.Row's way of saying the
 column is missing). These tests would have caught it.
 """
-import os
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import pytest
-from PySide6.QtWidgets import QApplication
 
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
+# anchored to the repo root, so the suite runs from any working directory
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture()
@@ -102,7 +96,8 @@ def test_feedback_button_is_lambda_wired():
     """Qt's clicked signal passes `checked` to plain-function slots —
     wiring feedback_dialog directly crashed (QDialog(False)). Guard the
     wiring so it stays a zero-arg lambda."""
-    source = Path("src/darspack/ui/main_window.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "src" / "darspack" / "ui" / "main_window.py").read_text(
+        encoding="utf-8")
     assert '(tr("btn_feedback"), dialogs.feedback_dialog)' not in source
     assert '(tr("btn_feedback"), lambda: dialogs.feedback_dialog(self))' in source
 

@@ -7,24 +7,28 @@ every element the JS looks up must exist, the JS must parse, and the
 page must be served by the server.
 """
 import re
+import shutil
+import subprocess
 import urllib.request
 from pathlib import Path
 
-CLIENT = Path("src/darspack/web/client/index.html")
+import pytest
+
+# anchored to the repo root, so the suite runs from any working directory
+CLIENT = Path(__file__).resolve().parent.parent / "src" / "darspack" / "web" / "client" / "index.html"
 
 
-def test_js_syntax_is_valid():
-    import subprocess
-    html = CLIENT.read_text(encoding="utf-8")
-    script = re.search(r"<script>(.*)</script>", html, re.S).group(1)
-    js = Path("_client_check.js")
-    js.write_text(script, encoding="utf-8")
-    try:
-        result = subprocess.run(
-            ["node", "--check", str(js)], capture_output=True, text=True)
-        assert result.returncode == 0, result.stderr
-    finally:
-        js.unlink(missing_ok=True)
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — JS syntax check skipped")
+def test_js_syntax_is_valid(tmp_path):
+    js = tmp_path / "_client_check.js"    # temp folder: no litter in the repo
+    js.write_text(
+        re.search(r"<script>(.*)</script>",
+                  CLIENT.read_text(encoding="utf-8"), re.S).group(1),
+        encoding="utf-8")
+    result = subprocess.run(
+        ["node", "--check", str(js)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_every_element_used_by_js_exists_in_html():

@@ -1,6 +1,9 @@
 """Tests for the LAN share server (PIN gate, search, download, upload)."""
 import json
+import urllib.error
+import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -108,8 +111,3 @@ def test_local_ips_are_valid():
     import ipaddress
     for ip in local_ips():
         ipaddress.ip_address(ip)     # raises if malformed
-
-
-from pathlib import Path  # noqa: E402  (used in the upload test)
-import urllib.parse  # noqa: E402
-import urllib.error  # noqa: E402

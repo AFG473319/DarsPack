@@ -6,10 +6,7 @@ on «در حال وارد کردن» forever with no error anywhere. These tests
 in the contract: one bad file is counted and reported; `done` always
 fires; the rest of the batch still imports.
 """
-import os
 import time
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from pathlib import Path
 

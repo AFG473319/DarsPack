@@ -4,21 +4,11 @@ After an import the app must ask for each new file's info (pre-filled
 from the filename heuristic), and unclassified files must stay visible
 (the «بدون درس» filter + status-bar count) until they are completed.
 """
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import pytest
-from PySide6.QtWidgets import QApplication
 
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.search import search, unclassified_count
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture()
