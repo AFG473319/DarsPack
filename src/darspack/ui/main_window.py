@@ -185,7 +185,7 @@ class MainWindow(QMainWindow):
             str(self.lib.root), paths, keep_duplicates)
         self._worker.progress.connect(
             lambda d, t, name: self.statusBar().showMessage(
-                tr("import_running").format(name)))
+                tr("import_running").format(d, t, name)))
         self._worker.done.connect(self._import_finished)
         self._worker.start()
 

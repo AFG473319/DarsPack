@@ -103,6 +103,17 @@ def iter_files(paths):
 
 
 def import_paths(lib, paths, keep_duplicates=False, progress=None) -> list[ImportResult]:
-    """Import many files/folders; one ImportResult per file."""
-    return [import_file(lib, p, keep_duplicate=keep_duplicates, progress=progress)
-            for p in iter_files(paths)]
+    """Import many files/folders; one ImportResult per file.
+
+    A file that raises (locked by another program, unreadable) becomes
+    an 'error' result — one bad file must not abort the whole batch.
+    """
+    results: list[ImportResult] = []
+    for p in iter_files(paths):
+        try:
+            results.append(import_file(lib, p, keep_duplicate=keep_duplicates,
+                                       progress=progress))
+        except Exception as exc:   # report and keep going — never crash the batch
+            results.append(ImportResult(
+                "error", f"{p.name}: {exc.__class__.__name__}", path=p))
+    return results

@@ -77,6 +77,26 @@ def apply_font_size(settings: dict, app: QApplication | None = None) -> None:
         app.setFont(font)
 
 
+def _install_excepthook() -> None:
+    """Show unexpected crashes instead of dying silently.
+
+    The windowed exe has no console, so without this an uncaught
+    exception in the UI thread would close the app with no message.
+    """
+    import traceback
+    from PySide6.QtWidgets import QMessageBox
+
+    def hook(etype, value, tb):
+        text = "".join(traceback.format_exception(etype, value, tb))[-1500:]
+        try:
+            QMessageBox.critical(None, APP_NAME, text)
+        except Exception:
+            pass
+        sys.__excepthook__(etype, value, tb)
+
+    sys.excepthook = hook
+
+
 def run() -> None:
     settings, settings_path = load_settings()
     i18n.set_language(settings.get("language", "fa"))
@@ -87,6 +107,7 @@ def run() -> None:
         Qt.RightToLeft if i18n.language() == "fa" else Qt.LeftToRight)
     app.setStyleSheet(DARK_QSS)
     apply_font_size(settings, app)
+    _install_excepthook()
 
     from .main_window import MainWindow
     window = MainWindow(Path(settings["library"]), settings, settings_path)
