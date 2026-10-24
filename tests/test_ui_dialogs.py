@@ -105,3 +105,52 @@ def test_feedback_button_is_lambda_wired():
     source = Path("src/darspack/ui/main_window.py").read_text(encoding="utf-8")
     assert '(tr("btn_feedback"), dialogs.feedback_dialog)' not in source
     assert '(tr("btn_feedback"), lambda: dialogs.feedback_dialog(self))' in source
+
+
+def test_every_dialog_constructs_offscreen(tmp_path, qapp):
+    """Construction sweep: every dialog's __init__ runs without crashing.
+
+    exec()/file dialogs can't run in tests, but the metadata-dialog bug
+    lived entirely in __init__ — constructing all dialogs catches that
+    whole class before a user ever clicks.
+    """
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QWidget
+
+    from darspack.ui.dialogs import (
+        ClassifyDialog, DuplicatesDialog, ExportDialog, MetadataDialog,
+        SettingsDialog, ShareDialog, VerifyReportDialog,
+    )
+
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "نمونه سوال ریاضی فصل 3.pdf"
+        src.write_bytes(b"demo")
+        import_file(lib, src)
+        file_id = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+
+        # a real widget parent (dialogs require QWidget | None) carrying
+        # the attributes the dialogs read from the MainWindow
+        parent = QWidget()
+        parent.lib = lib
+        parent.last_rows = []
+        group = SimpleNamespace(label_fa="تکراری کامل", rows=[],
+                                detail_fa="test")
+
+        dialogs_to_build = [
+            lambda: MetadataDialog(parent, lib, file_id),
+            lambda: ClassifyDialog(parent, lib, [file_id]),
+            lambda: DuplicatesDialog(parent, {"tab": [group]}),
+            lambda: ExportDialog(parent, [file_id]),
+            lambda: SettingsDialog(parent, {"language": "fa", "font_size": 10,
+                                            "library": str(tmp_path)},
+                                   tmp_path / "settings.json"),
+            lambda: ShareDialog(parent, SimpleNamespace(pin="۱۲۳۴۵۶"),
+                                ["http://192.168.1.5:8000/"], on_close=None),
+            lambda: VerifyReportDialog(parent, "x.zip",
+                                       SimpleNamespace(ok=True, problems=[]),
+                                       library=lib, offer_import=False),
+        ]
+        for build in dialogs_to_build:
+            dlg = build()          # any crash here = a user-facing bug
+            dlg.deleteLater()
