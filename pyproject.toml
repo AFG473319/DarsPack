@@ -1,0 +1,21 @@
+[project]
+name = "darspack"
+version = "0.1.0"
+description = "Offline-first, Persian-first organizer for school materials (درس‌پک)"
+requires-python = ">=3.10"
+dependencies = ["jdatetime>=5.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# The desktop UI runtime is installed separately as PySide6-Essentials
+# (Qt widgets only — see docs/dependencies.md for the rationale).
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
