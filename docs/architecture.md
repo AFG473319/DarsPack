@@ -1,6 +1,6 @@
 # DarsPack Architecture (Phase B)
 
-Status: v1 core implemented and tested (2026-10-24, 40 tests green); desktop UI, LAN client and packaging pending.
+Status: v1 core + desktop UI + LAN server implemented and tested (2026-10-24, 50 tests green); packaging (M9) pending.
 Stack and platform constraints are locked and documented below.
 
 ## 1. Design principles
@@ -20,8 +20,7 @@ src/darspack/
 │   ├── db.py             # SQLite schema creation, migrations, row helpers           
 │   ├── library.py        # Library: paths, settings, open/create                     
 │   ├── hashing.py        # streaming SHA-256 + progress callback                     
-│   ├── importer.py       # copy-in + hash + import-time dedup + metadata suggestion  (uses the modules above)
-│   ├── dedup.py          # duplicate groups + conflict rules R1–R3                   
+│   ├── importer.py       # copy-in + hash + import-time dedup + metadata suggestion  (uses the modules above)│   ├── dedup.py          # duplicate groups + conflict rules R1–R3                   
 │   ├── search.py         # normalized search over the catalog                        
 │   ├── manifest.py       # درس‌پک manifest build + package export + verify           
 │   └── schoolyear.py     # Jalali school-year helpers (Mehr→Shahrivar span)          
@@ -104,6 +103,8 @@ Import is crash-safe: copy to `files/tmp_…` → verify size → atomic rename 
 
 ### 4.2 Filename heuristic 
 Parse common Persian school patterns to *suggest* (never auto-apply without the import-review step): subject from a fixed list (ریاضی، علوم، فارسی، عربی، دینی، انگلیسی، علوم تجربی، مطالعات، هنر، کار و فناوری، تربیت بدنی، آمادگی دفاعی), chapter from «فصل ۳/فصل سه/ف3/بدون فصل», kind from keywords (نمونه سوال→نمونه‌سوال، جزوه، کاربرگ، تکلیف/تمرین). Confidence shown; review dialog always allows editing.
+
+Implementation note: at import time the suggestions are applied automatically (subject/chapter/kind) and stay editable per file afterwards in the metadata dialog — a second review pass rather than a blocking wizard.
 
 ### 4.3 Duplicate & conflict rules (core algorithm)
 - **R1 — exact duplicate:** same `sha256`. Grouped; UI shows groups and total wasted bytes.
