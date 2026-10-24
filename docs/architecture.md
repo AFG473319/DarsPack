@@ -1,7 +1,7 @@
 # DarsPack Architecture (Phase B)
 
-Status: proposed by the agent 2026-10-24, pending the student's review (he is the architect; decisions marked ⚖️ need his sign-off).
-Stack and platform constraints are locked — locked and documented below..
+Status: v1 core implemented and tested (2026-10-24, 40 tests green); desktop UI, LAN client and packaging pending.
+Stack and platform constraints are locked and documented below.
 
 ## 1. Design principles
 
@@ -58,8 +58,9 @@ CREATE TABLE teachers (
 );
 CREATE TABLE files (
   id INTEGER PRIMARY KEY,
-  stored_name TEXT NOT NULL UNIQUE,      -- inside library: files/000123.pdf
+  stored_name TEXT NOT NULL DEFAULT '',     -- inside library: files/000123.pdf
   original_name TEXT NOT NULL,           -- as imported, never altered
+  name_norm TEXT NOT NULL,               -- match key of original_name (search/conflicts)
   size_bytes INTEGER NOT NULL,
   sha256 TEXT NOT NULL,                  -- indexed; the dedup key
   imported_at TEXT NOT NULL,             -- ISO datetime
@@ -72,7 +73,7 @@ CREATE TABLE files (
   available INTEGER NOT NULL DEFAULT 1   -- 1 = present in library; startup self-check flips to 0
 );
 CREATE INDEX idx_files_sha ON files(sha256);
-CREATE INDEX idx_files_norm ON files(original_name COLLATE NOCASE);
+CREATE INDEX idx_files_name_norm ON files(name_norm);
 CREATE TABLE tags (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE
 );
