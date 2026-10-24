@@ -7,6 +7,7 @@ SQL itself. Heavy work (import, package import) runs in workers.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import os
 import subprocess
 import sys
@@ -43,10 +44,16 @@ def human_size(n: int) -> str:
 
 
 def jalali_date(iso: str) -> str:
+    # imported_at is stored as a GREGORIAN isoformat string, so it must be
+    # parsed by the stdlib first and then converted — parsing it directly
+    # with jdatetime used to read the digits as a Jalali date and pass the
+    # Gregorian components through unchanged (۲۰۲۶/۱۰/۲۴ shown as if Jalali).
     try:
-        return jdatetime.datetime.fromisoformat(iso).strftime("%Y/%m/%d")
+        gregorian = _dt.datetime.fromisoformat(iso)
+        return jdatetime.datetime.fromgregorian(
+            datetime=gregorian).strftime("%Y/%m/%d")
     except ValueError:
-        return iso
+        return iso          # bad input never crashes the table — passes through
 
 
 class MainWindow(QMainWindow):
