@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS files (
   subject_id   INTEGER REFERENCES subjects(id),
   teacher_id   INTEGER REFERENCES teachers(id),
   chapter      INTEGER,                      -- فصل (1..12), nullable
+  lesson       INTEGER,                      -- درس, nullable — separate from
+                                             -- فصل: a file may have either,
+                                             -- both, or neither (design
+                                             -- decision 2026-10-24; INF-1
+                                             -- adds it to older catalogs)
   school_year  TEXT,                         -- «1405-1406»
   kind         TEXT CHECK (kind IN ('جزوه','نمونه‌سوال','کاربرگ','تکلیف','سایر')),
   note         TEXT DEFAULT '',
@@ -76,9 +81,44 @@ def connect(db_path) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Create all tables if missing; safe to call on every open."""
+    """Create all tables if missing, then migrate; safe to call on every open."""
     conn.executescript(SCHEMA)
     conn.commit()
+    migrate(conn)
+
+
+# --- schema migrations (INF-1) ---------------------------------------------
+# The catalog outlives releases: a library created by an older DarsPack must
+# keep opening. Each migration is one ordered step guarded by PRAGMA
+# user_version — SQLite's built-in schema-version counter. Steps run once,
+# each inside a transaction, and the version is bumped only after success,
+# so an interrupted migration simply re-runs on the next open.
+
+SCHEMA_VERSION = 1
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """True if `table` already has `column` (PRAGMA table_info, col name = idx 1)."""
+    names = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    return column in names
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing catalog up to SCHEMA_VERSION, one step at a time.
+
+    A step's ALTER statements are guarded by column checks so the step is
+    safe on BOTH kinds of database: fresh installs (whose SCHEMA already
+    has every column) and old v0 catalogs (which need the actual ALTER).
+    """
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= SCHEMA_VERSION:
+        return
+    for target in range(version + 1, SCHEMA_VERSION + 1):
+        with conn:                      # one transaction per migration step
+            if target == 1 and not _has_column(conn, "files", "lesson"):
+                conn.execute("ALTER TABLE files ADD COLUMN lesson INTEGER")
+            conn.execute(f"PRAGMA user_version = {target}")
+            log(conn, "migrate", f"schema v{target}")
 
 
 def log(conn: sqlite3.Connection, action: str, detail: str = "") -> None:
@@ -92,7 +132,10 @@ def get_or_create(conn: sqlite3.Connection, table: str, name: str) -> int | None
     """Return the id of subjects/teachers/tags row `name`, creating it if new.
 
     Matching uses the normalized key, so «رياضي» (Arabic ي) finds «ریاضی».
+    The table name is whitelisted: callers only ever pass internal
+    constants, but an assert here closes the SQL-injection question forever.
     """
+    assert table in {"subjects", "teachers", "tags"}, f"unknown table {table!r}"
     from .normalize import match_key  # local import avoids a cycle at import time
     key = match_key(name)
     if not key:

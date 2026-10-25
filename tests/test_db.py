@@ -90,3 +90,63 @@ def test_tag_match_key_is_unique(conn):
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
             "INSERT INTO tags(name, normalized) VALUES ('امتحان', ?)", (key,))
+
+
+# --- schema migrations (INF-1) ----------------------------------------------
+
+def test_fresh_install_reaches_current_schema_version(conn):
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert db._has_column(conn, "files", "lesson")
+
+
+def test_v0_database_gains_lesson_column(tmp_path):
+    # simulate an older install: schema WITHOUT the lesson column, at v0
+    c = db.connect(tmp_path / "old.db")
+    try:
+        c.executescript(db.SCHEMA.replace(
+            "lesson       INTEGER,", "-- lesson added by migration"))
+        assert not db._has_column(c, "files", "lesson")
+        assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+        db.migrate(c)
+        assert db._has_column(c, "files", "lesson")
+        assert c.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+        # and the new column actually stores (nullable — a file may have
+        # درس, فصل, both, or neither)
+        c.execute("""INSERT INTO files(original_name, name_norm, size_bytes,
+                     sha256, imported_at, lesson)
+                     VALUES ('x','x',1,'ab','t',3)""")
+        assert c.execute("SELECT lesson FROM files").fetchone()["lesson"] == 3
+    finally:
+        c.close()
+
+
+def test_migrate_is_idempotent(conn):
+    before = conn.execute(
+        "SELECT COUNT(*) c FROM activity_log WHERE action='migrate'").fetchone()["c"]
+    db.migrate(conn)                      # second call: version already current
+    after = conn.execute(
+        "SELECT COUNT(*) c FROM activity_log WHERE action='migrate'").fetchone()["c"]
+    assert before == after
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+
+
+def test_migrated_library_reopens_through_init_schema(tmp_path):
+    # the real path: Library.open() runs init_schema → migrate on every
+    # open; an upgraded old db must keep opening without re-migrating
+    c = db.connect(tmp_path / "old.db")
+    c.executescript(db.SCHEMA.replace(
+        "lesson       INTEGER,", "-- lesson added by migration"))
+    c.commit()
+    c.close()
+    from darspack.core.library import Library
+    with Library(tmp_path) as lib:
+        assert db._has_column(lib.conn, "files", "lesson")
+        assert lib.conn.execute(
+            "PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+
+
+# --- get_or_create safety ----------------------------------------------------
+
+def test_get_or_create_rejects_unknown_tables(conn):
+    with pytest.raises(AssertionError):
+        db.get_or_create(conn, "files", "bogus")
