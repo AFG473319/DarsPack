@@ -18,11 +18,13 @@ src/darspack/
 ├── core/                 # pure logic: no UI, no network → 100% unit-testable
 │   ├── normalize.py      # Persian text + filename normalization, digit handling     
 │   ├── db.py             # SQLite schema creation, migrations, row helpers           
-│   ├── library.py        # Library: paths, settings, open/create                     
+│   ├── library.py        # Library: paths, seed subjects, health check, open/create  
 │   ├── hashing.py        # streaming SHA-256 + progress callback                     
-│   ├── importer.py       # copy-in + hash + import-time dedup + metadata suggestion  (uses the modules above)│   ├── dedup.py          # duplicate groups + conflict rules R1–R3                   
-│   ├── search.py         # normalized search over the catalog                        
-│   ├── manifest.py       # درس‌پک manifest build + package export + verify           
+│   ├── importer.py       # copy-in + hash + import-time dedup + metadata suggestion  (uses the modules above)
+│   ├── dedup.py          # duplicate groups + conflict rules R1–R3 + likely versions 
+│   ├── search.py         # normalized multi-token search over the catalog            
+│   ├── manifest.py       # درس‌پک manifest build + package export/verify/read        
+│   ├── backup.py         # full-library backup ZIP (catalog snapshot + files)        
 │   └── schoolyear.py     # Jalali school-year helpers (Mehr→Shahrivar span)          
 ├── ui/                   # PySide6 desktop client
 │   ├── app.py            # QApplication wiring, language toggle, About, feedback form
@@ -66,10 +68,11 @@ CREATE TABLE files (
   subject_id INTEGER REFERENCES subjects(id),
   teacher_id INTEGER REFERENCES teachers(id),
   chapter INTEGER,                       -- فصل, nullable
+  lesson INTEGER,                        -- درس, nullable — separate from فصل
   school_year TEXT,                      -- e.g. '1405-1406' (Mehr→Shahrivar span)
   kind TEXT CHECK (kind IN ('جزوه','نمونه‌سوال','کاربرگ','تکلیف','سایر')),
   note TEXT DEFAULT '',
-  available INTEGER NOT NULL DEFAULT 1   -- 1 = present in library; startup self-check flips to 0
+  available INTEGER NOT NULL DEFAULT 1   -- 1 = present; the startup health check flips to 0
 );
 CREATE INDEX idx_files_sha ON files(sha256);
 CREATE INDEX idx_files_name_norm ON files(name_norm);
@@ -84,7 +87,13 @@ CREATE TABLE file_tags (
 CREATE TABLE activity_log (  -- user log: what the user did, when
   id INTEGER PRIMARY KEY, ts TEXT NOT NULL, action TEXT NOT NULL, detail TEXT DEFAULT ''
 );
+CREATE TABLE hint_rules (    -- learned token→subject memory (A4): pre-fill only
+  token TEXT PRIMARY KEY, subject_id INTEGER REFERENCES subjects(id),
+  hits INTEGER NOT NULL DEFAULT 0, last_used TEXT NOT NULL
+);
 ```
+
+**Schema versions:** the schema carries `PRAGMA user_version`. On every open, `db.migrate()` runs ordered migration steps (each in its own transaction, version bumped after success) — migration 1 added the `lesson` column to catalogs created before درس and فصل became separate columns. Fresh installs create the current shape directly.
 
 Storage layout (⚖️ flat, no subject folders — the catalog *is* the organization; avoids renames/invalid chars):
 
@@ -102,19 +111,21 @@ Import is crash-safe: copy to `files/tmp_…` → verify size → atomic rename 
 `normalize(s)`: map ي→ی, ك→ک, Arabic → Persian digits (and accept Latin), collapse ZWNJ-adjacent whitespace for matching (keep ZWNJ in display), strip diacritics, casefold Latin. Applied to: names, tags, subjects, search queries. Tests are a data table of input→expected pairs.
 
 ### 4.2 Filename heuristic 
-Parse common Persian school patterns to *suggest* (never auto-apply without the import-review step): subject from a fixed list (ریاضی، علوم، فارسی، عربی، دینی، انگلیسی، علوم تجربی، مطالعات، هنر، کار و فناوری، تربیت بدنی، آمادگی دفاعی), chapter from «فصل ۳/فصل سه/ف3/بدون فصل», kind from keywords (نمونه سوال→نمونه‌سوال، جزوه، کاربرگ، تکلیف/تمرین). Confidence shown; review dialog always allows editing.
+Parse common Persian school patterns to *suggest* (never auto-apply without the import-review step): subject from a fixed list — canonical names only, e.g. «علوم تجربی» (the official textbook name), matched longest-first so the longer name always wins; chapter from «فصل ۳/فصل سه» into `chapter` and «درس ۳» into the separate `lesson` column; kind from keywords (نمونه سوال/سوالات/تست/بانک سوال→نمونه‌سوال، جزوه/مرور/جمع بندی/فرمول، کاربرگ، تکلیف/تمرین); grade word (نهم/هشتم/هفتم) as a display hint. The heuristic returns plain values, no confidence score — the review dialog is where the user reviews and confirms them.
 
-**Import flow (revised 2026-10-24 — a deliberate architectural decision): categorizing is the app's main job, so the app asks.** Import copies + hashes + dedups silently, then a **classification review dialog** opens for every newly imported file, pre-filled from the filename heuristic — the user confirms or fixes subject/chapter/kind. The importer itself applies only chapter/kind hints; the **subject is never auto-applied**, so any file the user hasn't classified counts as unclassified. Unclassified files stay visible: a «بدون درس» filter in the subject dropdown plus a status-bar count keeps nudging until the catalog is complete. Phone uploads (no dialog on the phone) land unclassified and are completed on the desktop through the same filter.
+**Import flow (revised 2026-10-24 — a deliberate architectural decision): categorizing is the app's main job, so the app asks.** Import copies + hashes + dedups silently, then a **classification review dialog** opens for every newly imported file, pre-filled from the filename heuristic — the user confirms or fixes subject/chapter/lesson/kind. The importer itself applies only chapter/lesson/kind hints; the **subject is never auto-applied**, so any file the user hasn't classified counts as unclassified. Unclassified files stay visible: a «بدون درس» filter in the subject dropdown plus a status-bar count keeps nudging until the catalog is complete. Phone uploads (no dialog on the phone) land unclassified and are completed on the desktop through the same filter.
+
+**Library startup (open):** create tables → run migrations → seed the default subject list (only when the subjects table is empty, so an existing library is never touched) → sweep crash leftovers → **health check**: stat every stored file; missing or size-changed files get `available=0` (healed back to 1 once the file is restored). One stat per file — the full re-hash stays in package verify, on demand. A learned token→subject memory (`hint_rules`) feeds extra pre-fills to the heuristic once the user has confirmed the same token→subject pair twice; it changes suggestions only, never stored metadata.
 
 ### 4.3 Duplicate & conflict rules (core algorithm)
 - **R1 — exact duplicate:** same `sha256`. Grouped; UI shows groups and total wasted bytes.
 - **R2 — version conflict:** same normalized `original_name`, different `sha256` → «نسخه‌های متفاوت با نام یکسان» — flagged.
 - **R3 — rename hint:** same `sha256`, different normalized names → «یک محتوا با نام‌های مختلف».
-- Import-time check: an arriving sha256 that already exists is reported immediately («این فایل از قبل در کتابخانه هست») and skipped unless the user explicitly chooses «با وجود این نگه دار».
-⚖️ R4 (same subject+chapter+kind, different sha → weak version hint) is deferred.
+- **R4-lite — likely versions:** names differing only by re-download noise («x (1).pdf», «نسخه نهایی», «final», «v2») with different content → «نسخه‌های احتمالی» — a weak hint, flag-only; false positives are acceptable because nothing acts on the group automatically.
+- Import-time check: an arriving sha256 that already exists is reported immediately — naming the file it duplicates («تکرارِ «X» است») — and skipped unless the user explicitly chooses «با وجود این نگه دار».
 
 ### 4.4 Search 
-Normalized `LIKE` over original_name, note, tag names, subject name. Ranking: prefix match > word-boundary contains > substring; ties by recency. **Documented limitation:** filename/metadata search only — no content indexing (Windows doesn't index PDF content by default either; FTS5+Persian tokenization is future work).
+The query is normalized, split into tokens (a «فصل ۵»/«درس ۳» phrase stays atomic), and the tokens are AND-ed: every token must match somewhere among the filename, subject name, tags, the note, or the kind — and a فصل/درس phrase also matches the structured chapter/lesson columns, so classified files are found regardless of their filename. Ranking: a prefix match on the first token beats a contains match; ties by recency. Queries are capped at 8 tokens (a pasted paragraph can never hang the search). **Documented limitations:** the note is matched as stored (no `note_norm` column yet — typing-style differences inside a note don't match), and search covers names and metadata only — not the text *inside* PDFs (FTS5+Persian tokenization is future work).
 
 ### 4.5 درس‌پک package format v1 
 
@@ -123,12 +134,13 @@ package.zip
 ├── manifest.json    # {"format":"darspack-package","version":1,"created":"…",
 │                    #  "files":[{"path":"files/000012.pdf","name":original,
 │                    #            "sha256":"…","size":123,"subject":"ریاضی",
-│                    #            "chapter":3,"kind":"نمونه‌سوال","tags":[…]}]}
+│                    #            "chapter":3,"lesson":null,"school_year":"…",
+│                    #            "kind":"نمونه‌سوال","tags":[…]}]}
 ├── index.html       # offline RTL browsable index of the contents (works on any
 │                    #  device with a browser — the package explains itself)
 └── files/…
 ```
-`verify(zip)`: for each manifest entry — member exists? size matches? recomputed SHA-256 matches? — producing an exact missing/corrupt list. Never repairs. The manifest's own SHA-256 is shown at export time for out-of-band comparison. `sync.py` reuses the same file-list/diff logic for the LAN protocol.
+`verify(zip)`: for each manifest entry — member exists? size matches? recomputed SHA-256 matches? — producing an exact missing/corrupt list. Never repairs. The manifest's own SHA-256 is shown at export time for out-of-band comparison. `sync.py` reuses the same file-list/diff logic for the LAN protocol. Importing a package round-trips its metadata: chapter/lesson/kind/school_year are applied like import suggestions, while subject/tags come back as pre-fill for the classification dialog — never auto-applied. A full-library backup is the same package plus the catalog snapshot (`catalog.db`) and a restore guide; verify whitelists those two backup members.
 
 ### 4.6 Jalali school year
 `school_year(jdate) → '1405-1406'` (Mehr 1 starts a year). Tests: year boundary on 1 Mehr, leap Esfand 29 (1399/1403), late-Shahrivar files.

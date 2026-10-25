@@ -19,11 +19,11 @@ Honest list of what DarsPack v0.1 does **not** do. Stating flaws openly is part 
 
 ## Engineering
 
-10. **Search is SQL `LIKE`, not FTS.** Fine for thousands of files; a student's library of a few hundred files is nowhere near the limit, but it would not scale to tens of thousands.
+10. **Search is SQL `LIKE`, not FTS.** Word order no longer matters (multi-token search: every word of the query must match somewhere), but a token also matches inside longer words («فصل یکم» contains «فصل یک»), and the note is matched as stored — typing-style differences (ي/ی، نیم‌فاصله) inside a note don't match until a `note_norm` column lands. Fine for thousands of files; a student's library of a few hundred files is nowhere near the limit, but it would not scale to tens of thousands — that is FTS5 + Persian tokenization, future work.
 11. **SQLite, one writer at a time.** Concurrent imports from the desktop UI and the web server serialize with a 5-second busy timeout. For one user this is a non-issue; it is not a multi-user database.
 12. **Hashing speed is CPU-bound.** Measured SHA-256 throughput on the target i5-2450M is **30–55 MB/s** in Python (a single core); a 500 MB video takes ~10–15 seconds — with a visible progress bar. An early draft of this document claimed 150–250 MB/s; the real number is lower and was corrected after a proper measurement (corrected after a proper measurement). Import reads each file twice (hash pass + copy pass); large media is the slow case.
 13. **The exe is unsigned.** Windows SmartScreen shows a warning on first run ("More info → Run anyway"). Code-signing certificates cost money; the demo script covers this in one sentence.
-14. **No automatic backups of the library.** The library is one folder (`catalog.db` + `files/`) that can be copied for backup, but the app does not back it up itself.
+14. **No *automatic* backups of the library.** The app has a one-click backup («پشتیبان‌گیری»): one ZIP holding the browsable package (manifest + files + index), the catalog snapshot (`catalog.db`) and a restore guide — but the user must press it; nothing schedules or runs on its own, and restoring is still the documented manual steps.
 15. **The phone client's JavaScript is only lightly guarded.** pytest covers the server and a static wiring check (ids exist, script parses), but there is no browser-level automated test of the phone UI — real-phone testing is manual. (A silent JS failure hid a broken PIN button until a real user tried it.)
 16. **Subject classification quality depends on filenames.** Files with unhelpful names («IMG_2026.pdf») start unclassified and rely on the user completing them via the review dialog / «بدون درس» filter. The app makes this visible rather than guessing.
 17. **The second distinct phone upload in a share session fails.** The server writes the `web_upload` log row after the import transaction has already committed, on the request thread's own connection, and never commits it. That connection is kept alive by the server's registry, so its uncommitted write holds SQLite's write lock for the rest of the session: a second upload with *new* content stalls ~5 s, its import raises «database is locked», and the phone sees a dropped connection with the file never reaching the catalog. (A second upload of *already-catalogued* content still answers «duplicate» — its import path does no write.)
@@ -46,6 +46,6 @@ Each was reported in real use via the in-app crash dialog, fixed, and covered by
 | Built app (onedir) | 104 MB folder; DarsPack.exe 2.4 MB | `du -sh dist/DarsPack` |
 | Startup to app-ready | 420 ms | time from process start to first settings write, `installer` measurement script |
 | Idle RAM | 76 MB | `tasklist` after 3 s idle |
-| Test suite | 168/168 green, ~32 s | `pytest` |
+| Test suite | 218/218 green, ~29 s | `pytest` |
 
 Every number above is reproducible from this repository (`installer/build.bat`, `pytest`, `eval/`).
