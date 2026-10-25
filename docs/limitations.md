@@ -46,6 +46,6 @@ Each was reported in real use via the in-app crash dialog, fixed, and covered by
 | Built app (onedir) | 104 MB folder; DarsPack.exe 2.4 MB | `du -sh dist/DarsPack` |
 | Startup to app-ready | 420 ms | time from process start to first settings write, `installer` measurement script |
 | Idle RAM | 76 MB | `tasklist` after 3 s idle |
-| Test suite | 66/66 green | `pytest` |
+| Test suite | 168/168 green, ~32 s | `pytest` |
 
 Every number above is reproducible from this repository (`installer/build.bat`, `pytest`, `eval/`).
