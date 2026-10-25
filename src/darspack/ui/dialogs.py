@@ -246,6 +246,21 @@ class ClassifyDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr("classify_hint")))
+
+        # A2: bulk actions — the realistic import is a whole per-subject
+        # folder, so the FIRST row's value can be copied onto every row
+        # where that field is still empty/undecided. Per-row edits always
+        # win: the bulk pass runs once, here, before saving.
+        bulk = QHBoxLayout()
+        for attr, key in (("subject", "bulk_subject"),
+                          ("chapter", "bulk_chapter"),
+                          ("kind", "bulk_kind"),
+                          ("lesson", "bulk_lesson")):
+            btn = QPushButton(tr(key))
+            btn.clicked.connect(lambda _, a=attr: self._bulk_apply(a))
+            bulk.addWidget(btn)
+        layout.addLayout(bulk)
+
         layout.addWidget(self.table)
         buttons = QHBoxLayout()
         later = QPushButton(tr("classify_later"))
@@ -256,6 +271,58 @@ class ClassifyDialog(QDialog):
         buttons.addWidget(later)
         buttons.addWidget(save)
         layout.addLayout(buttons)
+
+    # self.rows layout (positions 0–3 pinned by existing tests):
+    # (file_id, subject, chapter, kind, lesson, teacher, year)
+    _BULK_INDEX = {"subject": 1, "chapter": 2, "kind": 3, "lesson": 4}
+    _BULK_EMPTY = {"chapter": 0, "lesson": 0, "kind": "سایر"}
+
+    def _bulk_apply(self, attr: str) -> None:
+        """A2: copy the first row's value onto rows where the field is
+        still undecided. «Undecided» = empty subject text, chapter/lesson
+        0 (this app's «none»), or kind «سایر» — a deliberate user choice
+        is never overwritten. A no-op when the first row itself is
+        undecided."""
+        if not self.rows:
+            return
+        index = self._BULK_INDEX[attr]
+        source = self.rows[0][index]
+        if attr == "subject":
+            value = source.currentText().strip()
+        elif attr == "kind":
+            value = source.currentText()
+        else:
+            value = source.value()
+        if value == self._BULK_EMPTY.get(attr, ""):
+            return                     # first row undecided → nothing to copy
+        for row in self.rows:
+            widget = row[index]
+            if attr == "subject":
+                if not widget.currentText().strip():
+                    widget.setCurrentText(value)
+            elif attr == "kind":
+                if widget.currentText() == self._BULK_EMPTY["kind"]:
+                    widget.setCurrentText(value)
+            else:                      # chapter / lesson spinboxes
+                if widget.value() == self._BULK_EMPTY[attr]:
+                    widget.setValue(value)
+
+    def _learn_tokens(self, fid: int, subject_name: str) -> None:
+        """A4: remember the class's naming habits — each filename token
+        (≥3 chars, not itself a subject name) votes token→subject. Only
+        the next import's PRE-FILL gets smarter; nothing is auto-applied.
+        """
+        from ..core.normalize import match_key
+        from ..core.suggest import learn_hint
+        row = self.lib.conn.execute(
+            "SELECT original_name FROM files WHERE id=?", (fid,)).fetchone()
+        if row is None:
+            return
+        subject_keys = {match_key(r["name"]) for r in self.lib.conn.execute(
+            "SELECT name FROM subjects")}
+        for token in match_key(Path(row["original_name"]).stem).split():
+            if len(token) >= 3 and token not in subject_keys:
+                learn_hint(self.lib.conn, token, subject_name)
 
     def _save_all(self) -> None:
         conn = self.lib.conn
@@ -273,6 +340,8 @@ class ClassifyDialog(QDialog):
                     (subject_id, chapter.value() or None,
                      kind.currentText(), lesson.value() or None,
                      teacher_id, year.currentText().strip() or None, fid))
+                if name:
+                    self._learn_tokens(fid, name)
             db.log(conn, "classify", f"{len(self.rows)} files")
         self.accept()
 

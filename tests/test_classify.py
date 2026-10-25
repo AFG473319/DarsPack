@@ -169,3 +169,100 @@ def test_classify_lesson_defaults_to_current_school_year(lib, qapp):
     file_id = lib.conn.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
     dlg = ClassifyDialog(None, lib, [file_id])
     assert dlg.rows[0][6].currentText() == current_school_year()
+
+
+def test_bulk_subject_fills_only_empty_rows(lib, qapp):
+    """A2: the first row's subject copies onto rows with no subject —
+    a row the user already chose a subject for is never overwritten."""
+    from darspack.ui.dialogs import ClassifyDialog
+    ids = [r["id"] for r in lib.conn.execute(
+        "SELECT id FROM files ORDER BY id")]
+    dlg = ClassifyDialog(None, lib, ids)
+    dlg.rows[0][1].setCurrentText("ریاضی")     # first row's choice
+    # rows[1] stays empty (its filename gives no subject hint)
+    dlg._bulk_apply("subject")
+    assert dlg.rows[1][1].currentText() == "ریاضی"   # empty → filled
+
+    dlg2 = ClassifyDialog(None, lib, ids)      # both rows already chosen
+    dlg2.rows[0][1].setCurrentText("ریاضی")
+    dlg2.rows[1][1].setCurrentText("هنر")
+    dlg2._bulk_apply("subject")
+    assert dlg2.rows[1][1].currentText() == "هنر"    # override untouched
+
+
+def test_bulk_kind_chapter_lesson_fill_undecided_rows(lib, qapp):
+    """A2: kind copies over rows still on «سایر»; chapter/lesson copy
+    over rows still on 0 («none»). First row undecided → no-op."""
+    from darspack.ui.dialogs import ClassifyDialog
+    ids = [r["id"] for r in lib.conn.execute(
+        "SELECT id FROM files ORDER BY id")]
+    dlg = ClassifyDialog(None, lib, ids)
+    dlg.rows[0][2].setValue(5)                  # chapter
+    dlg.rows[0][3].setCurrentText("جزوه")       # kind
+    dlg.rows[0][4].setValue(2)                  # lesson
+    dlg._bulk_apply("chapter")
+    dlg._bulk_apply("kind")
+    dlg._bulk_apply("lesson")
+    for row in dlg.rows:
+        assert row[2].value() == 5
+        assert row[3].currentText() == "جزوه"
+        assert row[4].value() == 2
+
+    dlg2 = ClassifyDialog(None, lib, ids)       # first row undecided
+    dlg2.rows[0][2].setValue(0)                 # user clears the chapter
+    dlg2._bulk_apply("chapter")                 # chapter 0 → nothing happens
+    assert dlg2.rows[1][2].value() == 0
+
+
+def test_bulk_then_save_persists_and_per_row_edit_wins(lib, qapp):
+    """A2 acceptance trio: bulk fills only empty, save persists to all
+    rows, and a per-row edit AFTER the bulk pass wins."""
+    from darspack.ui.dialogs import ClassifyDialog
+    ids = [r["id"] for r in lib.conn.execute(
+        "SELECT id FROM files ORDER BY id")]
+    dlg = ClassifyDialog(None, lib, ids)
+    dlg.rows[0][1].setCurrentText("ریاضی")
+    dlg._bulk_apply("subject")
+    dlg.rows[1][1].setCurrentText("فیزیک")      # per-row override after bulk
+    dlg._save_all()
+    names = {r["id"]: r["subject_name"] for r in lib.conn.execute(
+        """SELECT f.id, s.name AS subject_name FROM files f
+           LEFT JOIN subjects s ON s.id=f.subject_id""")}
+    assert names[ids[0]] == "ریاضی"
+    assert names[ids[1]] == "فیزیک"
+
+
+def test_classify_learns_token_hints(lib, qapp):
+    """A4: two saves of similarly-named files → the token's rule has
+    2 hits, and the NEXT import's dialog pre-fills it. Tokens that are
+    subject names are never learned."""
+    from darspack.core.importer import import_file
+    from darspack.ui.dialogs import ClassifyDialog
+
+    def classify_named(name):
+        src = lib.root.parent / name
+        src.write_bytes(f"content {name}".encode("utf-8"))
+        import_file(lib, src)
+        fid = lib.conn.execute(
+            "SELECT id FROM files WHERE original_name=?", (name,)).fetchone()["id"]
+        dlg = ClassifyDialog(None, lib, [fid])
+        dlg.rows[0][1].setCurrentText("ریاضی")
+        dlg._save_all()
+
+    classify_named("جزوه رضایی فصل 1.pdf")
+    classify_named("جزوه رضایی فصل 2.pdf")
+
+    from darspack.core.suggest import load_hints
+    hints = load_hints(lib.conn)
+    assert "رضایی" in hints and hints["رضایی"]["hits"] == 2
+    assert "ریاضی" not in hints                  # subject names aren't rules
+
+    # the third import: the dialog's pre-fill now knows the token
+    src = lib.root.parent / "جزوه رضایی فصل 3.pdf"
+    src.write_bytes(b"content third")
+    import_file(lib, src)
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name=?",
+        ("جزوه رضایی فصل 3.pdf",)).fetchone()["id"]
+    dlg = ClassifyDialog(None, lib, [fid])
+    assert dlg.rows[0][1].currentText() == "ریاضی"   # learned pre-fill
