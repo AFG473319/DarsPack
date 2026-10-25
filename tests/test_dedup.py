@@ -3,10 +3,16 @@ synthetic test set — the same set the benchmark measures."""
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "eval"))
 from make_testset import make_testset  # noqa: E402
 
-from darspack.core.dedup import duplicate_groups, rename_hints, version_conflicts  # noqa: E402
+from darspack.core.dedup import (  # noqa: E402
+    duplicate_groups, likely_versions, rename_hints, strip_version_noise,
+    version_conflicts,
+)
+from darspack.core.normalize import match_key  # noqa: E402
 from darspack.core.importer import import_paths  # noqa: E402
 from darspack.core.library import Library  # noqa: E402
 
@@ -93,3 +99,72 @@ def test_default_import_keeps_version_conflicts(tmp_path):
     # EXACT copies — different-content versions stay stored and stay flagged
     lib, labels = _build(tmp_path, keep_duplicates=False)
     assert len(version_conflicts(lib.conn)) == len(labels["conflicts"])
+
+
+# --- R4-lite: likely versions (re-download noise, different content) -------
+
+@pytest.fixture()
+def conn(tmp_path):
+    import sqlite3
+    from darspack.core import db
+    c = db.connect(tmp_path / "catalog.db")
+    db.init_schema(c)
+    yield c
+    c.close()
+
+
+def _insert_file(conn, name, sha, ts="2026-10-25T10:00:00"):
+    conn.execute(
+        """INSERT INTO files(stored_name, original_name, name_norm,
+           size_bytes, sha256, imported_at) VALUES ('', ?, ?, 3, ?, ?)""",
+        (name, match_key(name), sha, ts))
+
+
+def test_strip_version_noise_table():
+    # every noise marker vanishes; everything else stays untouched
+    assert strip_version_noise("جزوه ریاضی.pdf") == "جزوه ریاضی.pdf"
+    for noisy, clean in [
+        ("جزوه ریاضی (1).pdf", "جزوه ریاضی.pdf"),
+        ("جزوه ریاضی نهایی.pdf", "جزوه ریاضی.pdf"),
+        ("جزوه ریاضی نسخه 2.pdf", "جزوه ریاضی.pdf"),
+        ("جزوه ریاضی final.pdf", "جزوه ریاضی.pdf"),
+        ("جزوه ریاضی v2.pdf", "جزوه ریاضی.pdf"),
+        ("جزوه ریاضی اصلاح شده.pdf", "جزوه ریاضی.pdf"),
+    ]:
+        assert strip_version_noise(noisy) == clean, noisy
+
+
+def test_likely_versions_groups_redownload_pair(conn):
+    _insert_file(conn, "کاربرگ ریاضی.pdf", "sha-a")
+    _insert_file(conn, "کاربرگ ریاضی (1).pdf", "sha-b")
+    groups = likely_versions(conn)
+    assert len(groups) == 1
+    assert {r["original_name"] for r in groups[0].rows} == {
+        "کاربرگ ریاضی.pdf", "کاربرگ ریاضی (1).pdf"}
+
+
+def test_likely_versions_groups_final_marker_pair(conn):
+    _insert_file(conn, "جزوه علوم.pdf", "sha-a")
+    _insert_file(conn, "جزوه علوم نهایی.pdf", "sha-b")
+    assert len(likely_versions(conn)) == 1
+
+
+def test_likely_versions_ignores_identical_content(conn):
+    # same bytes under noisy names = R1's territory, not a version conflict
+    _insert_file(conn, "جزوه علوم.pdf", "sha-a")
+    _insert_file(conn, "جزوه علوم (1).pdf", "sha-a")
+    assert likely_versions(conn) == []
+
+
+def test_likely_versions_ignores_genuinely_different_files(conn):
+    # different stripped keys never group, whatever the prefix overlap
+    _insert_file(conn, "جزوه ریاضی.pdf", "sha-a")
+    _insert_file(conn, "جزوه علوم.pdf", "sha-b")
+    assert likely_versions(conn) == []
+
+
+def test_likely_versions_ignores_single_name(conn):
+    # >1 distinct NAME is required: one file under a noisy name alone
+    # must not self-group
+    _insert_file(conn, "جزوه علوم (1).pdf", "sha-a")
+    assert likely_versions(conn) == []
