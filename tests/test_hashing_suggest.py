@@ -25,12 +25,16 @@ def test_sha256_large_file_chunked(tmp_path):
 
 def test_suggest_full_case():
     out = suggest("نمونه سوال ریاضی نهم فصل 3")
-    assert out == {"subject": "ریاضی", "chapter": 3, "kind": "نمونه‌سوال"}
+    assert out == {"subject": "ریاضی", "chapter": 3, "lesson": None,
+                   "kind": "نمونه‌سوال", "grade": "نهم"}
 
 
 def test_suggest_word_number_and_zwnj():
+    # «علوم» alone is no longer a subject (canonical «علوم تجربی» only,
+    # design decision 2026-10-24) — a bare «علوم» filename gets None
     out = suggest("جزوه علوم فصل پنج")
-    assert out["chapter"] == 5 and out["kind"] == "جزوه" and out["subject"] == "علوم"
+    assert out["chapter"] == 5 and out["kind"] == "جزوه"
+    assert out["subject"] is None
     out = suggest("نمونه‌سوال عربی فصل ۷")     # ZWNJ + Persian digit
     assert out["kind"] == "نمونه‌سوال" and out["subject"] == "عربی"
     assert out["chapter"] == 7
@@ -38,7 +42,8 @@ def test_suggest_word_number_and_zwnj():
 
 def test_suggest_no_match_returns_none():
     assert suggest("IMG_20260101_1234") == {
-        "subject": None, "chapter": None, "kind": None}
+        "subject": None, "chapter": None, "lesson": None,
+        "kind": None, "grade": None}
 
 
 def test_suggest_arabic_letters_still_match():
@@ -98,11 +103,49 @@ def test_quirk_subject_matches_inside_a_word():
     assert suggest("برنامه هنرستان")["subject"] == "هنر"
 
 
-def test_quirk_aloom_tajrobi_entry_unreachable():
-    # known quirk (⚖️): «علوم» precedes «علوم تجربی» in DEFAULT_SUBJECTS
-    # and matches first, so the «علوم تجربی» entry can never win. The
-    # planned fix is longest-match-first — until then this pins reality.
-    assert suggest("جزوه علوم تجربی فصل 3")["subject"] == "علوم"
+def test_aloom_tajrobi_now_wins():
+    # FIXED by a 2026-10-24 design decision: the bare «علوم» entry
+    # was removed from DEFAULT_SUBJECTS and matching is longest-first,
+    # so «علوم تجربی» — the official textbook name — is what suggests
+    assert suggest("جزوه علوم تجربی فصل 3")["subject"] == "علوم تجربی"
+
+
+# --- the A6 precision pack ------------------------------------------------
+
+def test_suggest_lesson_parsed_separately_from_chapter():
+    # «درس N» fills the NEW lesson field (design decision 2026-10-24:
+    # درس and فصل are separate columns); «فارسی درس ۳» has no فصل at all
+    out = suggest("فارسی درس 3")
+    assert out["lesson"] == 3 and out["chapter"] is None
+    out = suggest("جزوه ریاضی درس دو فصل 5")
+    assert out["lesson"] == 2 and out["chapter"] == 5
+
+
+def test_suggest_lesson_word_number_and_quirk():
+    assert suggest("کاربرگ عربی درس سه")["lesson"] == 3
+    # same substring quirk as فصل (pinned above): «درس دوازده» hits
+    # «درس دو» first → 2, never 12
+    assert suggest("کاربرگ عربی درس دوازده")["lesson"] == 2
+
+
+def test_suggest_new_kind_keywords():
+    for name in ("تست ریاضی", "بانک سوال فیزیک", "سوالات فصل 2"):
+        assert suggest(name)["kind"] == "نمونه‌سوال", name
+    for name in ("مرور فصل 3", "جمع بندی علوم تجربی", "فرمول های ریاضی"):
+        assert suggest(name)["kind"] == "جزوه", name
+
+
+def test_suggest_grade_hint():
+    assert suggest("نمونه سوال ریاضی هشتم")["grade"] == "هشتم"
+    assert suggest("کاربرگ هفتم")["grade"] == "هفتم"
+    assert suggest("جزوه بدون پایه")["grade"] is None
+
+
+def test_suggest_longest_match_first_custom_list():
+    # longest-match-first also protects a custom list that still holds
+    # both spellings: the longer subject wins
+    out = suggest("جزوه علوم تجربی فصل 2", subjects=["علوم", "علوم تجربی"])
+    assert out["subject"] == "علوم تجربی"
 
 
 # --- hashing edges --------------------------------------------------------
