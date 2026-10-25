@@ -104,3 +104,24 @@ def test_display_strs_cache_hits_on_second_refresh(window):
     window.refresh()
     assert window._display_strs == first   # same dict entries, no re-format
     assert len(first) == 1                 # one cached id
+
+
+def test_empty_library_shows_start_hint(window):
+    """E2: a fresh library greets with the «start with import» sentence."""
+    window.refresh()
+    assert not window.empty_label.isHidden()
+    assert window.empty_label.text() == "هنوز فایلی نیست — با «وارد کردن…» شروع کنید"
+
+
+def test_search_no_result_shows_digit_hint(window):
+    """E2: an empty search result gets the Persian/Latin digits hint."""
+    src = window.lib.root.parent / "نمونه سوال ریاضی فصل 3.pdf"
+    src.write_bytes(b"demo")
+    import_file(window.lib, src)
+    window.refresh()
+    assert window.empty_label.isHidden()          # rows exist
+
+    window.search_box.setText("چیزی-که-نیست")     # debounced — fire it
+    window.refresh()
+    assert not window.empty_label.isHidden()
+    assert "اعداد فارسی" in window.empty_label.text()

@@ -107,6 +107,15 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(0, 420)
         self.table.doubleClicked.connect(self.open_selected_file)
 
+        # E2: empty states — a fresh library and an empty search each get
+        # one sentence instead of a silent blank table. The label lives on
+        # the table's viewport so refresh() can show/hide it in place.
+        self.empty_label = QLabel(self.table.viewport())
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setStyleSheet("color: #a0a0a8; font-size: 14px;")
+        self.empty_label.hide()
+
         # --- bottom: action buttons ----------------------------------
         buttons = QHBoxLayout()
         for text, handler in [
@@ -197,11 +206,36 @@ class MainWindow(QMainWindow):
                     item.setData(Qt.UserRole, row["id"])
                 self.table.setItem(i, col, item)
         self.table.setUpdatesEnabled(True)
+        self._update_empty_state(len(rows))
         unclassified = unclassified_count(self.lib.conn)   # F6: computed once
         self.statusBar().showMessage(
             tr("status_files").format(len(rows))
             + ("  ·  " + tr("status_unclassified").format(unclassified)
                if unclassified else ""))
+
+    def _update_empty_state(self, shown: int) -> None:
+        """E2: hide the hint when rows exist; otherwise pick the right
+        message — a fresh library vs a search that found nothing."""
+        if shown:
+            self.empty_label.hide()
+            return
+        total = self.lib.conn.execute(
+            "SELECT COUNT(*) c FROM files").fetchone()["c"]
+        self.empty_label.setText(
+            tr("empty_library") if total == 0 else tr("empty_search"))
+        self._center_empty_label()
+        self.empty_label.show()
+
+    def _center_empty_label(self) -> None:
+        vp = self.table.viewport()
+        self.empty_label.adjustSize()
+        self.empty_label.move(max(8, (vp.width() - self.empty_label.width()) // 2),
+                              max(8, (vp.height() - self.empty_label.height()) // 2))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self.empty_label.isHidden():
+            self._center_empty_label()
 
     def selected_file_id(self) -> int | None:
         selected = self.table.selectedItems()
