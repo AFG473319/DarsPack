@@ -26,6 +26,11 @@ from pathlib import Path
 FORMAT = "darspack-package"
 VERSION = 1
 
+# Members that belong to a full-library backup, not to a plain درس‌پک —
+# verify ignores them instead of reporting them as extras (additive: a
+# backup therefore verifies as a package too).
+KNOWN_EXTRA_MEMBERS = {"catalog.db", "RESTORE-راهنما.txt"}
+
 _UNSAFE_CHARS = re.compile(r'[\\/:*?"<>|\r\n]+')
 
 
@@ -164,6 +169,7 @@ def verify_package(zip_path, progress=None) -> VerifyReport:
             if digest.hexdigest() != entry.get("sha256"):
                 problems.append(f"خراب یا تغییرکرده: {entry['name']}")
 
-        for extra in sorted(names - listed - {"manifest.json", "index.html"}):
+        for extra in sorted(names - listed - {"manifest.json", "index.html"}
+                            - KNOWN_EXTRA_MEMBERS):
             problems.append(f"فایل اضافه در بسته: {extra}")
     return VerifyReport(ok=not problems, problems=problems)
