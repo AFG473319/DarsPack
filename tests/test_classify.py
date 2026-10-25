@@ -87,3 +87,45 @@ def test_phone_upload_lands_unclassified(lib, qapp):
     dlg._save_all()
     remaining = search(lib.conn, unclassified_only=True)
     assert [r["original_name"] for r in remaining] == ["IMG_20260101.pdf"]
+
+
+def test_classify_later_writes_nothing(lib, qapp):
+    """«بعداً» is wired to reject: edits are discarded, the files stay
+    unclassified and the «بدون درس» filter will find them again."""
+    from darspack.ui.dialogs import ClassifyDialog
+    ids = [r["id"] for r in lib.conn.execute("SELECT id FROM files")]
+    dlg = ClassifyDialog(None, lib, ids)
+    dlg.rows[0][1].setCurrentText("فیزیک")    # user edits, then bails
+    dlg.reject()
+    assert unclassified_count(lib.conn) == 2  # nothing saved
+
+
+def test_classify_saves_all_files_in_one_pass(lib, qapp):
+    """One save updates every row of the bulk table."""
+    from darspack.ui.dialogs import ClassifyDialog
+    ids = [r["id"] for r in lib.conn.execute("SELECT id FROM files ORDER BY id")]
+    dlg = ClassifyDialog(None, lib, ids)
+    dlg.rows[0][1].setCurrentText("فیزیک")
+    dlg.rows[0][2].setValue(5)
+    dlg.rows[0][3].setCurrentText("جزوه")
+    dlg.rows[1][1].setCurrentText("هنر")
+    dlg._save_all()
+    rows = {r["id"]: r for r in lib.conn.execute(
+        """SELECT f.id, s.name AS subject_name, f.chapter, f.kind
+           FROM files f LEFT JOIN subjects s ON s.id=f.subject_id""")}
+    assert rows[ids[0]]["subject_name"] == "فیزیک"
+    assert rows[ids[0]]["chapter"] == 5 and rows[ids[0]]["kind"] == "جزوه"
+    assert rows[ids[1]]["subject_name"] == "هنر"
+    assert unclassified_count(lib.conn) == 0
+
+
+def test_classify_creates_new_subject_rows(lib, qapp):
+    """Typing a subject that does not exist yet must add a subjects row —
+    assert the table itself, not just the file link."""
+    from darspack.ui.dialogs import ClassifyDialog
+    file_id = lib.conn.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+    dlg = ClassifyDialog(None, lib, [file_id])
+    dlg.rows[0][1].setCurrentText("فیزیک")    # not in the dropdown list yet
+    dlg._save_all()
+    names = {r["name"] for r in lib.conn.execute("SELECT name FROM subjects")}
+    assert "فیزیک" in names

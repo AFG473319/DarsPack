@@ -149,3 +149,109 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
         for build in dialogs_to_build:
             dlg = build()          # any crash here = a user-facing bug
             dlg.deleteLater()
+
+
+# --- interaction edges of the save paths ---------------------------------
+
+def test_metadata_tag_parsing_tolerates_messy_input(lib_with_file, qapp):
+    """Mixed commas, doubles, blanks and a repeated tag → exactly a, b, c."""
+    from darspack.ui.dialogs import MetadataDialog
+    lib, file_id, _ = lib_with_file
+    dlg = MetadataDialog(None, lib, file_id)
+    dlg.tags.setText("a, b ، ، c ، b")        # Latin + Persian commas, dup
+    dlg._save()
+    tags = [t["name"] for t in lib.conn.execute(
+        """SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id
+           WHERE ft.file_id=? ORDER BY t.name""", (file_id,))]
+    assert tags == ["a", "b", "c"]            # INSERT OR IGNORE: no dup row
+
+
+def test_metadata_clearing_tags_removes_links(lib_with_file, qapp):
+    from darspack.ui.dialogs import MetadataDialog
+    lib, file_id, _ = lib_with_file
+    dlg = MetadataDialog(None, lib, file_id)
+    dlg.tags.setText("قدیمی")
+    dlg._save()
+    dlg2 = MetadataDialog(None, lib, file_id)
+    dlg2.tags.setText("   ")                  # user wiped the field
+    dlg2._save()
+    count = lib.conn.execute(
+        "SELECT COUNT(*) c FROM file_tags WHERE file_id=?",
+        (file_id,)).fetchone()["c"]
+    assert count == 0
+
+
+def test_metadata_subject_reuse_across_spellings(lib_with_file, qapp):
+    """«رياضي» (Arabic ي) after «ریاضی» must reuse the same subjects row."""
+    from darspack.ui.dialogs import MetadataDialog
+    lib, file_id, _ = lib_with_file
+    dlg = MetadataDialog(None, lib, file_id)
+    dlg.subject.setCurrentText("ریاضی")
+    dlg._save()
+    dlg2 = MetadataDialog(None, lib, file_id)
+    dlg2.subject.setCurrentText("رياضي")      # same subject, other keyboard
+    dlg2._save()
+    count = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
+    assert count == 1
+
+
+def test_settings_dialog_writes_json(tmp_path, qapp):
+    import json
+
+    from darspack.ui.dialogs import SettingsDialog
+    path = tmp_path / "settings.json"
+    settings = {"language": "fa", "font_size": 10, "library": ""}
+    dlg = SettingsDialog(None, settings, path)
+    dlg.lang.setCurrentIndex(1)               # English
+    dlg.font_size.setValue(14)
+    dlg.library.setText(str(tmp_path))
+    dlg._save()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved == {"language": "en", "font_size": 14,
+                     "library": str(tmp_path)}
+
+
+def test_duplicates_dialog_jump_searches_first_name(qapp):
+    """_jump parses '[label] name1 ، name2' — the first name must land in
+    the main window's search box. The text is built exactly as the dialog
+    builds its list items."""
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QListWidget, QListWidgetItem, QLineEdit, QWidget
+
+    from darspack.ui.dialogs import DuplicatesDialog
+    parent = QWidget()
+    parent.search_box = QLineEdit()
+    group = SimpleNamespace(
+        label_fa="تکراری کامل",
+        rows=[{"original_name": "نخست.pdf"}, {"original_name": "دوم.pdf"}],
+        detail_fa="۲ نسخه‌ی یکسان")
+    dlg = DuplicatesDialog(parent, {"tab": [group]})
+    text = (f"[{group.label_fa}] "
+            f"{' ، '.join(r['original_name'] for r in group.rows)}\n"
+            f"    {group.detail_fa}")
+    dlg._jump(QListWidgetItem(text))
+    assert parent.search_box.text() == "نخست.pdf"
+
+
+def test_verify_report_dialog_button_only_when_ok(lib_with_file, qapp):
+    """ok=True + offer_import → the import button exists; a broken package
+    gets no import button. Both variants log to the activity log."""
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QPushButton
+
+    from darspack.ui.dialogs import VerifyReportDialog
+    lib, _, _ = lib_with_file
+    ok_dlg = VerifyReportDialog(None, "x.zip",
+                                SimpleNamespace(ok=True, problems=[]),
+                                library=lib, offer_import=True)
+    assert ok_dlg.findChildren(QPushButton)   # the import button
+    bad_dlg = VerifyReportDialog(None, "x.zip",
+                                 SimpleNamespace(ok=False,
+                                                 problems=["گم‌شده: a.pdf"]),
+                                 library=lib, offer_import=True)
+    assert not bad_dlg.findChildren(QPushButton)
+    actions = [r["action"] for r in lib.conn.execute(
+        "SELECT action FROM activity_log ORDER BY id")]
+    assert actions.count("verify") == 2       # both dialogs logged
