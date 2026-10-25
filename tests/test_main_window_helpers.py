@@ -125,3 +125,39 @@ def test_search_no_result_shows_digit_hint(window):
     window.refresh()
     assert not window.empty_label.isHidden()
     assert "اعداد فارسی" in window.empty_label.text()
+
+
+def test_school_year_filter_isolates_years(tmp_path, qapp):
+    """A3: the year filter combo shows only one school year's files, and
+    the «سال» column carries each file's year."""
+    from darspack.core.normalize import persian_digits
+
+    with Library(tmp_path / "lib") as lib:
+        for name, year in (("جزوه ریاضی فصل 1.pdf", "1404-1405"),
+                           ("جزوه ریاضی فصل 2.pdf", "1405-1406"),
+                           ("جزوه ریاضی فصل 3.pdf", "1405-1406")):
+            src = tmp_path / name
+            src.write_bytes(f"content {name}".encode("utf-8"))
+            import_file(lib, src, meta={"school_year": year})
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            idx = win.year_combo.findData("1404-1405")
+            assert idx > 0                       # listed after «همه‌ی سال‌ها»
+            win.year_combo.setCurrentIndex(idx)  # fires refresh itself
+            assert [r["original_name"] for r in win.last_rows] == \
+                ["جزوه ریاضی فصل 1.pdf"]
+
+            win.year_combo.setCurrentIndex(win.year_combo.findData("1405-1406"))
+            assert len(win.last_rows) == 2
+
+            win.year_combo.setCurrentIndex(0)    # «همه‌ی سال‌ها»
+            assert len(win.last_rows) == 3
+            # «سال» column (index 6) shows the Persian-digit year label
+            shown = win.table.item(0, 6).text()
+            assert shown == persian_digits("1404-1405") or \
+                shown == persian_digits("1405-1406")
+        finally:
+            win.lib.close()

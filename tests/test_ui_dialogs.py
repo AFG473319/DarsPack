@@ -71,6 +71,32 @@ def test_metadata_dialog_opens_for_unclassified_file(tmp_path, qapp):
         assert dlg.subject.currentText() == ""
 
 
+def test_metadata_dialog_saves_teacher_year_lesson(lib_with_file, qapp):
+    """A3/A3b: the metadata dialog writes the new fields the same way the
+    classify dialog does — teacher via get_or_create, year as text."""
+    from darspack.ui.dialogs import MetadataDialog
+    lib, file_id, _ = lib_with_file
+    dlg = MetadataDialog(None, lib, file_id)
+    dlg.subject.setCurrentText("ریاضی")
+    dlg.lesson.setValue(7)
+    dlg.teacher.setCurrentText("آقای رضایی")
+    dlg.year.setCurrentText("1403-1404")
+    dlg._save()
+    row = lib.conn.execute(
+        """SELECT f.lesson, f.school_year, f.chapter,
+                  t.name AS teacher_name
+           FROM files f LEFT JOIN teachers t ON t.id=f.teacher_id
+           WHERE f.id=?""", (file_id,)).fetchone()
+    assert row["lesson"] == 7
+    assert row["school_year"] == "1403-1404"
+    assert row["teacher_name"] == "آقای رضایی"
+    # reopening shows the stored values back
+    dlg2 = MetadataDialog(None, lib, file_id)
+    assert dlg2.teacher.currentText() == "آقای رضایی"
+    assert dlg2.year.currentText() == "1403-1404"
+    assert dlg2.lesson.value() == 7
+
+
 def test_save_feedback_writes_jsonl(lib_with_file, qapp):
     """The feedback form's save path: one JSON line per entry."""
     import json
@@ -146,9 +172,17 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
                                        SimpleNamespace(ok=True, problems=[]),
                                        library=lib, offer_import=False),
         ]
+        built = []
         for build in dialogs_to_build:
             dlg = build()          # any crash here = a user-facing bug
+            built.append(dlg)
             dlg.deleteLater()
+        # Flush the queued deletions INSIDE this test. If they stay pending,
+        # a later test's event-loop wait (QTest.qWait) processes them after
+        # the parent widget's Python wrapper is gone — an access-violation
+        # crash class hit when the debounce tests added qWait to the suite.
+        from PySide6.QtCore import QCoreApplication, QEvent
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 # --- interaction edges of the save paths ---------------------------------

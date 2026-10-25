@@ -88,17 +88,21 @@ class MainWindow(QMainWindow):
 
         self.subject_combo = QComboBox()
         self.kind_combo = QComboBox()
+        self.year_combo = QComboBox()
         self.subject_combo.currentIndexChanged.connect(self.refresh)
         self.kind_combo.currentIndexChanged.connect(self.refresh)
+        self.year_combo.currentIndexChanged.connect(self.refresh)
 
         top = QHBoxLayout()
         top.addWidget(self.search_box, 3)
         top.addWidget(self.subject_combo, 1)
         top.addWidget(self.kind_combo, 1)
+        top.addWidget(self.year_combo, 1)
 
         # --- center: catalog table -----------------------------------
         columns = [tr("col_name"), tr("col_subject"), tr("col_chapter"),
-                   tr("col_kind"), tr("col_size"), tr("col_date")]
+                   tr("col_kind"), tr("col_size"), tr("col_date"),
+                   tr("col_year")]
         self.table = QTableWidget(0, len(columns))
         self.table.setHorizontalHeaderLabels(columns)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -153,6 +157,7 @@ class MainWindow(QMainWindow):
     def reload_filters(self) -> None:
         self.subject_combo.blockSignals(True)
         self.kind_combo.blockSignals(True)
+        self.year_combo.blockSignals(True)
         self.subject_combo.clear()
         self.subject_combo.addItem(tr("all_subjects"), None)
         self.subject_combo.addItem(tr("unclassified"), -1)  # files missing info
@@ -163,8 +168,28 @@ class MainWindow(QMainWindow):
         self.kind_combo.addItem(tr("all_kinds"), None)
         for kind in KINDS:
             self.kind_combo.addItem(kind, kind)
+        self.year_combo.clear()
+        self.year_combo.addItem(tr("all_years"), None)
+        from ..core.normalize import persian_digits
+        years = sorted({r["school_year"] for r in self.lib.conn.execute(
+            "SELECT DISTINCT school_year FROM files WHERE school_year IS NOT NULL")},
+            reverse=True)
+        for y in years:
+            self.year_combo.addItem(persian_digits(y), y)
         self.subject_combo.blockSignals(False)
         self.kind_combo.blockSignals(False)
+        self.year_combo.blockSignals(False)
+
+    def _year_map(self) -> dict:
+        """{file id: school_year} for the «سال» column and filter.
+
+        search() rows don't carry school_year yet (the core-side
+        `school_year=` filter parameter is pending — tracked for later), so
+        the year is read directly, the same way reload_filters reads the
+        subjects table.
+        """
+        return {r["id"]: r["school_year"] for r in self.lib.conn.execute(
+            "SELECT id, school_year FROM files")}
 
     def _search_changed(self) -> None:
         self._search_timer.start()      # restart the countdown per keystroke
@@ -187,6 +212,10 @@ class MainWindow(QMainWindow):
             kind=self.kind_combo.currentData(),
             unclassified_only=(subject_data == -1),
             limit=2000)
+        year_map = self._year_map()
+        year = self.year_combo.currentData()
+        if year is not None:            # school-year filter (A3)
+            rows = [r for r in rows if year_map.get(r["id"]) == year]
         self.last_rows = rows
         # Perf audit F2.2–F2.3: this fill runs on every debounced keystroke,
         # so mid-fill repaints are off and only column 0 carries the file id
@@ -197,9 +226,10 @@ class MainWindow(QMainWindow):
         for i, row in enumerate(rows):
             date_str, size_str = self._display_strs_for(row)
             chapter = persian_digits(str(row["chapter"])) if row["chapter"] else "—"
+            year = year_map.get(row["id"]) or "—"
             values = [row["original_name"], row["subject_name"] or "—", chapter,
                       row["kind"] or "—", size_str,
-                      persian_digits(date_str)]
+                      persian_digits(date_str), persian_digits(year)]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col == 0:

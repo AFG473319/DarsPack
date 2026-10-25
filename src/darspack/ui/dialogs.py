@@ -33,6 +33,33 @@ def text_dialog(parent, title: str, text: str) -> None:
     QMessageBox.information(parent, title, text)
 
 
+def make_teacher_combo(conn, current_name: str | None) -> QComboBox:
+    """Editable teacher combo (A3): blank = no teacher, existing teachers
+    listed, new names are created on save via get_or_create("teachers",…)."""
+    combo = QComboBox()
+    combo.setEditable(True)
+    combo.addItem("")                       # «no teacher» stays possible
+    for r in conn.execute("SELECT name FROM teachers ORDER BY name"):
+        combo.addItem(r["name"])
+    combo.setCurrentText(current_name or "")
+    return combo
+
+
+def make_year_combo(current: str | None) -> QComboBox:
+    """Editable school-year combo (A3): the row's year (or the current
+    school year) plus the years around it — anything else can be typed,
+    the column is free text («1405-1406»)."""
+    from ..core.schoolyear import current_school_year
+    chosen = current or current_school_year()
+    base = int(chosen[:4])
+    combo = QComboBox()
+    combo.setEditable(True)
+    for y in (f"{base - 1}-{base}", chosen, f"{base + 1}-{base + 2}"):
+        combo.addItem(y)
+    combo.setCurrentText(chosen)
+    return combo
+
+
 def save_feedback(parent, text: str) -> None:
     """Persist one feedback entry (in-app form → feedback.jsonl)."""
     target = Path(parent.lib.root) / "feedback.jsonl"
@@ -150,12 +177,15 @@ class ClassifyDialog(QDialog):
         self.resize(860, 520)
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
-                   tr("meta_kind")]
+                   tr("meta_kind"), tr("meta_lesson"), tr("meta_teacher"),
+                   tr("meta_year")]
         self.table = QTableWidget(len(file_ids), len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QTableWidget.NoSelection)
         self.table.setColumnWidth(0, 380)
+        self.table.setColumnWidth(5, 120)
+        self.table.setColumnWidth(6, 110)
         self.table.horizontalHeader().setStretchLastSection(True)
 
         subjects = [r["name"] for r in lib.conn.execute(
@@ -163,8 +193,10 @@ class ClassifyDialog(QDialog):
         self.rows = []                            # (file_id, widgets)
         for r, fid in enumerate(file_ids):
             file_row = lib.conn.execute(
-                """SELECT f.*, s.name AS subject_name
-                   FROM files f LEFT JOIN subjects s ON s.id=f.subject_id
+                """SELECT f.*, s.name AS subject_name, t.name AS teacher_name
+                   FROM files f
+                   LEFT JOIN subjects s ON s.id=f.subject_id
+                   LEFT JOIN teachers t ON t.id=f.teacher_id
                    WHERE f.id=?""", (fid,)).fetchone()
 
             name_item = QTableWidgetItem(file_row["original_name"])
@@ -173,8 +205,9 @@ class ClassifyDialog(QDialog):
 
             # Pre-fill: the stored subject, or the filename heuristic's
             # suggestion for files the importer left unclassified.
-            from ..core.suggest import suggest
-            suggested = suggest(Path(file_row["original_name"]).stem)
+            from ..core.suggest import load_hints, suggest
+            suggested = suggest(Path(file_row["original_name"]).stem,
+                                learned=load_hints(lib.conn))
             subject = QComboBox()
             subject.setEditable(True)
             subject.addItem("")                   # «no subject» stays possible
@@ -193,7 +226,23 @@ class ClassifyDialog(QDialog):
             kind.setCurrentText(file_row["kind"] or "سایر")
             self.table.setCellWidget(r, 3, kind)
 
-            self.rows.append((fid, subject, chapter, kind))
+            # A3b: درس (lesson) is a separate number from فصل (chapter) —
+            # either, both, or neither may be set (design decision).
+            lesson = QSpinBox()
+            lesson.setRange(0, 40)
+            lesson.setValue(file_row["lesson"] or 0)
+            self.table.setCellWidget(r, 4, lesson)
+
+            teacher = make_teacher_combo(lib.conn, file_row["teacher_name"])
+            self.table.setCellWidget(r, 5, teacher)
+
+            year = make_year_combo(file_row["school_year"])
+            self.table.setCellWidget(r, 6, year)
+
+            # widget positions 0–3 are pinned by existing tests; the
+            # newer fields go after them
+            self.rows.append((fid, subject, chapter, kind, lesson,
+                              teacher, year))
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr("classify_hint")))
@@ -211,14 +260,19 @@ class ClassifyDialog(QDialog):
     def _save_all(self) -> None:
         conn = self.lib.conn
         with conn:
-            for fid, subject, chapter, kind in self.rows:
+            for fid, subject, chapter, kind, lesson, teacher, year in self.rows:
                 name = subject.currentText().strip()
                 subject_id = (db.get_or_create(conn, "subjects", name)
                               if name else None)
+                teacher_name = teacher.currentText().strip()
+                teacher_id = (db.get_or_create(conn, "teachers", teacher_name)
+                              if teacher_name else None)
                 conn.execute(
-                    "UPDATE files SET subject_id=?, chapter=?, kind=? WHERE id=?",
+                    """UPDATE files SET subject_id=?, chapter=?, kind=?,
+                       lesson=?, teacher_id=?, school_year=? WHERE id=?""",
                     (subject_id, chapter.value() or None,
-                     kind.currentText(), fid))
+                     kind.currentText(), lesson.value() or None,
+                     teacher_id, year.currentText().strip() or None, fid))
             db.log(conn, "classify", f"{len(self.rows)} files")
         self.accept()
 
@@ -287,10 +341,13 @@ class MetadataDialog(QDialog):
         super().__init__(parent)
         self.lib, self.file_id = lib, file_id
         self.setWindowTitle(tr("meta_title"))
-        # join subjects so the dialog can show the current subject's NAME
+        # joins so the dialog can show the current subject's and teacher's
+        # NAMES instead of bare ids
         self.row = lib.conn.execute(
-            """SELECT f.*, s.name AS subject_name
-               FROM files f LEFT JOIN subjects s ON s.id = f.subject_id
+            """SELECT f.*, s.name AS subject_name, t.name AS teacher_name
+               FROM files f
+               LEFT JOIN subjects s ON s.id = f.subject_id
+               LEFT JOIN teachers t ON t.id = f.teacher_id
                WHERE f.id=?""", (file_id,)).fetchone()
 
         self.subject = QComboBox()
@@ -308,6 +365,15 @@ class MetadataDialog(QDialog):
             self.kind.addItem(k)
         self.kind.setCurrentText(self.row["kind"] or "سایر")
 
+        # A3b: درس (lesson) is a separate number from فصل (chapter) —
+        # either, both, or neither may be set (design decision).
+        self.lesson = QSpinBox()
+        self.lesson.setRange(0, 40)
+        self.lesson.setValue(self.row["lesson"] or 0)
+
+        self.teacher = make_teacher_combo(lib.conn, self.row["teacher_name"])
+        self.year = make_year_combo(self.row["school_year"])
+
         self.tags = QLineEdit()
         tag_names = [t["name"] for t in lib.conn.execute(
             """SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id
@@ -322,7 +388,10 @@ class MetadataDialog(QDialog):
         form = QVBoxLayout(self)
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
+                              (tr("meta_lesson"), self.lesson),
                               (tr("meta_kind"), self.kind),
+                              (tr("meta_teacher"), self.teacher),
+                              (tr("meta_year"), self.year),
                               (tr("meta_tags"), self.tags),
                               (tr("meta_note"), self.note)):
             row = QHBoxLayout()
@@ -339,11 +408,17 @@ class MetadataDialog(QDialog):
             subject_id = (db.get_or_create(conn, "subjects",
                                            self.subject.currentText())
                           if self.subject.currentText().strip() else None)
+            teacher_id = (db.get_or_create(conn, "teachers",
+                                           self.teacher.currentText())
+                          if self.teacher.currentText().strip() else None)
             chapter = self.chapter.value() or None
             conn.execute(
-                """UPDATE files SET subject_id=?, chapter=?, kind=?, note=?
+                """UPDATE files SET subject_id=?, chapter=?, lesson=?,
+                   kind=?, teacher_id=?, school_year=?, note=?
                    WHERE id=?""",
-                (subject_id, chapter, self.kind.currentText(),
+                (subject_id, chapter, self.lesson.value() or None,
+                 self.kind.currentText(), teacher_id,
+                 self.year.currentText().strip() or None,
                  self.note.text(), self.file_id))
             conn.execute("DELETE FROM file_tags WHERE file_id=?", (self.file_id,))
             for tag in self.tags.text().replace(",", "،").split("،"):

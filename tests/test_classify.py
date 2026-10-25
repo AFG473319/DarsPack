@@ -53,7 +53,7 @@ def test_classify_dialog_prefills_suggestions(lib, qapp):
         """SELECT f.id FROM files f WHERE f.original_name LIKE 'نمونه%'"""
     ).fetchone()["id"]
     dlg = ClassifyDialog(None, lib, [known])
-    fid, subject, chapter, kind = dlg.rows[0]
+    fid, subject, chapter, kind = dlg.rows[0][:4]   # newer fields follow
     assert subject.currentText() == "ریاضی"       # suggestion pre-filled
     assert chapter.value() == 3
     assert kind.currentText() == "نمونه‌سوال"
@@ -129,3 +129,43 @@ def test_classify_creates_new_subject_rows(lib, qapp):
     dlg._save_all()
     names = {r["name"] for r in lib.conn.execute("SELECT name FROM subjects")}
     assert "فیزیک" in names
+
+
+def test_classify_saves_teacher_year_lesson(lib, qapp):
+    """A3/A3b: the new fields persist — one teachers row per name, the
+    free-text school year, and lesson as a number SEPARATE from chapter."""
+    from darspack.ui.dialogs import ClassifyDialog
+    ids = [r["id"] for r in lib.conn.execute(
+        "SELECT id FROM files ORDER BY id")]
+    dlg = ClassifyDialog(None, lib, ids)
+    dlg.rows[0][1].setCurrentText("ریاضی")
+    dlg.rows[0][2].setValue(5)          # chapter (فصل)
+    dlg.rows[0][4].setValue(2)          # lesson (درس) — independent field
+    dlg.rows[0][5].setCurrentText("خانم احمدی")
+    dlg.rows[0][6].setCurrentText("1404-1405")
+    dlg._save_all()
+
+    rows = {r["id"]: r for r in lib.conn.execute(
+        """SELECT f.id, f.chapter, f.lesson, f.school_year,
+                  t.name AS teacher_name
+           FROM files f LEFT JOIN teachers t ON t.id=f.teacher_id""")}
+    saved = rows[ids[0]]
+    assert saved["chapter"] == 5 and saved["lesson"] == 2
+    assert saved["school_year"] == "1404-1405"
+    assert saved["teacher_name"] == "خانم احمدی"
+    teachers = lib.conn.execute("SELECT COUNT(*) c FROM teachers").fetchone()["c"]
+    assert teachers == 1                # exactly one row per teacher name
+
+    # the other file was saved with no teacher → no second row, empty year
+    assert rows[ids[1]]["teacher_name"] is None
+    assert lib.conn.execute("SELECT COUNT(*) c FROM teachers").fetchone()["c"] == 1
+
+
+def test_classify_lesson_defaults_to_current_school_year(lib, qapp):
+    """A3: a file without a stored school year shows the current one as
+    the pre-fill (the importer also stamps it at import time)."""
+    from darspack.core.schoolyear import current_school_year
+    from darspack.ui.dialogs import ClassifyDialog
+    file_id = lib.conn.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+    dlg = ClassifyDialog(None, lib, [file_id])
+    assert dlg.rows[0][6].currentText() == current_school_year()
