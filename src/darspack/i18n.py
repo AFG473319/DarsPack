@@ -121,6 +121,10 @@ STRINGS = {
         "stats_per_kind": "به تفکیک نوع",
         "stats_empty": "کتابخانه خالی است.",
         "qr_caption": "این کد را با دوربین گوشی باز کنید:",
+        "hist_time": "زمان",
+        "hist_action": "فعالیت",
+        "hist_detail": "جزئیات",
+        "share_new_files": "{} فایل جدید از زمان شروع اشتراک",
     },
     "en": {
         "app_title": "DarsPack",
@@ -233,6 +237,10 @@ STRINGS = {
         "stats_per_kind": "By kind",
         "stats_empty": "The library is empty.",
         "qr_caption": "Scan this with your phone's camera:",
+        "hist_time": "Time",
+        "hist_action": "Activity",
+        "hist_detail": "Detail",
+        "share_new_files": "{} new files since sharing started",
     },
 }
 

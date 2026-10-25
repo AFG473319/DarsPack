@@ -12,8 +12,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import jdatetime
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -28,9 +28,11 @@ from ..core.search import search as catalog_search
 from ..core.search import unclassified_count
 from ..core import manifest as manifest_core
 from ..i18n import tr
-from ..web.server import ShareServer
 from . import dialogs
 from .workers import ImportWorker
+
+if TYPE_CHECKING:      # F4 (perf audit): ShareServer pulls http/ssl/email —
+    from ..web.server import ShareServer   # only needed when sharing starts
 
 KINDS = ["جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر"]
 
@@ -44,6 +46,10 @@ def human_size(n: int) -> str:
 
 
 def jalali_date(iso: str) -> str:
+    # F4 (perf audit): jdatetime costs ~200 ms of import time, but rows
+    # need it only when the table fills — deferring it past window show
+    # speeds up source runs (Python caches the module after first call).
+    import jdatetime
     # imported_at is stored as a GREGORIAN isoformat string, so it must be
     # parsed by the stdlib first and then converted — parsing it directly
     # with jdatetime used to read the digits as a Jalali date and pass the
@@ -133,6 +139,8 @@ class MainWindow(QMainWindow):
                 (tr("btn_import_pkg"), self.import_package),
                 (tr("btn_dups"), self.show_duplicates),
                 (tr("btn_edit_meta"), self.edit_metadata),
+                (tr("btn_history"), self.show_history),
+                (tr("btn_stats"), self.show_stats),
                 (tr("btn_share"), self.toggle_share),
                 (tr("btn_feedback"), lambda: dialogs.feedback_dialog(self)),
                 (tr("btn_help"), lambda: dialogs.text_dialog(
@@ -411,6 +419,14 @@ class MainWindow(QMainWindow):
             tr("dups_tab3"): rename_hints(self.lib.conn),
         }).exec()
 
+    def show_history(self) -> None:
+        """E1: the activity log viewer + learned-rules transparency tab."""
+        dialogs.ActivityDialog(self, self.lib).exec()
+
+    def show_stats(self) -> None:
+        """E5: files per subject/kind, total size, dedup bytes avoided."""
+        dialogs.StatsDialog(self, self.lib).exec()
+
     def edit_metadata(self) -> None:
         file_id = self.selected_file_id()
         if file_id is None:
@@ -429,6 +445,9 @@ class MainWindow(QMainWindow):
 
     def toggle_share(self) -> None:
         if self.share_server is None:
+            # F4 (perf audit): the http/ssl/email import chain is only
+            # needed when sharing actually starts
+            from ..web.server import ShareServer
             self.share_server = ShareServer(str(self.lib.root))
             try:
                 urls = self.share_server.start()

@@ -140,8 +140,9 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
     from PySide6.QtWidgets import QWidget
 
     from darspack.ui.dialogs import (
-        ClassifyDialog, DuplicatesDialog, ExportDialog, MetadataDialog,
-        SettingsDialog, ShareDialog, VerifyReportDialog,
+        ActivityDialog, ClassifyDialog, DuplicatesDialog, ExportDialog,
+        MetadataDialog, SettingsDialog, ShareDialog, StatsDialog,
+        VerifyReportDialog,
     )
 
     with Library(tmp_path / "lib") as lib:
@@ -171,6 +172,8 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
             lambda: VerifyReportDialog(parent, "x.zip",
                                        SimpleNamespace(ok=True, problems=[]),
                                        library=lib, offer_import=False),
+            lambda: ActivityDialog(parent, lib),
+            lambda: StatsDialog(parent, lib),
         ]
         built = []
         for build in dialogs_to_build:
@@ -336,3 +339,130 @@ def test_share_dialog_renders_qr_for_lan_url(qapp):
     assert len(qrs) == 1
     assert qrs[0].size().width() == 180
     dlg.deleteLater()
+
+
+# --- E1/E5/D4: history, stats, live share refresh ---------------------------
+
+def test_activity_dialog_renders_events(lib_with_file, qapp):
+    """E1: log rows render with a Jalali date and a Persian action name."""
+    from darspack.core import db
+
+    from darspack.ui.dialogs import ActivityDialog
+    lib, _, _ = lib_with_file
+    db.log(lib.conn, "import", "جزوه فیزیک.pdf → 000001.pdf")
+    dlg = ActivityDialog(None, lib)
+    table = dlg.event_table
+    assert table.rowCount() >= 1
+    headers = []
+    for col in range(table.columnCount()):
+        item = table.item(0, col)
+        headers.append(item.text() if item else "")
+    assert headers[1] == "وارد کردن"          # action translated
+    assert "جزوه فیزیک" in headers[2]         # detail shown
+    dlg.deleteLater()
+
+
+def test_activity_dialog_empty_log_message(tmp_path, qapp):
+    """E1: an empty log gets a friendly sentence, not a blank table."""
+    from darspack.core.library import Library
+    from PySide6.QtWidgets import QLabel, QTableWidget
+
+    from darspack.ui.dialogs import ActivityDialog
+    with Library(tmp_path / "lib") as lib:
+        lib.conn.execute("DELETE FROM activity_log")   # drop seed_subjects row
+        lib.conn.commit()
+        dlg = ActivityDialog(None, lib)
+        texts = [l.text() for l in dlg.findChildren(QLabel)]
+        assert any("هنوز فعالیتی ثبت نشده" in t for t in texts)
+        assert not dlg.findChildren(QTableWidget) or \
+            dlg.findChildren(QTableWidget)[0].rowCount() == 0
+
+
+def test_activity_dialog_forgets_selected_rule(tmp_path, qapp):
+    """E1/A4 transparency: the «فراموش کن» button deletes the selected
+    hint rule — the app's memory is user-controllable."""
+    from darspack.core.suggest import learn_hint, load_hints
+
+    from darspack.ui.dialogs import ActivityDialog
+    with Library(tmp_path / "lib") as lib:
+        learn_hint(lib.conn, "رضایی", "ریاضی")
+        learn_hint(lib.conn, "احمدی", "فیزیک")
+        lib.conn.commit()
+        dlg = ActivityDialog(None, lib)
+        dlg.rule_table.selectRow(0)
+        token = dlg.rule_table.item(0, 0).text()
+        dlg._forget_selected_rule()
+        remaining = load_hints(lib.conn)
+        assert token not in remaining
+        assert len(remaining) == 1
+        assert dlg.rule_table.rowCount() == 1
+
+
+def test_bar_and_library_stats(lib_with_file, qapp):
+    """E5: the text bar is proportional; the stats match a planted fixture."""
+    from darspack.ui.dialogs import bar, library_stats
+    assert bar(6, 6) == "▓" * 12
+    assert bar(0, 6) == "░" * 12
+    assert bar(3, 6) == "▓" * 6 + "░" * 6
+
+    lib, fid, _ = lib_with_file
+    from darspack.core import db
+    with lib.conn:
+        sid = db.get_or_create(lib.conn, "subjects", "ریاضی")
+        lib.conn.execute("UPDATE files SET subject_id=? WHERE id=?", (sid, fid))
+    stats = library_stats(lib.conn)
+    assert stats["file_count"] == 1
+    assert stats["per_subject"] == [("ریاضی", 1)]
+    assert stats["dedup_bytes"] == 0
+    assert stats["unclassified"] == 0
+
+
+def test_stats_dialog_dedup_bytes(tmp_path, qapp):
+    """E5: two identical contents → dedup bytes = one copy's size.
+    (The duplicate import is rejected, so plant it via keep_duplicate.)"""
+    from darspack.core.importer import import_file
+    from darspack.core.library import Library
+
+    from darspack.ui.dialogs import StatsDialog, library_stats
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "a.pdf"
+        src.write_bytes(b"same content")
+        import_file(lib, src)
+        import_file(lib, src, keep_duplicate=True)
+        stats = library_stats(lib.conn)
+        assert stats["file_count"] == 2
+        assert stats["dedup_bytes"] == len(b"same content")
+        dlg = StatsDialog(None, lib)
+        assert dlg is not None
+        dlg.deleteLater()
+
+
+def test_share_dialog_live_refresh(tmp_path, qapp):
+    """D4: a phone upload (a new file row) while the share dialog is open
+    triggers the owner window's refresh and the new-files label."""
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QLabel, QWidget
+
+    from darspack.core.importer import import_file
+    from darspack.core.library import Library
+
+    from darspack.ui.dialogs import ShareDialog
+    with Library(tmp_path / "lib") as lib:
+        parent = QWidget()
+        parent.lib = lib
+        refreshes = []
+        parent.refresh = lambda: refreshes.append(1)
+        dlg = ShareDialog(parent, SimpleNamespace(pin="۱۲۳۴۵۶"),
+                          ["http://192.168.1.5:8000/"], on_close=None)
+        assert dlg._upload_label.isHidden()     # no uploads yet → no label
+        src = tmp_path / "از گوشی.pdf"
+        src.write_bytes(b"phone upload")
+        import_file(lib, src)
+        dlg._check_files()
+        assert refreshes == [1]
+        label = [l for l in dlg.findChildren(QLabel)
+                 if "فایل جدید" in l.text()]
+        assert label                                # «۱ فایل جدید…» shown
+        dlg._poll_timer.stop()
+        dlg.deleteLater()

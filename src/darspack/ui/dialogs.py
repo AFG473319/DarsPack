@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QMainWindow, QMessageBox, QPushButton,
     QSpinBox, QTableWidget, QTabWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout,
+    QVBoxLayout, QWidget,
 )
 
 from .. import __version__
@@ -658,10 +658,236 @@ class ShareDialog(QDialog):
             layout.addWidget(QLabel(tr("qr_caption")))
             layout.addWidget(qr, 0, Qt.AlignCenter)
         layout.addWidget(QLabel(tr("share_hint")))
+        # D4: poll the catalog every 5 s — a phone upload becomes visible
+        # on the desktop while sharing, not only after the dialog closes.
+        self._upload_label = QLabel("")
+        self._upload_label.setStyleSheet("color: #8fd08f;")
+        self._upload_label.hide()
+        layout.addWidget(self._upload_label)
+        self._file_count_at_start = self._count_files()
+        from PySide6.QtCore import QTimer
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(5000)
+        self._poll_timer.timeout.connect(self._check_files)
+        self._poll_timer.start()
         stop = QPushButton(tr("btn_stop_share"))
         stop.clicked.connect(self.accept)
         layout.addWidget(stop)
 
+    def _count_files(self) -> int:
+        parent = self.parent()
+        if parent is None or not hasattr(parent, "lib"):
+            return -1
+        return parent.lib.conn.execute(
+            "SELECT COUNT(*) c FROM files").fetchone()["c"]
+
+    def _check_files(self) -> None:
+        """D4: refresh the owner window when the file count changed."""
+        parent = self.parent()
+        count = self._count_files()
+        if count < 0 or parent is None:
+            return
+        if count > self._file_count_at_start >= 0:
+            self._upload_label.setText(
+                tr("share_new_files").format(
+                    persian_digits(str(count - self._file_count_at_start))))
+            self._upload_label.show()
+            if hasattr(parent, "refresh"):
+                parent.refresh()
+        elif count != self._file_count_at_start:
+            self._file_count_at_start = count   # deletions reset the baseline
+            if hasattr(parent, "refresh"):
+                parent.refresh()
+
     def closeEvent(self, event) -> None:
+        self._poll_timer.stop()
         self.accept()
         super().closeEvent(event)
+
+
+# --- E1: activity history + learned rules (A4 transparency) ----------------
+
+# Persian display names for the activity_log actions (the log stores
+# short English keys; this is the only place that translates them).
+ACTION_FA = {
+    "import": "وارد کردن",
+    "classify": "دسته‌بندی",
+    "edit_meta": "ویرایش اطلاعات",
+    "export": "خروجی بسته",
+    "verify": "راستی‌آزمایی",
+    "share_start": "شروع اشتراک‌گذاری",
+    "share_stop": "قطع اشتراک‌گذاری",
+    "web_upload": "دریافت از گوشی",
+    "delete": "حذف از کتابخانه",
+    "feedback": "بازخورد",
+    "healthcheck": "بررسی سلامت فایل‌ها",
+    "seed_subjects": "درس‌های پیش‌فرض",
+    "backup": "پشتیبان‌گیری",
+}
+
+
+class ActivityDialog(QDialog):
+    """«تاریخچه»: the last 50 activity_log events, plus the A4
+    transparency tab listing the learned token→subject rules."""
+
+    def __init__(self, parent, lib):
+        super().__init__(parent)
+        self.lib = lib
+        self.setWindowTitle(tr("history_title"))
+        self.resize(640, 460)
+        tabs = QTabWidget()
+
+        events = lib.conn.execute(
+            """SELECT ts, action, detail FROM activity_log
+               ORDER BY id DESC LIMIT 50""").fetchall()
+        if events:
+            self.event_table = QTableWidget(len(events), 3)
+            self.event_table.setHorizontalHeaderLabels(
+                (tr("hist_time"), tr("hist_action"), tr("hist_detail")))
+            self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
+            self.event_table.horizontalHeader().setStretchLastSection(True)
+            from .main_window import jalali_date
+            for i, ev in enumerate(events):
+                values = (persian_digits(jalali_date(ev["ts"])),
+                          ACTION_FA.get(ev["action"], ev["action"]),
+                          ev["detail"])
+                for col, value in enumerate(values):
+                    self.event_table.setItem(
+                        i, col, QTableWidgetItem(str(value)))
+            layout = QVBoxLayout()
+            layout.addWidget(self.event_table)
+            page = QWidget()
+            page.setLayout(layout)
+            tabs.addTab(page, tr("history_title"))
+        else:
+            tabs.addTab(self._message_page(tr("history_empty")),
+                        tr("history_title"))
+
+        rules = lib.conn.execute(
+            """SELECT h.token, h.hits, s.name AS subject
+               FROM hint_rules h JOIN subjects s ON s.id=h.subject_id
+               ORDER BY h.hits DESC""").fetchall()
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel(tr("hints_explain")))
+        if rules:
+            from PySide6.QtWidgets import QHeaderView
+            self.rule_table = QTableWidget(len(rules), 3)
+            self.rule_table.setHorizontalHeaderLabels(
+                ("#", tr("meta_subject"), tr("hints_hits")))
+            self.rule_table.setEditTriggers(QTableWidget.NoEditTriggers)
+            self.rule_table.horizontalHeader().setSectionResizeMode(
+                0, QHeaderView.Stretch)
+            for i, rule in enumerate(rules):
+                self.rule_table.setItem(i, 0, QTableWidgetItem(rule["token"]))
+                self.rule_table.setItem(i, 1, QTableWidgetItem(rule["subject"]))
+                self.rule_table.setItem(
+                    i, 2, QTableWidgetItem(tr("hints_hits").format(
+                        persian_digits(str(rule["hits"])))))
+            layout.addWidget(self.rule_table)
+            forget = QPushButton(tr("hints_forget"))
+            forget.clicked.connect(self._forget_selected_rule)
+            layout.addWidget(forget)
+        else:
+            layout.addWidget(self._message_page(tr("hints_empty")))
+        tabs.addTab(page, tr("hints_title"))
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(tabs)
+
+    def _forget_selected_rule(self) -> None:
+        """A4 transparency: delete the selected learned rule — the app's
+        memory is fully user-controllable, nothing hidden."""
+        from ..core.suggest import forget_hint
+        row = self.rule_table.currentRow()
+        if row < 0:
+            return
+        token = self.rule_table.item(row, 0).text()
+        with self.lib.conn:
+            forget_hint(self.lib.conn, token)
+        self.rule_table.removeRow(row)
+
+    def _message_page(self, text: str) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+        return page
+
+
+# --- E5: library stats (dependency-free Unicode bars) ----------------------
+
+def bar(count: int, max_count: int, width: int = 12) -> str:
+    """A proportional ▓▓▓░░ bar — plain text, no chart dependency, and
+    direction-neutral glyphs that survive the RTL layout."""
+    if max_count <= 0 or count <= 0:
+        return "░" * width
+    filled = round(count / max_count * width)
+    return "▓" * filled + "░" * (width - filled)
+
+
+def library_stats(conn) -> dict:
+    """The numbers behind the stats dialog — one dict so the M10/M11
+    benchmark scripts can reuse the exact same queries."""
+    per_subject = [(r["name"], r["c"]) for r in conn.execute(
+        """SELECT s.name, COUNT(*) c FROM files f
+           JOIN subjects s ON s.id=f.subject_id
+           GROUP BY s.name ORDER BY c DESC""")]
+    per_kind = [(r["kind"], r["c"]) for r in conn.execute(
+        """SELECT kind, COUNT(*) c FROM files WHERE kind IS NOT NULL
+           GROUP BY kind ORDER BY c DESC""")]
+    total = conn.execute(
+        "SELECT COUNT(*) c, COALESCE(SUM(size_bytes),0) s FROM files"
+    ).fetchone()
+    dedup = conn.execute(
+        """SELECT COALESCE(SUM((c - 1) * sz), 0) saved FROM
+           (SELECT COUNT(*) c, size_bytes sz FROM files
+            GROUP BY sha256 HAVING c > 1)""").fetchone()["saved"]
+    unclassified = conn.execute(
+        "SELECT COUNT(*) c FROM files WHERE subject_id IS NULL").fetchone()["c"]
+    return {
+        "file_count": total["c"],
+        "total_bytes": total["s"],
+        "dedup_bytes": dedup,
+        "unclassified": unclassified,
+        "per_subject": per_subject,
+        "per_kind": per_kind,
+    }
+
+
+class StatsDialog(QDialog):
+    """«آمار»: one dialog quantifying the organizer claim — files per
+    subject/kind with text bars, total size, dedup bytes avoided."""
+
+    def __init__(self, parent, lib):
+        super().__init__(parent)
+        self.setWindowTitle(tr("stats_title"))
+        self.resize(480, 520)
+        stats = library_stats(lib.conn)
+
+        layout = QVBoxLayout(self)
+        if stats["file_count"] == 0:
+            layout.addWidget(QLabel(tr("stats_empty")))
+        else:
+            from .main_window import human_size
+            layout.addWidget(QLabel(
+                f"{tr('stats_total')}: "
+                f"{human_size(stats['total_bytes'])}"))
+            layout.addWidget(QLabel(
+                f"{tr('stats_dedup')}: "
+                f"{human_size(stats['dedup_bytes'])}"))
+            layout.addWidget(QLabel(
+                f"{tr('stats_unclassified')}: "
+                f"{persian_digits(str(stats['unclassified']))}"))
+
+            layout.addWidget(QLabel(f"<b>{tr('stats_per_subject')}</b>"))
+            max_sub = max((c for _, c in stats["per_subject"]), default=0)
+            for name, count in stats["per_subject"]:
+                layout.addWidget(QLabel(
+                    f"{persian_digits(str(count))}  {bar(count, max_sub)}  {name}"))
+            layout.addWidget(QLabel(f"<b>{tr('stats_per_kind')}</b>"))
+            max_kind = max((c for _, c in stats["per_kind"]), default=0)
+            for kind, count in stats["per_kind"]:
+                layout.addWidget(QLabel(
+                    f"{persian_digits(str(count))}  {bar(count, max_kind)}  {kind}"))
