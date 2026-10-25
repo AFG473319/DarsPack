@@ -29,6 +29,10 @@ class ImportResult:
     path: Path | None = None
     file_id: int | None = None
     existing_id: int | None = None
+    # A5 contract for the classify dialog (brief 30-ui consumes this):
+    # {"subject": str, "tags": [str]} carried back from a package manifest.
+    # The importer NEVER stores them itself — pre-fill only.
+    prefill: dict | None = None
 
 
 def _now() -> str:
@@ -43,6 +47,12 @@ def import_file(lib, src, meta: dict | None = None,
     display_name: what the file should be called in the catalog. It
     differs from src.name for web uploads, which arrive as temporary
     files with a random prefix.
+
+    meta (A5): may carry "kind", "chapter", "lesson", "school_year" —
+    applied like the filename suggestions — plus "subject" and "tags"
+    from a درس‌پک manifest. Those two are NEVER stored (the subject is
+    never auto-applied); they travel back on the result as `prefill`
+    so the classify dialog can offer them for review.
     """
     src = Path(src)
     if not src.is_file():
@@ -60,25 +70,33 @@ def import_file(lib, src, meta: dict | None = None,
     # the classification dialog; until then the file counts as
     # unclassified («بدون درس») so the app keeps asking.
     subject_id = None
+    prefill = None
+    if meta.get("subject") or meta.get("tags"):
+        prefill = {"subject": meta.get("subject"),
+                   "tags": list(meta.get("tags") or [])}
 
     with conn:  # one transaction — everything commits, or nothing does
         dup = conn.execute(
             "SELECT id, original_name FROM files WHERE sha256=?", (sha,)
         ).fetchone()
         if dup and not keep_duplicate:
+            # Name the twin (C4): «از قبل در کتابخانه هست» without the
+            # name is a dead end; naming it answers «این همانی که...؟»
+            # and teaches the R3 story (same content, different names).
             return ImportResult(
                 "duplicate",
-                f"«{shown_name}» از قبل در کتابخانه هست",
-                path=src, existing_id=dup["id"])
+                f"«{shown_name}» تکرارِ «{dup['original_name']}» است",
+                path=src, existing_id=dup["id"], prefill=prefill)
 
         cur = conn.execute(
             """INSERT INTO files(stored_name, original_name, name_norm,
                size_bytes, sha256, imported_at, subject_id, chapter,
-               school_year, kind)
-               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               lesson, school_year, kind)
+               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (shown_name, match_key(shown_name), size, sha, _now(),
              subject_id,
              meta.get("chapter", suggestion["chapter"]),
+             meta.get("lesson", suggestion["lesson"]),
              meta.get("school_year", current_school_year()),
              kind))
         file_id = cur.lastrowid
@@ -91,7 +109,7 @@ def import_file(lib, src, meta: dict | None = None,
                      (final.name, file_id))
         db.log(conn, "import", f"{shown_name} → {final.name}")
     return ImportResult("imported", f"«{shown_name}» وارد شد",
-                        path=src, file_id=file_id)
+                        path=src, file_id=file_id, prefill=prefill)
 
 
 def iter_files(paths):

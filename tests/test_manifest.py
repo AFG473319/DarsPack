@@ -1,6 +1,7 @@
 """Tests for درس‌پک packages: export → verify round-trip, tamper detection."""
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -8,7 +9,7 @@ from darspack.core import db
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.manifest import (
-    export_package, make_index_html, safe_name, verify_package,
+    export_package, make_index_html, read_manifest, safe_name, verify_package,
 )
 
 
@@ -208,3 +209,99 @@ def test_index_html_escapes_file_names():
     page = make_index_html(manifest)
     assert "&lt;b&gt;x&lt;/b&gt;" in page
     assert "<b>x</b>" not in page
+
+
+# --- A5: package import round-trips the manifest metadata -------------------
+
+def test_export_manifest_carries_school_year_and_lesson(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "فارسی درس 3.pdf"
+        src.write_bytes(b"lesson content")
+        import_file(lib, src, meta={"school_year": "1404-1405"})
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        out = tmp_path / "pk.zip"
+        export_package(lib.conn, lib.files_dir, [fid], out)
+    entries = read_manifest(out)
+    assert entries[0]["lesson"] == 3 and entries[0]["chapter"] is None
+    assert entries[0]["school_year"] == "1404-1405"
+
+
+def test_package_import_round_trips_metadata(tmp_path):
+    # the A5 story: a classmate imports an organized package and the
+    # sender's chapter/lesson/kind/school_year survive — while subject/
+    # tags come back as PRE-FILL, never stored
+    with Library(tmp_path / "sender") as sender:
+        src = tmp_path / "جزوه ریاضی درس 2.pdf"
+        src.write_bytes(b"first")
+        r = import_file(sender, src,
+                        meta={"kind": "جزوه", "chapter": 4, "lesson": 2,
+                              "school_year": "1404-1405"})
+        sid = db.get_or_create(sender.conn, "subjects", "ریاضی")
+        sender.conn.execute(
+            "UPDATE files SET subject_id=? WHERE id=?", (sid, r.file_id))
+        tid = db.get_or_create(sender.conn, "tags", "امتحانی")
+        sender.conn.execute(
+            "INSERT INTO file_tags(file_id, tag_id) VALUES (?,?)",
+            (r.file_id, tid))
+        sender.conn.commit()
+        ids = [row["id"] for row in sender.conn.execute("SELECT id FROM files")]
+        out = tmp_path / "pack.zip"
+        export_package(sender.conn, sender.files_dir, ids, out)
+
+    metas = {e["path"]: e for e in read_manifest(out)}
+
+    # the receiver extracts files/ to a temp dir and imports with metas —
+    # exactly what the package-import dialog (brief 30-ui) will do
+    with Library(tmp_path / "receiver") as receiver:
+        import tempfile, shutil
+        with tempfile.TemporaryDirectory() as td:
+            with zipfile.ZipFile(out) as zf:
+                zf.extractall(td)
+            for entry in metas.values():
+                extracted = Path(td) / entry["path"]
+                res = import_file(
+                    receiver, extracted,
+                    meta={"kind": entry.get("kind"),
+                          "chapter": entry.get("chapter"),
+                          "lesson": entry.get("lesson"),
+                          "school_year": entry.get("school_year"),
+                          "subject": entry.get("subject"),
+                          "tags": entry.get("tags")},
+                    display_name=entry["name"])
+                assert res.status == "imported"
+                assert res.prefill == {"subject": "ریاضی",
+                                       "tags": ["امتحانی"]}
+        row = receiver.conn.execute(
+            "SELECT kind, chapter, lesson, school_year, subject_id"
+            " FROM files").fetchone()
+        assert row["kind"] == "جزوه" and row["chapter"] == 4
+        assert row["lesson"] == 2 and row["school_year"] == "1404-1405"
+        assert row["subject_id"] is None          # pre-fill only, stored never
+
+
+def test_duplicate_display_names_disambiguated_by_arc_key(tmp_path):
+    # two DIFFERENT files both named «test.pdf»: the metas map is keyed
+    # by the arc path (001 - test.pdf / 002 - test.pdf), never the name
+    with Library(tmp_path / "sender") as sender:
+        for i, data in enumerate((b"one", b"two")):
+            src = tmp_path / f"src{i}.pdf"
+            src.write_bytes(data)
+            import_file(sender, src, display_name="test.pdf",
+                        meta={"chapter": i + 1})
+        ids = [row["id"] for row in sender.conn.execute("SELECT id FROM files")]
+        out = tmp_path / "pack.zip"
+        export_package(sender.conn, sender.files_dir, ids, out)
+
+    entries = read_manifest(out)
+    assert len(entries) == 2
+    assert {e["path"] for e in entries} == {e["path"] for e in entries}
+    assert len({e["path"] for e in entries}) == 2          # unique arc keys
+    assert {e["chapter"] for e in entries} == {1, 2}       # each keeps its own
+
+
+def test_read_manifest_rejects_non_darspack_manifest(tmp_path):
+    z = tmp_path / "fake.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"format": "other"}))
+    with pytest.raises(KeyError):
+        read_manifest(z)

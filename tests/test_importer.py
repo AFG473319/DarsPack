@@ -185,3 +185,61 @@ def test_reopen_sweeps_orphans_but_keeps_real_files(tmp_path, sample):
         assert not (lib.files_dir / "tmp_7.pdf").exists()
         assert not (lib.files_dir / "999999.pdf").exists()
         assert real.exists() and real.read_bytes() == b"lesson-content"
+
+
+# --- C4: the duplicate message names the twin ------------------------------
+
+def test_duplicate_message_names_the_existing_file(lib, sample):
+    first = import_file(lib, sample("جزوه ریاضی فصل 3.pdf"))
+    again = import_file(lib, sample("دانلود (1).pdf", data=b"lesson-content"))
+    assert again.status == "duplicate"
+    assert first.file_id == 1
+    assert "جزوه ریاضی فصل 3.pdf" in again.message_fa
+    assert "تکرار" in again.message_fa
+
+
+# --- lesson storage + the A5 prefill contract ------------------------------
+
+def test_lesson_suggestion_is_stored(lib, sample):
+    # «درس» is parsed like «فصل» but lands in its OWN column (design
+    # decision 2026-10-24: a file may have درس, فصل, both, or neither)
+    import_file(lib, sample("فارسی درس 3.pdf"))
+    row = lib.conn.execute("SELECT chapter, lesson FROM files").fetchone()
+    assert row["lesson"] == 3 and row["chapter"] is None
+
+
+def test_meta_lesson_override(lib, sample):
+    import_file(lib, sample("ناشناخته.pdf"), meta={"lesson": 7})
+    row = lib.conn.execute("SELECT lesson FROM files").fetchone()
+    assert row["lesson"] == 7
+
+
+def test_manifest_subject_tags_are_prefill_only(lib, sample):
+    # A5 contract: subject/tags from a درس‌پک manifest must NEVER be
+    # stored — they ride back on the result for the classify dialog
+    r = import_file(lib, sample("جزوه فیزیک.pdf"),
+                    meta={"kind": "جزوه", "chapter": 2, "lesson": 1,
+                          "school_year": "1404-1405",
+                          "subject": "فیزیک", "tags": ["امتحانی"]})
+    assert r.status == "imported"
+    row = lib.conn.execute(
+        "SELECT subject_id, kind, chapter, lesson, school_year FROM files"
+    ).fetchone()
+    assert row["subject_id"] is None            # never auto-applied
+    assert row["kind"] == "جزوه" and row["chapter"] == 2 and row["lesson"] == 1
+    assert row["school_year"] == "1404-1405"
+    assert r.prefill == {"subject": "فیزیک", "tags": ["امتحانی"]}
+
+
+def test_prefill_is_none_for_ordinary_imports(lib, sample):
+    r = import_file(lib, sample("فقط-نام.pdf"))
+    assert r.prefill is None
+
+
+def test_duplicate_of_package_file_still_carries_prefill(lib, sample):
+    import_file(lib, sample("اول.pdf"),
+                meta={"subject": "فیزیک", "tags": ["امتحانی"]})
+    again = import_file(lib, sample("دوم.pdf", data=b"lesson-content"),
+                        meta={"subject": "فیزیک", "tags": ["امتحانی"]})
+    assert again.status == "duplicate"
+    assert again.prefill == {"subject": "فیزیک", "tags": ["امتحانی"]}

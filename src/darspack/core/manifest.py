@@ -55,6 +55,8 @@ def _fetch_entry(conn, file_id: int) -> dict:
         "size": row["size_bytes"],
         "subject": row["subject_name"],
         "chapter": row["chapter"],
+        "lesson": row["lesson"],
+        "school_year": row["school_year"],
         "kind": row["kind"],
         "tags": tags,
         "stored_name": row["stored_name"],   # internal; removed from manifest
@@ -108,6 +110,23 @@ def make_index_html(manifest: dict) -> str:
 <p>{len(rows)} فایل — ساخته‌شده در {html.escape(manifest['created'])}</p>
 <table><tr><th>نام فایل</th><th>درس</th><th>فصل</th><th>نوع</th></tr>
 {''.join(rows)}</table></body></html>"""
+
+
+def read_manifest(zip_path) -> list[dict]:
+    """Parse a package's manifest.json back into its entry list (A5).
+
+    Pure function: it touches nothing outside the ZIP. The caller (the
+    package-import dialog) matches entries to extracted files by the arc
+    `path` — unique even when two files share a display name — and feeds
+    each entry to the importer as `meta`, with subject/tags kept as
+    pre-fill only. Raises KeyError on a ZIP without a manifest; callers
+    verify the package first.
+    """
+    with zipfile.ZipFile(zip_path) as zf:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    if manifest.get("format") != FORMAT:
+        raise KeyError("not a darspack package manifest")
+    return list(manifest.get("files", []))
 
 
 @dataclass
