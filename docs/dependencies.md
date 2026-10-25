@@ -6,6 +6,7 @@ Project rule: every dependency is registered here **before** installation — wh
 |---|---|---|---|---|---|
 | PySide6-Essentials 6.12.0 | Qt 6 bindings (QtCore/QtGui/QtWidgets only) | Desktop UI with native Persian/RTL support; worker threads keep the UI responsive | LGPL-3.0 | part of the 250 MB venv below | installed |
 | jdatetime 6.1.1 | Jalali (Shamsi) date handling | School years and date display; leap-Esfand/year-boundary tested | MIT (verified on PyPI) | part of the 250 MB venv below | installed |
+| qrcode 8.2 | Generates QR codes as pure-Python SVG (no Pillow needed) | The share dialog shows a QR of the phone URL — scanning it beats typing `http://192.168.x.y:port/` on a phone keyboard, especially on demo day | BSD (verified on PyPI and `pip show`) | 455 kB installed + 208 kB for its one dependency `colorama` (measured on the dev laptop, 2026-10-25) | installed 2026-10-25 |
 | pytest 9.1.1 | Test runner | Automated tests for every critical algorithm | MIT | part of the 250 MB venv below | installed (dev only) |
 | PyInstaller 6.22.3 | Bundles Python + app into a Windows executable (onedir) | End users must not need Python installed | GPLv2 with bootloader exception (built app unrestricted) | part of the 270 MB venv below | installed (dev only) |
 

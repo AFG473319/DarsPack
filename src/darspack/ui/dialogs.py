@@ -72,6 +72,34 @@ def package_metas(zip_path) -> dict:
     return {entry["path"].removeprefix("files/"): entry for entry in entries}
 
 
+def pick_lan_url(urls) -> str | None:
+    """D3: the first URL a phone can reach — never a loopback one."""
+    from urllib.parse import urlparse
+    for url in urls:
+        if (urlparse(url).hostname or "") not in ("127.0.0.1", "localhost",
+                                                  "::1"):
+            return url
+    return None
+
+
+def qr_svg_bytes(url: str) -> bytes:
+    """D3: the share URL as a QR-code SVG (pure Python — the `qrcode`
+    package, registered in docs/dependencies.md). The QR itself is path
+    data with no text, so the URL is embedded as a <title>: the SVG
+    stays self-describing and the tests can pin its content."""
+    import io
+
+    import qrcode
+    import qrcode.image.svg          # needed before the factory resolves
+    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    svg = buf.getvalue().decode("utf-8")
+    if url not in svg:
+        svg = svg.replace("</svg>", f"<title>{url}</title></svg>")
+    return svg.encode("utf-8")
+
+
 def save_feedback(parent, text: str) -> None:
     """Persist one feedback entry (in-app form → feedback.jsonl)."""
     target = Path(parent.lib.root) / "feedback.jsonl"
@@ -618,6 +646,17 @@ class ShareDialog(QDialog):
             line = QLabel(url)
             line.setTextInteractionFlags(Qt.TextSelectableByMouse)
             layout.addWidget(line)
+        # D3 (design-approved dependency): a scannable QR of the LAN URL —
+        # typing the address on a phone keyboard is the share flow's
+        # weakest link. The dependency-free URL list above stays.
+        lan = pick_lan_url(urls)
+        if lan is not None:
+            from PySide6.QtSvgWidgets import QSvgWidget
+            qr = QSvgWidget()
+            qr.load(qr_svg_bytes(lan))
+            qr.setFixedSize(180, 180)
+            layout.addWidget(QLabel(tr("qr_caption")))
+            layout.addWidget(qr, 0, Qt.AlignCenter)
         layout.addWidget(QLabel(tr("share_hint")))
         stop = QPushButton(tr("btn_stop_share"))
         stop.clicked.connect(self.accept)

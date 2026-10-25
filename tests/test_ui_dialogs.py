@@ -297,3 +297,42 @@ def test_verify_report_dialog_button_only_when_ok(lib_with_file, qapp):
     actions = [r["action"] for r in lib.conn.execute(
         "SELECT action FROM activity_log ORDER BY id")]
     assert actions.count("verify") == 2       # both dialogs logged
+
+
+# --- D3: QR code in the share dialog ---------------------------------------
+
+def test_qr_svg_contains_the_url():
+    """The QR's SVG embeds the URL as its <title> — the QR modules are
+    pure path data, so this is how the content stays pinnable."""
+    from darspack.ui.dialogs import qr_svg_bytes
+    svg = qr_svg_bytes("http://192.168.1.5:8000/")
+    assert svg.startswith(b"<?xml")
+    assert b"http://192.168.1.5:8000/" in svg
+    assert b"<path" in svg                    # actual QR modules present
+
+
+def test_pick_lan_url_skips_loopback():
+    """N urls → the QR uses the first LAN one; loopback-only → None."""
+    from darspack.ui.dialogs import pick_lan_url
+    assert pick_lan_url(["http://127.0.0.1:8000/",
+                         "http://192.168.1.5:8000/",
+                         "http://192.168.1.6:8000/"]) == \
+        "http://192.168.1.5:8000/"
+    assert pick_lan_url(["http://localhost:8000/"]) is None
+
+
+def test_share_dialog_renders_qr_for_lan_url(qapp):
+    """The share dialog renders an SVG QR widget when a LAN URL exists —
+    the construction sweep covers the loopback-only case implicitly."""
+    from types import SimpleNamespace
+
+    from PySide6.QtSvgWidgets import QSvgWidget
+
+    from darspack.ui.dialogs import ShareDialog
+    dlg = ShareDialog(None, SimpleNamespace(pin="۱۲۳۴۵۶"),
+                      ["http://127.0.0.1:8000/", "http://192.168.1.5:8000/"],
+                      on_close=None)
+    qrs = dlg.findChildren(QSvgWidget)
+    assert len(qrs) == 1
+    assert qrs[0].size().width() == 180
+    dlg.deleteLater()
