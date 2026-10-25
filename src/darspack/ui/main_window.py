@@ -289,9 +289,11 @@ class MainWindow(QMainWindow):
     def open_import_dialog(self) -> None:
         dialogs.ImportDialog(self).exec()
 
-    def run_import_worker(self, paths: list, keep_duplicates: bool = False) -> None:
+    def run_import_worker(self, paths: list, keep_duplicates: bool = False,
+                          **kwargs) -> None:
+        # kwargs (A5): metas/meta_base/cleanup_dir for a درس‌پک import
         self._worker = ImportWorker(
-            str(self.lib.root), paths, keep_duplicates)
+            str(self.lib.root), paths, keep_duplicates, **kwargs)
         self._worker.progress.connect(
             lambda d, t, name: self.statusBar().showMessage(
                 tr("import_running").format(d, t, name)))
@@ -303,9 +305,12 @@ class MainWindow(QMainWindow):
         self.reload_filters()
         self.refresh()
         # Categorizing is the app's main job — ask for the new files' info
-        # right away, pre-filled with the filename suggestions.
+        # right away, pre-filled with the filename suggestions (and, for a
+        # درس‌پک import, the manifest's subject/tags as pre-fill — A5).
         if new_ids:
-            dialogs.ClassifyDialog(self, self.lib, new_ids).exec()
+            prefills = getattr(self._worker, "result_prefills", {})
+            dialogs.ClassifyDialog(self, self.lib, new_ids,
+                                   prefills=prefills).exec()
             self.reload_filters()
             self.refresh()
         text = tr("import_done").format(imported, duplicates, errors)

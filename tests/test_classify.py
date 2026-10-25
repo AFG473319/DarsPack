@@ -266,3 +266,71 @@ def test_classify_learns_token_hints(lib, qapp):
         ("جزوه رضایی فصل 3.pdf",)).fetchone()["id"]
     dlg = ClassifyDialog(None, lib, [fid])
     assert dlg.rows[0][1].currentText() == "ریاضی"   # learned pre-fill
+
+
+def test_package_import_prefills_from_manifest(tmp_path, qapp):
+    """A5 round-trip: a classified file is exported as a درس‌پک and
+    imported into a fresh library — kind/chapter/school_year are applied
+    from the manifest, subject/tags arrive as ClassifyDialog pre-fill,
+    and saving makes them real. Mirrors VerifyReportDialog._import_contents."""
+    import zipfile
+
+    from darspack.core import db
+    from darspack.core.manifest import export_package
+    from darspack.ui.dialogs import ClassifyDialog, package_metas
+    from darspack.ui.workers import ImportWorker
+
+    with Library(tmp_path / "sender") as lib:
+        src = tmp_path / "جزوه فیزیک فصل 2.pdf"
+        src.write_bytes(b"pkg demo")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        with lib.conn:
+            sid = db.get_or_create(lib.conn, "subjects", "فیزیک")
+            lib.conn.execute(
+                "UPDATE files SET subject_id=? WHERE id=?", (sid, fid))
+            tid = db.get_or_create(lib.conn, "tags", "امتحان")
+            lib.conn.execute(
+                "INSERT INTO file_tags(file_id, tag_id) VALUES (?,?)", (fid, tid))
+        export_package(lib.conn, lib.files_dir, [fid],
+                       str(tmp_path / "pkg.zip"))
+
+    metas = package_metas(tmp_path / "pkg.zip")
+    assert len(metas) == 1                 # keyed by the arc name's file part
+
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    with zipfile.ZipFile(tmp_path / "pkg.zip") as zf:
+        zf.extractall(extracted)
+    files_dir = extracted / "files"
+
+    worker = ImportWorker(str(tmp_path / "receiver"), [files_dir],
+                          metas=metas, meta_base=files_dir,
+                          cleanup_dir=extracted)
+    worker.run()                           # direct call — no thread needed
+    assert len(worker.result_prefills) == 1
+    (new_id, prefill), = worker.result_prefills.items()
+    assert prefill["subject"] == "فیزیک"
+    assert prefill["tags"] == ["امتحان"]
+    assert not extracted.exists()          # worker cleaned the temp folder
+
+    with Library(tmp_path / "receiver") as lib2:
+        row = lib2.conn.execute(
+            "SELECT kind, chapter, school_year FROM files WHERE id=?",
+            (new_id,)).fetchone()
+        assert row["kind"] == "جزوه"                # manifest kind applied
+        assert row["chapter"] == 2                  # manifest chapter applied
+        dlg = ClassifyDialog(None, lib2, [new_id],
+                             prefills=worker.result_prefills)
+        assert dlg.rows[0][1].currentText() == "فیزیک"   # pre-fill shown
+        assert dlg.rows[0][7].text() == "امتحان"         # tags pre-filled
+        dlg._save_all()                                  # review → real
+        saved = lib2.conn.execute(
+            """SELECT s.name AS subject_name FROM files f
+               LEFT JOIN subjects s ON s.id=f.subject_id WHERE f.id=?""",
+            (new_id,)).fetchone()
+        assert saved["subject_name"] == "فیزیک"
+        tags = [t["name"] for t in lib2.conn.execute(
+            """SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id
+               WHERE ft.file_id=?""", (new_id,))]
+        assert tags == ["امتحان"]

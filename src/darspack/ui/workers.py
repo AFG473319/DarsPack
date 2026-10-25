@@ -12,6 +12,7 @@ that never comes (the "stuck on importing" bug, 2026-10-24).
 """
 from __future__ import annotations
 
+import shutil
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -28,16 +29,30 @@ class ImportWorker(QThread):
     `done` also carries the ids of the freshly imported files so the UI
     can open the classification review dialog — entering the file info
     is the app's main job, not a side effect.
+
+    A5 (package import): `metas` maps a path relative to `meta_base` to
+    a درس‌پک manifest entry; matching files are imported with
+    meta={kind, chapter, lesson, school_year} applied like filename
+    suggestions, and the manifest's subject/tags come back (pre-fill
+    only, never stored) as `result_prefills` for the classify dialog.
+    `cleanup_dir` (the extracted package's temp folder) is removed by
+    the worker after `done` — the dialog that extracted it returns
+    immediately, so someone who outlives it must own the cleanup.
     """
 
     progress = Signal(int, int, str)          # done, total, current name
     done = Signal(int, int, int, list, list)  # imported, dups, errors, messages, new ids
 
-    def __init__(self, library_root, paths, keep_duplicates=False, parent=None):
+    def __init__(self, library_root, paths, keep_duplicates=False, parent=None,
+                 metas=None, meta_base=None, cleanup_dir=None):
         super().__init__(parent)
         self.library_root = library_root
         self.paths = list(paths)
         self.keep_duplicates = keep_duplicates
+        self.metas = metas
+        self.meta_base = Path(meta_base) if meta_base else None
+        self.cleanup_dir = Path(cleanup_dir) if cleanup_dir else None
+        self.result_prefills: dict = {}      # file_id → {"subject", "tags"}
 
     def run(self) -> None:
         imported = duplicates = errors = 0
@@ -51,6 +66,7 @@ class ImportWorker(QThread):
                 self.progress.emit(i, len(files), path.name)
                 try:
                     result = import_file(lib, path,
+                                         meta=self._meta_for(path),
                                          keep_duplicate=self.keep_duplicates)
                 except Exception as exc:      # one bad file ≠ a dead batch
                     errors += 1
@@ -59,6 +75,8 @@ class ImportWorker(QThread):
                 if result.status == "imported":
                     imported += 1
                     new_ids.append(result.file_id)
+                    if result.prefill:
+                        self.result_prefills[result.file_id] = result.prefill
                 elif result.status == "duplicate":
                     duplicates += 1
                 else:
@@ -75,6 +93,19 @@ class ImportWorker(QThread):
                 except Exception:
                     pass
             self.done.emit(imported, duplicates, errors, messages, new_ids)
+            if self.cleanup_dir is not None:
+                shutil.rmtree(self.cleanup_dir, ignore_errors=True)
+
+    def _meta_for(self, path: Path) -> dict | None:
+        """The manifest entry for this extracted file, keyed by its path
+        relative to the extracted files/ folder (A5)."""
+        if self.metas is None:
+            return None
+        try:
+            key = str(path.relative_to(self.meta_base))
+        except (ValueError, TypeError):
+            key = path.name
+        return self.metas.get(key)
 
     def _write_error_log(self) -> None:
         """The windowed exe has no console — keep the traceback somewhere."""

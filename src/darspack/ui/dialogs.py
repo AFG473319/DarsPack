@@ -60,6 +60,18 @@ def make_year_combo(current: str | None) -> QComboBox:
     return combo
 
 
+def package_metas(zip_path) -> dict:
+    """A5: {path under files/: manifest entry} for a verified درس‌پک.
+
+    The import worker matches each extracted file by its path relative
+    to the extracted files/ folder; arc names carry the «001 - » prefix,
+    so duplicate display names can never collide. Callers verify the
+    package first (read_manifest raises on a ZIP without a manifest).
+    """
+    entries = manifest_core.read_manifest(zip_path)
+    return {entry["path"].removeprefix("files/"): entry for entry in entries}
+
+
 def save_feedback(parent, text: str) -> None:
     """Persist one feedback entry (in-app form → feedback.jsonl)."""
     target = Path(parent.lib.root) / "feedback.jsonl"
@@ -170,7 +182,10 @@ class ClassifyDialog(QDialog):
     leaves files unclassified (the «بدون درس» filter finds them again).
     """
 
-    def __init__(self, parent, lib, file_ids: list):
+    def __init__(self, parent, lib, file_ids: list, prefills: dict | None = None):
+        """prefills (A5): {file_id: {"subject": str, "tags": [str]}} from a
+        درس‌پک manifest — overrides the filename heuristic for those ids.
+        Pre-fill only: saving still goes through the user's review."""
         super().__init__(parent)
         self.lib = lib
         self.setWindowTitle(tr("classify_title"))
@@ -178,7 +193,7 @@ class ClassifyDialog(QDialog):
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
                    tr("meta_kind"), tr("meta_lesson"), tr("meta_teacher"),
-                   tr("meta_year")]
+                   tr("meta_year"), tr("meta_tags_col")]
         self.table = QTableWidget(len(file_ids), len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
@@ -203,17 +218,20 @@ class ClassifyDialog(QDialog):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(r, 0, name_item)
 
-            # Pre-fill: the stored subject, or the filename heuristic's
-            # suggestion for files the importer left unclassified.
+            # Pre-fill: the stored subject, then the package manifest's
+            # subject (A5), then the filename heuristic's suggestion —
+            # for files the importer left unclassified.
             from ..core.suggest import load_hints, suggest
             suggested = suggest(Path(file_row["original_name"]).stem,
                                 learned=load_hints(lib.conn))
+            prefill = (prefills or {}).get(fid) or {}
             subject = QComboBox()
             subject.setEditable(True)
             subject.addItem("")                   # «no subject» stays possible
             subject.addItems(subjects)
             subject.setCurrentText(
-                file_row["subject_name"] or suggested["subject"] or "")
+                file_row["subject_name"] or prefill.get("subject")
+                or suggested["subject"] or "")
             self.table.setCellWidget(r, 1, subject)
 
             chapter = QSpinBox()
@@ -239,10 +257,15 @@ class ClassifyDialog(QDialog):
             year = make_year_combo(file_row["school_year"])
             self.table.setCellWidget(r, 6, year)
 
+            # A5: the manifest's tags arrive as pre-fill too
+            tags_edit = QLineEdit()
+            tags_edit.setText("، ".join(prefill.get("tags") or []))
+            self.table.setCellWidget(r, 7, tags_edit)
+
             # widget positions 0–3 are pinned by existing tests; the
             # newer fields go after them
             self.rows.append((fid, subject, chapter, kind, lesson,
-                              teacher, year))
+                              teacher, year, tags_edit))
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr("classify_hint")))
@@ -273,7 +296,7 @@ class ClassifyDialog(QDialog):
         layout.addLayout(buttons)
 
     # self.rows layout (positions 0–3 pinned by existing tests):
-    # (file_id, subject, chapter, kind, lesson, teacher, year)
+    # (file_id, subject, chapter, kind, lesson, teacher, year, tags)
     _BULK_INDEX = {"subject": 1, "chapter": 2, "kind": 3, "lesson": 4}
     _BULK_EMPTY = {"chapter": 0, "lesson": 0, "kind": "سایر"}
 
@@ -327,7 +350,7 @@ class ClassifyDialog(QDialog):
     def _save_all(self) -> None:
         conn = self.lib.conn
         with conn:
-            for fid, subject, chapter, kind, lesson, teacher, year in self.rows:
+            for fid, subject, chapter, kind, lesson, teacher, year, tags in self.rows:
                 name = subject.currentText().strip()
                 subject_id = (db.get_or_create(conn, "subjects", name)
                               if name else None)
@@ -342,8 +365,21 @@ class ClassifyDialog(QDialog):
                      teacher_id, year.currentText().strip() or None, fid))
                 if name:
                     self._learn_tokens(fid, name)
+                self._save_tags(conn, fid, tags.text())
             db.log(conn, "classify", f"{len(self.rows)} files")
         self.accept()
+
+    def _save_tags(self, conn, fid: int, text: str) -> None:
+        """Replace the file's tags with the comma/«،»-separated field."""
+        conn.execute("DELETE FROM file_tags WHERE file_id=?", (fid,))
+        for tag in text.replace(",", "،").split("،"):
+            tag = tag.strip()
+            if not tag:
+                continue
+            tag_id = db.get_or_create(conn, "tags", tag)
+            conn.execute(
+                "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
+                (fid, tag_id))
 
 
 class VerifyReportDialog(QDialog):
@@ -368,12 +404,20 @@ class VerifyReportDialog(QDialog):
             layout.addWidget(btn)
 
     def _import_contents(self) -> None:
-        """Extract to a temp folder and import through the normal pipeline."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with zipfile.ZipFile(self.path) as zf:
-                zf.extractall(tmp)
-            files_dir = Path(tmp) / "files"
-            self.parent_window.run_import_worker([files_dir])
+        """Extract to a temp folder and import through the normal pipeline.
+
+        A5: the manifest's kind/chapter/lesson/school_year apply like
+        filename suggestions, and its subject/tags come back as pre-fill
+        for the classify dialog — never auto-applied. The extracted temp
+        folder is removed by the import worker after it finishes (the
+        worker outlives this dialog, which returns right away)."""
+        metas = package_metas(self.path)
+        tmp = tempfile.mkdtemp(prefix="darspack-pkg-")
+        with zipfile.ZipFile(self.path) as zf:
+            zf.extractall(tmp)
+        files_dir = Path(tmp) / "files"
+        self.parent_window.run_import_worker(
+            [files_dir], metas=metas, meta_base=files_dir, cleanup_dir=Path(tmp))
         self.accept()
 
 
