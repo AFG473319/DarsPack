@@ -161,3 +161,105 @@ def test_school_year_filter_isolates_years(tmp_path, qapp):
                 shown == persian_digits("1405-1406")
         finally:
             win.lib.close()
+
+
+# --- E3: confirmed manual delete (design-approved 2026-10-24) -------------
+
+from PySide6.QtWidgets import QMessageBox
+
+
+def test_delete_moves_file_to_trash_and_removes_row(tmp_path, qapp, monkeypatch):
+    """E3: the confirmed delete MOVES the stored file to files/.trash
+    (never unlinked), deletes the row + its tag links, and logs the
+    action. Re-importing the same content works afterwards."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "جزوه اشتباهی.pdf"
+        src.write_bytes(b"wrong file")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        with lib.conn:      # explicit commit — an open transaction would
+            #                # block the window's connection (WAL writer)
+            lib.conn.execute(
+                "INSERT INTO file_tags(file_id, tag_id) VALUES (?, ?)",
+                (fid, lib.conn.execute(
+                    "INSERT INTO tags(name, normalized) VALUES ('x', 'x')")
+                 .lastrowid))
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            monkeypatch.setattr(
+                QMessageBox, "question",
+                staticmethod(lambda *a, **k: QMessageBox.Yes))
+            win.delete_file(fid)
+
+            assert lib.conn.execute(
+                "SELECT COUNT(*) c FROM files").fetchone()["c"] == 0
+            assert lib.conn.execute(
+                "SELECT COUNT(*) c FROM file_tags").fetchone()["c"] == 0
+            trash = lib.files_dir / ".trash"
+            trashed = list(trash.iterdir())
+            assert len(trashed) == 1          # the file MOVED, not erased
+            assert trashed[0].read_bytes() == b"wrong file"
+            action = lib.conn.execute(
+                "SELECT action, detail FROM activity_log ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            assert action["action"] == "delete"
+            assert "جزوه اشتباهی" in action["detail"]
+
+            # re-importing the same content works — the row is gone
+            result = import_file(lib, src)
+            assert result.status == "imported"
+        finally:
+            win.lib.close()
+
+
+def test_delete_declined_keeps_everything(tmp_path, qapp, monkeypatch):
+    """E3: «No» in the confirmation changes nothing — flag-only rule."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "جزوه مهم.pdf"
+        src.write_bytes(b"keep me")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            monkeypatch.setattr(
+                QMessageBox, "question",
+                staticmethod(lambda *a, **k: QMessageBox.No))
+            win.delete_file(fid)
+            assert lib.conn.execute(
+                "SELECT COUNT(*) c FROM files").fetchone()["c"] == 1
+            assert src.exists()
+            assert win.table.rowCount() == 1   # table still shows it
+        finally:
+            win.lib.close()
+
+
+def test_sweep_never_touches_the_trash(tmp_path):
+    """E3 safety net: files/.trash is a subfolder of files/ and
+    sweep_orphans only reconciles top-level files — a trashed file
+    survives a library reopen with unknown leftovers around it."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "a.pdf"
+        src.write_bytes(b"a")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        trash = lib.files_dir / ".trash"
+        trash.mkdir(exist_ok=True)
+        (lib.files_dir / "tmp_009.pdf").write_bytes(b"leftover")
+        import shutil
+        shutil.move(str(lib.stored_path(
+            lib.conn.execute("SELECT * FROM files").fetchone())),
+            str(trash / "000001.pdf"))
+        lib.conn.execute("DELETE FROM files WHERE id=?", (fid,))
+        lib.conn.commit()
+
+    with Library(tmp_path / "lib") as lib2:      # reopen → sweep runs
+        assert (trash / "000001.pdf").exists()   # trash untouched
+        assert not (lib2.files_dir / "tmp_009.pdf").exists()  # tmp swept

@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPushButton, QStatusBar, QTableWidget,
+    QMainWindow, QMenu, QMessageBox, QPushButton, QStatusBar, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -110,6 +110,10 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 420)
         self.table.doubleClicked.connect(self.open_selected_file)
+        # E3: right-click a row → «حذف از کتابخانه…» (confirmed, and the
+        # file is MOVED to files/.trash — never erased)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_row_menu)
 
         # E2: empty states — a fresh library and an empty search each get
         # one sentence instead of a silent blank table. The label lives on
@@ -283,6 +287,58 @@ class MainWindow(QMainWindow):
             "SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
         QDesktopServices.openUrl(QUrl.fromLocalFile(
             str(self.lib.stored_path(row))))
+
+    def _show_row_menu(self, pos) -> None:
+        """E3: the row's right-click menu — «حذف از کتابخانه…»."""
+        item = self.table.itemAt(pos)
+        if item is None or item.data(Qt.UserRole) is None:
+            return
+        menu = QMenu(self)
+        action = menu.addAction(tr("delete_menu"))
+        if menu.exec(self.table.viewport().mapToGlobal(pos)) == action:
+            self.delete_file(item.data(Qt.UserRole))
+
+    def delete_file(self, file_id: int) -> None:
+        """E3 (design-approved 2026-10-24): a confirmed, explicit user
+        action may remove a file from the library. The stored file is
+        MOVED to files/.trash/ (never unlinked — the trash copy is the
+        safety net) and its row leaves the catalog, so re-importing the
+        same content works. files/.trash is a SUBFOLDER, and
+        sweep_orphans only touches top-level files of files/ — the trash
+        is exempt by construction.
+
+        This is the UI-side stand-in for the core-side
+        Library.move_to_trash() contract that brief 20-core has not
+        landed yet (tracked for later) — when it lands, this method should call
+        it instead of doing the move itself.
+        """
+        row = self.lib.conn.execute(
+            """SELECT f.*, s.name AS subject_name FROM files f
+               LEFT JOIN subjects s ON s.id=f.subject_id WHERE f.id=?""",
+            (file_id,)).fetchone()
+        if row is None:
+            return
+        answer = QMessageBox.question(
+            self, tr("delete_title"),
+            tr("delete_confirm").format(name=row["original_name"]),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        from ..core import db
+        trash_dir = self.lib.files_dir / ".trash"
+        trash_dir.mkdir(exist_ok=True)
+        dest = trash_dir / row["stored_name"]
+        n = 0
+        while dest.exists():    # a same-named file may already sit in the trash
+            n += 1
+            dest = trash_dir / f"{row['stored_name']}~{n}"
+        os.replace(self.lib.stored_path(row), dest)   # same volume → atomic
+        with self.lib.conn:
+            self.lib.conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+            db.log(self.lib.conn, "delete", row["original_name"])
+        self._display_strs.pop(file_id, None)
+        self.reload_filters()
+        self.refresh()
 
     # ---- actions ------------------------------------------------------
 
