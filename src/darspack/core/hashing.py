@@ -13,11 +13,18 @@ from pathlib import Path
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 
-def sha256_file(path, progress=None) -> str:
-    """Return the hex SHA-256 of a file, read in chunks."""
+def sha256_file(path, progress=None, size: int | None = None) -> str:
+    """Return the hex SHA-256 of a file, read in chunks.
+
+    `size` is optional: callers that already stat()ed the file (the
+    importer needs the size for the catalog row anyway) pass it in so
+    the file is not stat()ed twice.
+    """
     path = Path(path)
     digest = hashlib.sha256()
-    total = path.stat().st_size
+    if size is None:
+        size = path.stat().st_size
+    total = size
     done = 0
     with open(path, "rb") as f:
         while True:

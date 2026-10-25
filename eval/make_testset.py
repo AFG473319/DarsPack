@@ -27,23 +27,31 @@ CONFLICT_DIR = "دوباره دریافت شده"   # like a real re-download fo
 def make_testset(out: Path, count: int = 120, seed: int = 1405) -> dict:
     rng = random.Random(seed)
     out.mkdir(parents=True, exist_ok=True)
-    labels = {"files": [], "duplicates": [], "conflicts": []}
+    labels = {"files": [], "duplicates": [], "conflicts": [], "versions": []}
     seen_names = set()
 
     def content() -> bytes:
         return bytes(rng.getrandbits(8) for _ in range(rng.randint(512, 8192)))
 
-    # 1) unique base files
+    # 1) unique base files — each is named with «فصل N» (chapter) or
+    # «درس N» (lesson): real libraries mix both, and the labels record
+    # which one the filename carries so M10 can measure each column
     while len(labels["files"]) < count:
         subject = rng.choice(SUBJECTS)
         kind = rng.choice(KINDS)
-        name = f"{kind} {subject} {rng.choice(GRADES)} فصل {rng.randint(1, 12)}.pdf"
+        if rng.random() < 0.7:
+            unit, number = "فصل", rng.randint(1, 12)
+            chapter, lesson = number, None
+        else:
+            unit, number = "درس", rng.randint(1, 12)
+            chapter, lesson = None, number
+        name = f"{kind} {subject} {rng.choice(GRADES)} {unit} {number}.pdf"
         if name in seen_names:
             continue
         seen_names.add(name)
         (out / name).write_bytes(content())
         labels["files"].append({"name": name, "subject": subject,
-                                "chapter": None})
+                                "chapter": chapter, "lesson": lesson})
 
     # 2) planted exact duplicates: same bytes under a different name
     for i in range(max(1, count // 10)):
@@ -51,6 +59,19 @@ def make_testset(out: Path, count: int = 120, seed: int = 1405) -> dict:
         copy_name = f"{Path(base['name']).stem} — نسخه {i + 1}.pdf"
         (out / copy_name).write_bytes((out / base["name"]).read_bytes())
         labels["duplicates"].append([base["name"], copy_name])
+
+    # 2b) planted near-duplicates: the browser's re-download pattern —
+    # same display name plus « (1)», DIFFERENT bytes (the ground truth
+    # for the R4-lite likely-versions detector, which must group them)
+    labels["versions"] = []
+    for i in range(max(2, count // 20)):
+        base = labels["files"][rng.randrange(count)]
+        redownload = f"{Path(base['name']).stem} (1).pdf"
+        if redownload in seen_names:
+            continue
+        seen_names.add(redownload)
+        (out / redownload).write_bytes(content())
+        labels["versions"].append([base["name"], redownload])
 
     # 3) planted conflicts: same name, different bytes, in a subfolder
     conflict_dir = out / CONFLICT_DIR
@@ -75,4 +96,5 @@ if __name__ == "__main__":
     labels = make_testset(Path(args.out), args.count, args.seed)
     print(f"{len(labels['files'])} files, "
           f"{len(labels['duplicates'])} duplicate pairs, "
-          f"{len(labels['conflicts'])} conflicts → {args.out}")
+          f"{len(labels['conflicts'])} conflicts, "
+          f"{len(labels['versions'])} near-duplicate versions → {args.out}")

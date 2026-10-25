@@ -58,8 +58,8 @@ def import_file(lib, src, meta: dict | None = None,
     if not src.is_file():
         return ImportResult("error", f"فایل پیدا نشد: {src}")
     conn = lib.conn
-    sha = sha256_file(src, progress)
-    size = src.stat().st_size
+    size = src.stat().st_size          # the ONLY stat: hashing reuses it
+    sha = sha256_file(src, progress, size=size)
 
     shown_name = display_name or src.name
     suggestion = suggest(Path(shown_name).stem)
