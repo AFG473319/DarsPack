@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS activity_log (
   action TEXT NOT NULL,                      -- import / export / verify / share …
   detail TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS hint_rules (
+  token      TEXT PRIMARY KEY,               -- one normalized token from a filename stem
+  subject_id INTEGER REFERENCES subjects(id),
+  hits       INTEGER NOT NULL DEFAULT 0,     -- fires only at hits >= 2
+  last_used  TEXT NOT NULL
+);
 """
 
 

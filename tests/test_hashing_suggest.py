@@ -182,3 +182,39 @@ def test_sha256_progress_never_goes_backwards(tmp_path):
     seen = []
     sha256_file(p, progress=lambda done, total: seen.append(done))
     assert seen == sorted(seen)
+
+
+# --- A4: learned token→subject hints (pre-fill only) ------------------------
+
+def test_learned_hint_fires_only_at_two_hits_and_only_when_list_misses():
+    learned = {"رضایی": {"subject": "ریاضی", "hits": 2}}
+    # the fixed list missed → the learned rule pre-fills
+    assert suggest("جزوه رضایی فصل 2", learned=learned)["subject"] == "ریاضی"
+    # one confirmed hit is not enough to fire
+    assert suggest("جزوه رضایی فصل 2",
+                   learned={"رضایی": {"subject": "ریاضی", "hits": 1}}
+                   )["subject"] is None
+    # the fixed list always wins when it matches
+    assert suggest("جزوه ریاضی رضایی", learned=learned)["subject"] == "ریاضی"
+
+
+def test_learn_hint_round_trip_through_the_table(tmp_path):
+    import sqlite3
+    from darspack.core import db
+    from darspack.core.suggest import forget_hint, learn_hint, load_hints, suggest
+    conn = db.connect(tmp_path / "h.db")
+    try:
+        db.init_schema(conn)
+        learn_hint(conn, "رضایی", "ریاضی")
+        learn_hint(conn, "رضایی", "ریاضی")     # second save → hits = 2
+        learn_hint(conn, "ahmadi", "انگلیسی")  # gets normalized/match-keyed
+        hints = load_hints(conn)
+        assert hints["رضایی"] == {"subject": "ریاضی", "hits": 2}
+        assert suggest("جزوه رضایی", learned=hints)["subject"] == "ریاضی"
+        forget_hint(conn, "رضایی")
+        assert "رضایی" not in load_hints(conn)
+        # tiny tokens (filenames like «آ» …) never become rules
+        learn_hint(conn, "ab", "ریاضی")
+        assert "ab" not in load_hints(conn)
+    finally:
+        conn.close()

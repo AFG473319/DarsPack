@@ -7,6 +7,7 @@ import dialog; nothing is applied silently.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 
 from .normalize import latin_digits, match_key
@@ -51,7 +52,7 @@ MAX_CHAPTER = 40  # sanity bound — anything larger is not a school chapter
 _GRADES = ("نهم", "هشتم", "هفتم")
 
 
-def suggest(filename_stem: str, subjects=None) -> dict:
+def suggest(filename_stem: str, subjects=None, learned: dict | None = None) -> dict:
     """Suggest {'subject', 'chapter', 'lesson', 'kind', 'grade'} from a filename.
 
     The stem carries no extension. Every value may be None. The importer
@@ -59,6 +60,10 @@ def suggest(filename_stem: str, subjects=None) -> dict:
     function is trivially testable. chapter is the «فصل» number and lesson
     the «درس» number — stored in separate columns because a file may have
     either, both, or neither (design decision 2026-10-24).
+
+    learned (A4, optional): {token: {'subject': name, 'hits': n}} from
+    the hint_rules table — a class-specific memory consulted only when
+    the fixed subject list misses, and only at hits >= 2. Pre-fill only.
     """
     key = match_key(latin_digits(filename_stem))
     out: dict = {"subject": None, "chapter": None, "lesson": None,
@@ -99,4 +104,52 @@ def suggest(filename_stem: str, subjects=None) -> dict:
         if grade in key:
             out["grade"] = grade
             break
+
+    # A4 — learned token→subject memory (pre-fill only, like everything
+    # here). Fires only when the fixed list missed and the class has
+    # confirmed the same token → subject at least twice.
+    if out["subject"] is None and learned:
+        for token in key.split():
+            entry = learned.get(token)
+            if entry and len(token) >= 3 and entry.get("hits", 0) >= 2:
+                out["subject"] = entry.get("subject")
+                break
     return out
+
+
+# --- A4: the learned-hint store (hint_rules table) ---------------------------
+# The classify dialog's save path (brief 30-ui) calls learn_hint() once per
+# saved file; suggest() consumes the table via load_hints(). Pre-fill only —
+# nothing here ever touches a file's stored subject.
+
+def learn_hint(conn, token: str, subject_name: str) -> None:
+    """Record/refresh one token→subject vote from a confirmed save."""
+    from . import db as _db
+    key = match_key(token)
+    if len(key) < 3:
+        return
+    subject_id = _db.get_or_create(conn, "subjects", subject_name)
+    if subject_id is None:
+        return
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """INSERT INTO hint_rules(token, subject_id, hits, last_used)
+           VALUES (?, ?, 1, ?)
+           ON CONFLICT(token) DO UPDATE SET
+             hits = hits + 1, subject_id = excluded.subject_id,
+             last_used = excluded.last_used""",
+        (key, subject_id, now))
+
+
+def forget_hint(conn, token: str) -> None:
+    """Delete one learned rule (the user changed their mind)."""
+    conn.execute("DELETE FROM hint_rules WHERE token = ?", (match_key(token),))
+
+
+def load_hints(conn) -> dict:
+    """All learned rules as {token: {'subject': name, 'hits': n}} for suggest()."""
+    rows = conn.execute(
+        """SELECT h.token, h.hits, s.name AS subject
+           FROM hint_rules h JOIN subjects s ON s.id = h.subject_id""")
+    return {row["token"]: {"subject": row["subject"], "hits": row["hits"]}
+            for row in rows}
