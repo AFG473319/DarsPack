@@ -27,12 +27,15 @@ src/darspack/
 │   ├── backup.py         # full-library backup ZIP (catalog snapshot + files)        
 │   └── schoolyear.py     # Jalali school-year helpers (Mehr→Shahrivar span)          
 ├── ui/                   # PySide6 desktop client
-│   ├── app.py            # QApplication wiring, language toggle, About, feedback form
-│   ├── main_window.py    # library table, filters, search, activity log
-│   ├── import_dialog.py  # file picker + metadata review (suggestions editable)
-│   ├── duplicates_panel.py
-│   ├── export_dialog.py  # subject/chapter selection + confirmation
-│   └── settings_dialog.py# language, font size, library location, PIN display
+│   ├── app.py            # QApplication wiring, language toggle, theme, fonts
+│   ├── main_window.py    # library table, filters, search, empty states, row
+│   │                     #   delete → files/.trash, share toggle, history/stats
+│   ├── dialogs.py        # ALL dialogs in one file: classify (bulk actions,
+│   │                     #   teacher/lesson/year, package prefill), metadata,
+│   │                     #   export, verify, duplicates, settings, share (QR),
+│   │                     #   history, stats
+│   └── workers.py        # background import thread (own DB connection;
+│                         #   carries درس‌پک manifest metas + subject/tags prefill)
 ├── web/                  # LAN web client + server
 │   ├── server.py         # stdlib ThreadingHTTPServer, PIN gate, endpoints           
 │   ├── sync.py           # manifest/diff logic shared with packaging                 
@@ -160,7 +163,7 @@ package.zip
 - Demo fallback for isolated school Wi-Fi: phone hotspot with the laptop joined.
 
 ## 7. Internationalization
-`i18n.py`: two plain dicts (`fa`, `en`) + `tr(key)`; language toggle in settings. Web client: same strings server-rendered with `dir="rtl"` / `dir="ltr"`. Qt Linguist rejected — overkill, harder to explain (⚖️).
+`i18n.py`: two plain dicts (`fa`, `en`) + `tr(key)`; language toggle in settings. The desktop app is fully bilingual; the **web client is Persian-only** (v1 scope — its classmates are Persian speakers, and one static RTL page needs no string table). Qt Linguist rejected — overkill, harder to explain (⚖️).
 
 ## 8. Security boundaries
 No secrets exist pre-cloud (none stored, none asked). No telemetry, no auto network. Library and DB are user files; the only "protection" is OS user accounts. Cloud (if ever) = OAuth read-only + OS keyring, decided in the final days at the earliest.
@@ -174,11 +177,11 @@ No secrets exist pre-cloud (none stored, none asked). No telemetry, no auto netw
 | test_dedup.py | R1/R2/R3 on the planted-labelled fixture set |
 | test_manifest.py | export→verify round-trip; tamper (one flipped byte → exact file named); missing member |
 | test_search.py | normalized matching, Persian/Latin digit queries, ranking, unclassified filter |
-| test_classify.py | the classification flow: prefill from heuristic, bulk save, unclassified tracking |
+| test_classify.py | the classification flow: prefill from the heuristic / a package manifest / learned hints, bulk apply, teacher/lesson/year fields, unclassified tracking |
 | test_server.py | PIN gate, lockout, upload→importer path, manifest endpoint, per-thread libraries |
 | test_sync.py | catalog manifest + the pure diff |
 | test_worker_errors.py | the import worker ALWAYS emits done; one bad file never hangs the UI |
-| test_ui_dialogs.py | every dialog constructs offscreen; metadata/classify save paths; button-wiring guards |
+| test_ui_dialogs.py | every dialog constructs offscreen; metadata/classify save paths; QR SVG; stats; history; button-wiring guards |
 | test_web_client.py | phone client: JS parses (`node --check`), every `$('id')` exists, no implicit globals |
 
 Lessons learned while dogfooding (all now test-enforced): background threads must always report completion even on failure; SQLite connections stay on their creating thread (server uses per-thread connections); Qt's `clicked` passes `checked` to plain-function slots (wire zero-arg lambdas); the browser client must not rely on implicit id-globals.
