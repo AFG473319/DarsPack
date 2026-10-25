@@ -4,9 +4,12 @@ import zipfile
 
 import pytest
 
+from darspack.core import db
 from darspack.core.importer import import_file
 from darspack.core.library import Library
-from darspack.core.manifest import export_package, verify_package
+from darspack.core.manifest import (
+    export_package, make_index_html, safe_name, verify_package,
+)
 
 
 @pytest.fixture()
@@ -97,3 +100,111 @@ def test_verify_flags_extra_files(package):
     report = verify_package(extra)
     assert not report.ok
     assert any("فایل اضافه" in p for p in report.problems)
+
+
+# --- safe_name, more verify branches, and the manifest format contract ---
+
+def test_safe_name_replaces_every_unsafe_character():
+    for bad in ("\\", "/", ":", "*", "?", '"', "<", ">", "|", "\n"):
+        assert safe_name(f"a{bad}b") == "a_b", f"safe_name with {bad!r}"
+    assert safe_name("نمونه سوال.pdf") == "نمونه سوال.pdf"   # Persian kept
+
+
+def test_safe_name_blank_becomes_file():
+    # a name with nothing left after replacing/stripping still needs a
+    # ZIP member name — the fallback is literally "file"
+    assert safe_name("") == "file"
+    assert safe_name("   ") == "file"
+
+
+def test_verify_detects_truncated_member(package):
+    # a half-copied file (interrupted USB copy) has the right hash table
+    # entry but the wrong size — the size check must catch it
+    out, _, _ = package
+    victim = next(n for n in zipfile.ZipFile(out).namelist()
+                  if n.startswith("files/"))
+    report = verify_package(_rewrite(out, lambda n, d: d[:-5] if n == victim else d))
+    assert not report.ok
+    assert any("اندازه‌ی فایل متفاوت است" in p for p in report.problems)
+
+
+def test_verify_rejects_zip_without_manifest(tmp_path):
+    # files but no manifest: the package explains nothing — invalid
+    bare = tmp_path / "bare.zip"
+    with zipfile.ZipFile(bare, "w") as zf:
+        zf.writestr("files/001 - x.pdf", b"data")
+    report = verify_package(bare)
+    assert report.ok is False
+    assert report.problems == ["manifest.json در بسته نیست — بسته معتبر نیست"]
+
+
+def test_verify_raises_on_non_zip_input(tmp_path):
+    # known quirk (⚖️): a non-zip file raises BadZipFile instead of coming
+    # back as a Persian report — the desktop verify dialog calls this
+    # straight from a file picker, so a corrupt zip currently shows the
+    # crash dialog. Pinned as current behavior; the maintainer decides in the
+    # later review whether verify_package should catch it instead.
+    not_a_zip = tmp_path / "not-a-zip.zip"
+    not_a_zip.write_bytes(b"just some bytes")
+    with pytest.raises(zipfile.BadZipFile):
+        verify_package(not_a_zip)
+
+
+def test_manifest_entry_carries_classification(tmp_path):
+    # the package must carry the whole catalog row — not just name/sha —
+    # so the recipient's library keeps subject/chapter/kind/tags
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "نمونه سوال ریاضی فصل 3.pdf"
+        src.write_bytes(b"classified content")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        sid = db.get_or_create(lib.conn, "subjects", "ریاضی")
+        tid = db.get_or_create(lib.conn, "tags", "امتحان")
+        lib.conn.execute(
+            "UPDATE files SET subject_id=?, chapter=3, kind='نمونه‌سوال' WHERE id=?",
+            (sid, fid))
+        lib.conn.execute(
+            "INSERT INTO file_tags(file_id, tag_id) VALUES (?,?)", (fid, tid))
+        lib.conn.commit()
+
+        out = tmp_path / "ch3.darspack.zip"
+        export_package(lib.conn, lib.files_dir, [fid], out)
+
+    manifest = json.loads(
+        zipfile.ZipFile(out).read("manifest.json").decode("utf-8"))
+    assert manifest["format"] == "darspack-package"
+    assert manifest["version"] == 1
+    entry, = manifest["files"]
+    assert entry["subject"] == "ریاضی"
+    assert entry["chapter"] == 3
+    assert entry["kind"] == "نمونه‌سوال"
+    assert entry["tags"] == ["امتحان"]
+
+
+def test_export_of_empty_selection_makes_valid_package(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        out = tmp_path / "empty.darspack.zip"
+        info = export_package(lib.conn, lib.files_dir, [], out)
+    assert info["count"] == 0
+    report = verify_package(out)
+    assert report.ok and report.problems == []
+
+
+def test_export_unknown_id_raises(tmp_path):
+    # callers must filter ids first (the UI passes selection ids only) —
+    # a bad id is a programming error, not a reportable package problem
+    with Library(tmp_path / "lib") as lib:
+        with pytest.raises(KeyError):
+            export_package(lib.conn, lib.files_dir, [424242],
+                           tmp_path / "x.zip")
+
+
+def test_index_html_escapes_file_names():
+    # the index opens in any browser; a file named like HTML must render
+    # as text, never as markup
+    manifest = {"created": "2026-10-24T10:00:00",
+                "files": [{"name": "<b>x</b>", "subject": None,
+                           "chapter": None, "kind": None}]}
+    page = make_index_html(manifest)
+    assert "&lt;b&gt;x&lt;/b&gt;" in page
+    assert "<b>x</b>" not in page
