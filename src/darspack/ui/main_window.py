@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 import jdatetime
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -65,6 +65,10 @@ class MainWindow(QMainWindow):
         self.lib = Library(library_root).open()
         self.share_server: ShareServer | None = None
         self.last_rows: list = []
+        # Perf audit F2.4: (Jalali date, size) strings per file id — a
+        # row's date never changes, re-formatting it on every keystroke
+        # was the single most expensive part of the refresh fill.
+        self._display_strs: dict = {}
 
         self.setWindowTitle(f"{tr('app_title')} — {library_root}")
         self.resize(1000, 640)
@@ -73,7 +77,14 @@ class MainWindow(QMainWindow):
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText(tr("search_placeholder"))
         self.search_box.setClearButtonEnabled(True)
-        self.search_box.textChanged.connect(self.refresh)
+        # C3 (perf audit F2.1): typing re-triggers the countdown instead of
+        # refreshing per keystroke — fast typing costs exactly one refresh.
+        # Filter combos stay connected to refresh directly (immediate).
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self.refresh)
+        self.search_box.textChanged.connect(self._search_changed)
 
         self.subject_combo = QComboBox()
         self.kind_combo = QComboBox()
@@ -146,6 +157,18 @@ class MainWindow(QMainWindow):
         self.subject_combo.blockSignals(False)
         self.kind_combo.blockSignals(False)
 
+    def _search_changed(self) -> None:
+        self._search_timer.start()      # restart the countdown per keystroke
+
+    def _display_strs_for(self, row) -> tuple:
+        """Cached (Jalali date, human size) for one file id (perf F2.4)."""
+        cached = self._display_strs.get(row["id"])
+        if cached is None:
+            cached = (jalali_date(row["imported_at"]),
+                      human_size(row["size_bytes"]))
+            self._display_strs[row["id"]] = cached
+        return cached
+
     def refresh(self) -> None:
         subject_data = self.subject_combo.currentData()
         rows = catalog_search(
@@ -156,22 +179,29 @@ class MainWindow(QMainWindow):
             unclassified_only=(subject_data == -1),
             limit=2000)
         self.last_rows = rows
+        # Perf audit F2.2–F2.3: this fill runs on every debounced keystroke,
+        # so mid-fill repaints are off and only column 0 carries the file id
+        # (selected_file_id reads selectedItems()[0]; selection is row-wide).
+        self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(rows))
         from ..core.normalize import persian_digits
         for i, row in enumerate(rows):
+            date_str, size_str = self._display_strs_for(row)
             chapter = persian_digits(str(row["chapter"])) if row["chapter"] else "—"
             values = [row["original_name"], row["subject_name"] or "—", chapter,
-                      row["kind"] or "—", human_size(row["size_bytes"]),
-                      persian_digits(jalali_date(row["imported_at"]))]
+                      row["kind"] or "—", size_str,
+                      persian_digits(date_str)]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                item.setData(Qt.UserRole, row["id"])
+                if col == 0:
+                    item.setData(Qt.UserRole, row["id"])
                 self.table.setItem(i, col, item)
+        self.table.setUpdatesEnabled(True)
+        unclassified = unclassified_count(self.lib.conn)   # F6: computed once
         self.statusBar().showMessage(
             tr("status_files").format(len(rows))
-            + ("  ·  " + tr("status_unclassified").format(
-                unclassified_count(self.lib.conn))
-               if unclassified_count(self.lib.conn) else ""))
+            + ("  ·  " + tr("status_unclassified").format(unclassified)
+               if unclassified else ""))
 
     def selected_file_id(self) -> int | None:
         selected = self.table.selectedItems()
@@ -224,7 +254,11 @@ class MainWindow(QMainWindow):
         dialogs.ExportDialog(self, selected_scope).exec()
 
     def _selected_rows(self) -> list:
-        ids = {item.data(Qt.UserRole) for item in self.table.selectedItems()}
+        ids = set()
+        for item in self.table.selectedItems():
+            fid = item.data(Qt.UserRole)
+            if fid is not None:    # only column 0 carries the id (perf F2.2)
+                ids.add(fid)
         return [r for r in self.last_rows if r["id"] in ids]
 
     def verify_package(self) -> None:

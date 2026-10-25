@@ -32,3 +32,75 @@ def test_human_size_table():
     assert human_size(1024) == "1.0 KB"
     assert human_size(1536) == "1.5 KB"
     assert human_size(5 * 1024 ** 3) == "5.0 GB"
+
+
+# --- MainWindow-level behavior (offscreen) ---------------------------------
+
+import pytest
+
+import darspack.ui.main_window as mw_module
+from darspack.core.importer import import_file
+from darspack.core.library import Library
+
+
+@pytest.fixture()
+def window(tmp_path, qapp):
+    """One MainWindow over a throwaway library, closed afterwards."""
+    win = mw_module.MainWindow(tmp_path / "lib",
+                               {"language": "fa", "font_size": 10,
+                                "library": str(tmp_path / "lib")},
+                               tmp_path / "settings.json")
+    yield win
+    win.lib.close()
+
+
+def test_fast_typing_triggers_exactly_one_refresh(window, monkeypatch):
+    """C3: the debounced search box — three keystrokes in a row must run
+    the catalog query once, after the 200 ms countdown settles."""
+    from PySide6.QtTest import QTest
+
+    calls = []
+    real_search = mw_module.catalog_search
+
+    def counting_search(*args, **kwargs):
+        calls.append(1)
+        return real_search(*args, **kwargs)
+    monkeypatch.setattr(mw_module, "catalog_search", counting_search)
+
+    calls.clear()
+    window.search_box.setText("ریاضی")
+    window.search_box.setText("ریاضی فصل")
+    window.search_box.setText("ریاضی فصل ۳")
+    assert calls == []                    # countdown still running
+    QTest.qWait(350)
+    assert len(calls) == 1                # one refresh for the whole burst
+
+
+def test_filter_changes_stay_immediate(window, monkeypatch):
+    """C3 scoping: only the search box is debounced — the kind filter
+    refreshes the table the moment it changes."""
+    calls = []
+    real_search = mw_module.catalog_search
+
+    def counting_search(*args, **kwargs):
+        calls.append(1)
+        return real_search(*args, **kwargs)
+    monkeypatch.setattr(mw_module, "catalog_search", counting_search)
+
+    calls.clear()
+    window.kind_combo.setCurrentIndex(1)   # first real kind («جزوه»)
+    assert len(calls) == 1                 # immediate, no timer wait
+
+
+def test_display_strs_cache_hits_on_second_refresh(window):
+    """F2.4: the Jalali/size strings are cached per file id — importing one
+    file and refreshing twice formats the date/size only once."""
+    src = window.lib.root.parent / "نمونه سوال ریاضی فصل 3.pdf"
+    src.write_bytes(b"demo")
+    import_file(window.lib, src)
+
+    window.refresh()
+    first = window._display_strs.copy()
+    window.refresh()
+    assert window._display_strs == first   # same dict entries, no re-format
+    assert len(first) == 1                 # one cached id
