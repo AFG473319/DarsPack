@@ -1,8 +1,10 @@
 """Tests for normalized search (جست‌جو)."""
 import pytest
 
+from darspack.core import db
 from darspack.core.importer import import_file
 from darspack.core.library import Library
+from darspack.core.normalize import match_key
 from darspack.core.search import search
 
 
@@ -53,3 +55,94 @@ def test_prefix_ranks_before_contains(lib):
 
 def test_empty_query_lists_everything(lib):
     assert len(search(lib.conn, "")) == 4
+
+
+# --- the metadata half of the promise: names, subjects AND tags ----------
+
+def _classify(lib, file_id, subject_name, tags=()):
+    """Give a file a subject and tags the way the dialogs do."""
+    sid = db.get_or_create(lib.conn, "subjects", subject_name)
+    lib.conn.execute("UPDATE files SET subject_id=? WHERE id=?", (sid, file_id))
+    for tag in tags:
+        tid = db.get_or_create(lib.conn, "tags", tag)
+        lib.conn.execute(
+            "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
+            (file_id, tid))
+    lib.conn.commit()
+
+
+def test_tag_matches_even_when_name_does_not(lib):
+    file_id = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    _classify(lib, file_id, "انگلیسی", tags=("امتحان",))
+    rows = search(lib.conn, "امتحان")
+    assert [r["original_name"] for r in rows] == ["summary.PDF"]
+
+
+def test_subject_name_matches_files_classified_under_it(lib):
+    # the documented promise: matching covers the filename AND the subject
+    file_id = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    _classify(lib, file_id, "ریاضی")           # name has no ریاضی at all
+    got = names(search(lib.conn, "ریاضی"))
+    assert "summary.PDF" in got                # found through the subject
+
+
+def test_subject_id_filter(lib):
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    _classify(lib, fid, "علوم")
+    sid = lib.conn.execute(
+        "SELECT id FROM subjects WHERE name='علوم'").fetchone()["id"]
+    rows = search(lib.conn, "", subject_id=sid)
+    assert [r["original_name"] for r in rows] == ["summary.PDF"]
+
+
+def test_kind_filter(lib):
+    rows = search(lib.conn, "", kind="نمونه‌سوال")
+    assert [r["original_name"] for r in rows] == ["نمونه سوال ریاضی فصل 3.pdf"]
+
+
+def test_query_combined_with_subject_filter(lib):
+    # classify one of the two ریاضی-named files, then filter: the query
+    # alone matches both, the filter narrows the result to the classified one
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'نمونه سوال%'"
+    ).fetchone()["id"]
+    _classify(lib, fid, "ریاضی")
+    sid = lib.conn.execute(
+        "SELECT id FROM subjects WHERE name='ریاضی'").fetchone()["id"]
+    assert len(search(lib.conn, "ریاضی")) == 2
+    rows = search(lib.conn, "ریاضی", subject_id=sid)
+    assert [r["original_name"] for r in rows] == ["نمونه سوال ریاضی فصل 3.pdf"]
+
+
+def test_limit_caps_results(lib):
+    assert len(search(lib.conn, "", limit=2)) == 2
+
+
+def test_zwnj_query_finds_spaced_name(lib):
+    # a query typed with the half-space (نمونه‌سوال) must find files stored
+    # as «نمونه سوال» — both sides go through match_key
+    rows = search(lib.conn, "نمونه‌سوال")
+    assert [r["original_name"] for r in rows] == ["نمونه سوال ریاضی فصل 3.pdf"]
+
+
+def test_same_rank_orders_newest_first(tmp_path):
+    # deterministic-ordering guard: _now() has second resolution, so two
+    # real imports can tie — here rows are inserted with explicit
+    # imported_at values to pin the newest-first rule within one rank
+    with Library(tmp_path / "lib") as lib:
+        for i, ts in enumerate(("2026-10-24T10:00:00", "2026-10-25T10:00:00")):
+            name = f"فایل {i}.pdf"
+            lib.conn.execute(
+                """INSERT INTO files(stored_name, original_name, name_norm,
+                   size_bytes, sha256, imported_at)
+                   VALUES ('', ?, ?, 3, ?, ?)""",
+                (name, match_key(name), f"sha-{i}", ts))
+        lib.conn.commit()
+        rows = search(lib.conn, "فایل")
+        assert [r["original_name"] for r in rows] == ["فایل 1.pdf", "فایل 0.pdf"]

@@ -3,6 +3,8 @@ import pytest
 
 from darspack.core.importer import import_file, import_paths
 from darspack.core.library import Library
+from darspack.core.normalize import match_key
+from darspack.core.schoolyear import current_school_year
 
 
 @pytest.fixture()
@@ -77,3 +79,109 @@ def test_import_folder_recursively(lib, tmp_path):
     results = import_paths(lib, [folder])
     assert [r.status for r in results] == ["imported", "imported"]
     assert {r.path.name for r in results} == {"1.pdf", "2.pdf"}
+
+
+# --- the flag-only contract, catalog stamping, and dormant parameters ----
+
+def test_original_file_is_never_touched(lib, sample):
+    # the flagship rule: files are COPIED into the library — the source
+    # keeps its exact bytes and modification time afterwards
+    src = sample("قیمت‌مند.pdf", b"precious bytes")
+    before = (src.stat().st_mtime_ns, src.read_bytes())
+    import_file(lib, src)
+    assert src.exists()
+    assert (src.stat().st_mtime_ns, src.read_bytes()) == before
+
+
+def test_missing_file_is_an_error_result(lib, tmp_path):
+    r = import_file(lib, tmp_path / "نیست.pdf")
+    assert r.status == "error"
+    assert r.message_fa.startswith("فایل پیدا نشد")
+
+
+def test_same_batch_duplicate_is_detected(lib, tmp_path):
+    # dedup works WITHIN one batch too, not only against the old catalog
+    a = tmp_path / "a.pdf"
+    a.write_bytes(b"same-bytes")
+    b = tmp_path / "b.pdf"
+    b.write_bytes(b"same-bytes")
+    results = import_paths(lib, [a, b])
+    assert [r.status for r in results] == ["imported", "duplicate"]
+
+
+def test_batch_survives_a_missing_file(lib, tmp_path):
+    a = tmp_path / "ok.pdf"
+    a.write_bytes(b"data")
+    results = import_paths(lib, [a, tmp_path / "gone.pdf"])
+    assert [r.status for r in results] == ["imported", "error"]
+
+
+def test_empty_file_imports(lib, sample):
+    r = import_file(lib, sample("خالی.pdf", b""))
+    assert r.status == "imported"
+    row = lib.conn.execute("SELECT size_bytes FROM files WHERE id=?",
+                           (r.file_id,)).fetchone()
+    assert row["size_bytes"] == 0
+
+
+def test_catalog_stamps_match_key_and_school_year(lib, sample):
+    # search and dedup silently depend on both stamps being written at
+    # import time — this file name is typed with Arabic ك and ي on purpose
+    name = "كاربرگ فيزيك.pdf"
+    import_file(lib, sample(name))
+    row = lib.conn.execute("SELECT name_norm, school_year FROM files").fetchone()
+    assert row["name_norm"] == match_key(name)
+    assert row["school_year"] == current_school_year()
+
+
+def test_file_without_extension_stored_without_dot(lib, sample):
+    # the flat-storage convention: stored_name is just the zero-padded id
+    # plus the source suffix — no suffix means NO dot
+    import_file(lib, sample("بدون-پسوند"))
+    row = lib.conn.execute("SELECT stored_name FROM files").fetchone()
+    assert row["stored_name"] == "000001"
+
+
+def test_display_name_drives_catalog_and_suggestion(lib, tmp_path):
+    # web uploads arrive as random-named temp files; the catalog name and
+    # the suggestion must come from the display name, not the temp name
+    tmp = tmp_path / "upload-a1b2c3"
+    tmp.write_bytes(b"phone upload")
+    r = import_file(lib, tmp, display_name="کاربرگ فیزیک فصل 2.pdf")
+    assert r.status == "imported"
+    row = lib.conn.execute(
+        "SELECT original_name, name_norm, kind, chapter FROM files").fetchone()
+    assert row["original_name"] == "کاربرگ فیزیک فصل 2.pdf"
+    assert row["name_norm"] == match_key("کاربرگ فیزیک فصل 2.pdf")
+    assert row["kind"] == "کاربرگ" and row["chapter"] == 2
+
+
+def test_meta_overrides_suggestions(lib, sample):
+    # known quirk (⚖️): the `meta` parameter is a tested-but-dormant API —
+    # no caller passes it today. Kept and pinned here so a decision to
+    # remove it (simpler surface to defend) is made on purpose.
+    import_file(lib, sample("ناشناخته.pdf"),
+                meta={"chapter": 9, "kind": "جزوه",
+                      "school_year": "1400-1401"})
+    row = lib.conn.execute(
+        "SELECT chapter, kind, school_year FROM files").fetchone()
+    assert row["chapter"] == 9 and row["kind"] == "جزوه"
+    assert row["school_year"] == "1400-1401"
+
+
+def test_reopen_sweeps_orphans_but_keeps_real_files(tmp_path, sample):
+    # sweep_orphans reconciles files/ with the catalog after a crash: a
+    # tmp_* leftover AND a numbered file whose row rolled back are both
+    # deleted on purpose — the catalog is the source of truth
+    src = sample("سالم.pdf")
+    with Library(tmp_path / "lib") as lib:
+        import_file(lib, src)
+        real = lib.files_dir / "000001.pdf"
+        assert real.exists()
+        (lib.files_dir / "tmp_7.pdf").write_bytes(b"tmp leftover")
+        (lib.files_dir / "999999.pdf").write_bytes(b"orphan of a rolled-back row")
+
+    with Library(tmp_path / "lib") as lib:
+        assert not (lib.files_dir / "tmp_7.pdf").exists()
+        assert not (lib.files_dir / "999999.pdf").exists()
+        assert real.exists() and real.read_bytes() == b"lesson-content"
