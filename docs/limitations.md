@@ -26,6 +26,8 @@ Honest list of what DarsPack v0.1 does **not** do. Stating flaws openly is part 
 14. **No automatic backups of the library.** The library is one folder (`catalog.db` + `files/`) that can be copied for backup, but the app does not back it up itself.
 15. **The phone client's JavaScript is only lightly guarded.** pytest covers the server and a static wiring check (ids exist, script parses), but there is no browser-level automated test of the phone UI — real-phone testing is manual. (A silent JS failure hid a broken PIN button until a real user tried it.)
 16. **Subject classification quality depends on filenames.** Files with unhelpful names («IMG_2026.pdf») start unclassified and rely on the user completing them via the review dialog / «بدون درس» filter. The app makes this visible rather than guessing.
+17. **Phone-upload entries never reach the activity log.** The server writes the `web_upload` log row after the import transaction has already committed, on the request thread's own connection, and never commits it — the row is rolled back when the request thread ends. Uploads themselves work (file + catalog row are committed); the log under-reports them.
+18. **Stopping the share server races an in-flight request's log write.** `stop()` closes each request thread's SQLite connection without joining the handler threads (they run as daemons), so a request still inside its post-response log write can die with a native access violation. The test suite hit exactly this crash and now makes its own servers join handler threads before stop; the product-side fix belongs with the server code.
 
 ## Bugs found and fixed in real use (2026-10-24 dogfooding session)
 
