@@ -146,3 +146,111 @@ def test_same_rank_orders_newest_first(tmp_path):
         lib.conn.commit()
         rows = search(lib.conn, "فایل")
         assert [r["original_name"] for r in rows] == ["فایل 1.pdf", "فایل 0.pdf"]
+
+
+# --- C1: multi-token (AND) search ------------------------------------------
+
+def test_reordered_tokens_find_the_same_files(lib):
+    # the canonical query «ریاضی نمونه سوال» — real filenames order the
+    # same words differently («نمونه سوال ریاضی …»); contiguous LIKE missed them
+    assert names(search(lib.conn, "ریاضی نمونه سوال")) == \
+        names(search(lib.conn, "نمونه سوال ریاضی"))
+    assert set(names(search(lib.conn, "ریاضی نمونه سوال"))) == {
+        "نمونه سوال ریاضی فصل 3.pdf"}
+
+
+def test_every_token_must_match_somewhere(lib):
+    # AND semantics: one non-matching token filters everything out
+    assert names(search(lib.conn, "ریاضی ناموجود")) == []
+    assert names(search(lib.conn, "ریاضی فصل 3")) == \
+        ["نمونه سوال ریاضی فصل 3.pdf"]
+
+
+def test_multitoken_query_still_finds_by_subject_and_tag(lib):
+    # each token may match a DIFFERENT surface: name, subject, tag
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    _classify(lib, fid, "ریاضی", tags=("امتحان",))
+    rows = search(lib.conn, "ریاضی امتحان")
+    assert [r["original_name"] for r in rows] == ["summary.PDF"]
+
+
+def test_pasted_garbage_never_crashes(lib):
+    long_text = ("کلمه " * 50).strip()          # 50 tokens — over the cap
+    assert isinstance(search(lib.conn, long_text), list)
+    assert isinstance(search(lib.conn, "ریاضی " * 20), list)
+    assert search(lib.conn, "   ") == search(lib.conn, "")
+
+
+# --- C2: structured metadata participates in search -------------------------
+
+def test_note_is_searchable(lib):
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    lib.conn.execute("UPDATE files SET note='از امتحان میانترم میاد' WHERE id=?",
+                     (fid,))
+    lib.conn.commit()
+    assert [r["original_name"] for r in search(lib.conn, "میانترم")] == \
+        ["summary.PDF"]
+
+
+def test_kind_word_matches_classified_files(lib):
+    # «کاربرگ» is the stored kind of one file whose name contains it — but
+    # the match must ALSO work through the kind column for files whose
+    # name never says it
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    lib.conn.execute("UPDATE files SET kind='کاربرگ' WHERE id=?", (fid,))
+    lib.conn.commit()
+    got = names(search(lib.conn, "کاربرگ"))
+    assert got == ["کاربرگ ریاضی فصل دو.pdf", "summary.PDF"]
+
+
+def test_chapter_number_finds_files_whose_name_lacks_fasl(lib):
+    # «فصل ۵» must find a classified file even when the filename never
+    # mentions the word — that is what the chapter COLUMN is for
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    lib.conn.execute("UPDATE files SET chapter=5 WHERE id=?", (fid,))
+    lib.conn.commit()
+    got = set(names(search(lib.conn, "فصل 5")))
+    # the summary row comes from its chapter COLUMN (name has no فصل);
+    # the ریاضی file is فصل 3, so the number must NOT drag it in
+    assert got == {"summary.PDF"}
+    # and the Persian-digit twin behaves identically
+    assert set(names(search(lib.conn, "فصل ۵"))) == got
+
+
+def test_lesson_number_finds_files_whose_name_lacks_dars(lib):
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    lib.conn.execute("UPDATE files SET lesson=3 WHERE id=?", (fid,))
+    lib.conn.commit()
+    assert names(search(lib.conn, "درس 3")) == ["summary.PDF"]
+
+
+def test_fasl_and_dars_target_their_own_columns(lib):
+    fid = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name LIKE 'summary%'"
+    ).fetchone()["id"]
+    lib.conn.execute("UPDATE files SET lesson=3 WHERE id=?", (fid,))
+    lib.conn.commit()
+    # «فصل 3» must NOT match a file whose LESSON is 3 — separate columns
+    # (design decision 2026-10-24), so the summary row is not in «فصل 3»
+    assert "summary.PDF" not in names(search(lib.conn, "فصل 3"))
+
+
+# --- B1: the available flag rides along with every result ------------------
+
+def test_search_exposes_available_flag(lib):
+    rows = search(lib.conn, "ریاضی")
+    assert all(r["available"] == 1 for r in rows)
+    fid = rows[0]["id"]
+    lib.conn.execute("UPDATE files SET available=0 WHERE id=?", (fid,))
+    lib.conn.commit()
+    assert search(lib.conn, "ریاضی")[0]["available"] == 0
