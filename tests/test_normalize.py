@@ -33,3 +33,41 @@ def test_digit_conversions_roundtrip():
 def test_empty_and_none_safety():
     assert normalize("") == ""
     assert match_key("   ") == ""
+
+
+# --- more normalization promises (module docstring claims, now pinned) ---
+
+ZWNJ = "\u200c"   # نیم‌فاصله — written as an escape so counts are unambiguous
+
+MORE_CASES = [
+    ("جـــزوه", "جزوه"),            # tatweel (کشیده) removed
+    ("مكتبة", "مکتبه"),             # Arabic ة → ه (plus ك → ک)
+    ("ریاضی\n\tنهم", "ریاضی نهم"),  # tabs/newlines collapse, not just spaces
+    (ZWNJ + "ریاضی" + ZWNJ, "ریاضی"),            # edge ZWNJ → space → stripped
+    ("نمونه" + ZWNJ + ZWNJ + "سوال", "نمونه سوال"),  # double ZWNJ collapses
+]
+
+
+def test_normalize_more_table():
+    for raw, expected in MORE_CASES:
+        assert normalize(raw) == expected, f"normalize({raw!r})"
+
+
+def test_normalize_none_is_empty():
+    # the defensive `if not text` branch — None arrives from Qt line edits
+    # more often than you would think
+    assert normalize(None) == ""
+
+
+def test_full_digit_tables_convert_to_latin():
+    # every digit of BOTH tables (Persian ۰-۹ and Arabic-Indic ٠-٩),
+    # not just the two spot-checked above
+    assert latin_digits("۰۱۲۳۴۵۶۷۸۹") == "0123456789"
+    assert latin_digits("٠١٢٣٤٥٦٧٨٩") == "0123456789"
+
+
+def test_persian_digits_only_touches_latin_digits():
+    # documented scope of the DISPLAY helper: Latin→Persian only, so an
+    # Arabic-Indic digit passes through unchanged — pinned so a future
+    # widening of the mapping is a deliberate decision
+    assert persian_digits("٤") == "٤"
