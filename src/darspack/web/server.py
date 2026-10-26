@@ -213,9 +213,14 @@ def _make_handler(server: ShareServer):
 
         # ---- helpers --------------------------------------------------
 
-        def _send(self, code: int, body: bytes, ctype: str) -> None:
+        def _send(self, code: int, body: bytes, ctype: str,
+                  no_store: bool = False) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            if no_store:
+                # D4 (server side): API answers are never cached — a phone
+                # must always see the library as it is right now
+                self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -223,7 +228,7 @@ def _make_handler(server: ShareServer):
         def _json(self, obj, code: int = 200) -> None:
             self._send(code, json.dumps(
                 obj, ensure_ascii=False).encode("utf-8"),
-                "application/json; charset=utf-8")
+                "application/json; charset=utf-8", no_store=True)
 
         def _pin_ok(self) -> bool:
             query = urllib.parse.parse_qs(
@@ -263,6 +268,21 @@ def _make_handler(server: ShareServer):
                          "subject": r["subject_name"],
                          "chapter": r["chapter"], "kind": r["kind"],
                          "size": r["size_bytes"]} for r in rows]})
+            elif route == "/api/subjects":
+                if self._pin_ok():
+                    # D1: the phone's filter chips — one SQL for every
+                    # subject WITH its file count, plus the «بدون درس»
+                    # count, so the client needs no per-chip requests
+                    rows = _library().conn.execute(
+                        "SELECT s.id, s.name, COUNT(f.id) AS n "
+                        "FROM subjects s LEFT JOIN files f "
+                        "ON f.subject_id = s.id "
+                        "GROUP BY s.id ORDER BY s.name").fetchall()
+                    from ..core.search import unclassified_count
+                    self._json({
+                        "subjects": [{"id": r["id"], "name": r["name"],
+                                      "count": r["n"]} for r in rows],
+                        "unclassified": unclassified_count(_library().conn)})
             elif route.startswith("/api/file/"):
                 if self._pin_ok():
                     self._serve_file(route.rsplit("/", 1)[-1])

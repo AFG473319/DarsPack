@@ -54,3 +54,20 @@ def test_client_page_is_rtl_and_has_pin_flow():
     for required in ("savePin", "darspack-pin", "/api/search",
                      "/api/upload", "/api/file/"):
         assert required in html
+
+
+def test_client_filters_subjects_through_the_chips():
+    """D1: the chips row reads /api/subjects and filters /api/search with
+    subject_id / unclassified — the filters the server documents."""
+    html = CLIENT.read_text(encoding="utf-8")
+    for required in ("/api/subjects", "subject_id=", "unclassified=1",
+                     "renderChips", "بدون درس"):
+        assert required in html
+
+
+def test_client_shows_persian_digits_and_sizes():
+    """Counts and file sizes must render with Persian digits (۰-۹)."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "faNum" in html
+    assert "'۰۱۲۳۴۵۶۷۸۹'" in html          # the digit table itself
+    assert "humanSize" in html

@@ -298,6 +298,34 @@ def test_unknown_route_is_404(ro_server):
     assert status == 404
 
 
+# --- D1/D4: subject chips endpoint + no caching of API answers ------------
+
+def test_api_subjects_lists_counts(server):
+    share, lib = server
+    base = f"http://127.0.0.1:{share.port}"
+    sci = lib.conn.execute(
+        "SELECT id FROM subjects WHERE name='علوم تجربی'").fetchone()["id"]
+    lib.conn.execute(
+        "UPDATE files SET subject_id=? WHERE original_name LIKE 'جزوه%'",
+        (sci,))
+    lib.conn.commit()
+    _, body = _get(f"{base}/api/subjects?pin={share.pin}")
+    data = json.loads(body)
+    counts = {s["name"]: s["count"] for s in data["subjects"]}
+    assert counts["علوم تجربی"] == 1        # the seeded subjects, with counts
+    assert all(s["id"] for s in data["subjects"])
+    assert data["unclassified"] == 1        # the «بدون درس» chip count
+
+
+def test_api_responses_carry_no_store(server):
+    # the phone must never serve a stale catalog from a cache (D4)
+    share, _ = server
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{share.port}/api/search?pin={share.pin}")
+    with urllib.request.urlopen(req, timeout=5) as res:
+        assert res.headers["Cache-Control"] == "no-store"
+
+
 # --- the upload path: guards, defaults, duplicates, classification -------
 
 def test_upload_strips_path_parts(server, tmp_path):
