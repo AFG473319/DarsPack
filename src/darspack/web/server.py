@@ -13,9 +13,11 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+import os
 import secrets
 import socket
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -93,6 +95,12 @@ class ShareServer:
     def start(self) -> list[str]:
         handler = _make_handler(self)
         self._httpd = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
+        # Non-daemon handler threads (fixes limitations #18): daemon
+        # threads are never tracked by ThreadingMixIn, so server_close()
+        # returned while a request thread was still inside its SQLite
+        # write — then stop() closed that connection under it (native
+        # access violation). Joinable threads make stop() deterministic.
+        self._httpd.daemon_threads = False
         self.port = self._httpd.server_address[1]
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, daemon=True)
@@ -247,9 +255,15 @@ def _make_handler(server: ShareServer):
                 self.close_connection = True   # body (partly) unread
                 self._json({"error": "size"}, 413)
                 return
-            tmp = Path(_library().root) / f"upload-{secrets.token_hex(4)}-{name}"
+            # B4: the upload is staged in the OS temp folder, never in the
+            # library root — a crash between create and import leaves at
+            # worst a stray temp file nobody sees, and nothing that the
+            # orphan sweep or a library listing can mistake for library data.
+            fd, tmp_name = tempfile.mkstemp(prefix="darspack-upload-",
+                                            suffix="-" + name)
+            tmp = Path(tmp_name)
             try:
-                with open(tmp, "wb") as f:
+                with os.fdopen(fd, "wb") as f:
                     remaining = length
                     while remaining:
                         chunk = self.rfile.read(min(1 << 20, remaining))
@@ -264,7 +278,12 @@ def _make_handler(server: ShareServer):
             self._json({"status": result.status,
                         "message": result.message_fa})
             from ..core import db
-            db.log(_library().conn, "web_upload", name)
+            # Committed NOW (fixes limitations #17): this request thread's
+            # connection outlives the request, and an uncommitted write
+            # used to hold SQLite's write lock for the whole share session
+            # — the second distinct upload then stalled and failed.
+            with _library().conn:
+                db.log(_library().conn, "web_upload", name)
 
         # ---- file routes ----------------------------------------------
 

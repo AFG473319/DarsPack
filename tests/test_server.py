@@ -1,5 +1,7 @@
 """Tests for the LAN share server (PIN gate, search, download, upload)."""
+import http.client
 import json
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -24,7 +26,6 @@ def server(tmp_path):
             import_file(lib, p)
         share = ShareServer(str(tmp_path / "lib"))
         share.start()
-        _make_handler_threads_joinable(share)
         yield share, lib
         share.stop()
 
@@ -46,24 +47,8 @@ def ro_server(tmp_path_factory):
             import_file(lib, p)
         share = ShareServer(str(root / "lib"))
         share.start()
-        _make_handler_threads_joinable(share)
         yield share, lib
         share.stop()
-
-
-def _make_handler_threads_joinable(share) -> None:
-    """Make ShareServer.stop() deterministic for the tests.
-
-    The product server runs its handler threads as daemons, and stop()
-    closes each request thread's SQLite connection WITHOUT joining them —
-    a request thread still inside its post-response activity-log write
-    then dies with a native access violation (we hit exactly this crash
-    during teardown). This is a product-side race recorded in
-    docs/limitations.md for the server's owner to fix. Here we only use
-    socketserver's documented class attribute to make handler threads
-    joinable, so server_close() waits for them and the tests never crash.
-    """
-    share._httpd.daemon_threads = False
 
 
 def _get(url):
@@ -207,8 +192,35 @@ def test_upload_imports_into_library(server, tmp_path):
         "SELECT original_name, stored_name FROM files "
         "WHERE original_name LIKE 'کاربرگ%'").fetchone()
     assert row["stored_name"] != ""
-    # no upload temp files left behind
+    # no upload temp files left behind — in the library root (B4 keeps
+    # staging OUT of it) nor in the OS temp folder
     assert not list(Path(lib.root).glob("upload-*"))
+    assert not list(Path(tempfile.gettempdir()).glob("darspack-upload-*"))
+
+
+def test_upload_crash_leaves_nothing_in_library_root(server, monkeypatch):
+    """B4: staging lives in the OS temp dir. If the importer dies between
+    staging and import, the library root keeps exactly its own files —
+    and the server's finally-block still removes the staged file."""
+    share, lib = server
+    import darspack.core.importer as importer_module
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated crash mid-import")
+    monkeypatch.setattr(importer_module, "import_file", boom)
+    try:
+        _post(f"http://127.0.0.1:{share.port}"
+              f"/api/upload?name={urllib.parse.quote('کرش.pdf')}"
+              f"&pin={share.pin}", b"half-written")
+        assert False, "the simulated crash should surface as a dropped request"
+    except (urllib.error.URLError, http.client.RemoteDisconnected,
+            ConnectionError, OSError):
+        pass
+    staged = [p.name for p in Path(lib.root).iterdir()
+              if p.name.startswith(("upload-", "darspack-upload-"))]
+    assert staged == []            # nothing staged in the library root…
+    # …and the OS-temp staging file was removed by the finally-block
+    assert not list(Path(tempfile.gettempdir()).glob("darspack-upload-*"))
 
 
 def test_local_ips_are_valid():
@@ -307,11 +319,44 @@ def test_duplicate_upload_reported_once(server):
     assert data["status"] == "duplicate"
     count = lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
     assert count == 2                          # nothing re-stored
-    # NOTE: this test deliberately sends ONE request instead of the same
-    # body twice. The first upload's never-committed web_upload log write
-    # keeps the SQLite write lock for the whole session (a known product
-    # flaw, docs/limitations.md item 17), so a literal second request
-    # stalls 5 s and dies. Assert the log row once the server commits it.
+
+
+def test_web_upload_log_row_is_committed(server):
+    """The web_upload activity-log row used to be written after the import
+    transaction, on the request thread's own connection, and never
+    committed — the log under-reported phone uploads (limitations #17).
+    The server now commits it explicitly."""
+    share, lib = server
+    base = f"http://127.0.0.1:{share.port}"
+    _post(f"{base}/api/upload?name="
+          + urllib.parse.quote("ثبت‌شده.pdf") + f"&pin={share.pin}", b"logged")
+    # the log write happens after the response is sent (deliberate: a log
+    # failure must never fail an upload), so poll briefly for it
+    deadline = time.time() + 2
+    details: list = []
+    while time.time() < deadline:
+        details = [r["detail"] for r in lib.conn.execute(
+            "SELECT detail FROM activity_log WHERE action='web_upload'")]
+        if details:
+            break
+        time.sleep(0.05)
+    assert "ثبت‌شده.pdf" in details
+
+
+def test_second_distinct_upload_succeeds(server):
+    """The old flaw (limitations #17), end to end: the first upload's
+    uncommitted log write held SQLite's write lock for the whole session,
+    so the SECOND upload with new content stalled ~5 s and died with the
+    file never catalogued. Both uploads must now land."""
+    share, lib = server
+    base = f"http://127.0.0.1:{share.port}"
+    _, d1 = _post(f"{base}/api/upload?name=a.pdf&pin={share.pin}",
+                  b"first-bytes")
+    _, d2 = _post(f"{base}/api/upload?name=b.pdf&pin={share.pin}",
+                  b"second-bytes")
+    assert d1["status"] == "imported" and d2["status"] == "imported"
+    count = lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
+    assert count == 4                          # 2 fixture files + 2 uploads
 
 
 def test_upload_lands_unclassified(server):
@@ -323,11 +368,6 @@ def test_upload_lands_unclassified(server):
     _post(f"{base}/api/upload?name="
           + urllib.parse.quote("عکس-تابلو.pdf") + f"&pin={share.pin}", b"photo")
     assert unclassified_count(lib.conn) == before + 1
-    # NOTE: we deliberately do NOT assert the `web_upload` activity_log row
-    # here — db.log runs after import_file's transaction on the per-request
-    # server thread and is never committed, so the row is rolled back when
-    # the thread dies. Known flaw, recorded in docs/limitations.md; assert
-    # it once the server commits its log writes.
 
 
 def test_missing_stored_file_served_gracefully(server):
@@ -376,10 +416,8 @@ def test_start_stop_start_serves_again(tmp_path):
         import_file(lib, p)
         share = ShareServer(str(tmp_path / "lib"))
         share.start()
-        _make_handler_threads_joinable(share)
         share.stop()
         share.start()                          # fresh port, same library
-        _make_handler_threads_joinable(share)
         try:
             status, body = _get(f"http://127.0.0.1:{share.port}/")
             assert status == 200
