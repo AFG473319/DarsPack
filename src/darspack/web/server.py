@@ -131,7 +131,11 @@ class ShareServer:
         self._httpd.daemon_threads = False
         self.port = self._httpd.server_address[1]
         self._thread = threading.Thread(
-            target=self._httpd.serve_forever, daemon=True)
+            # poll_interval 0.05 (default 0.5): shutdown() waits for the
+            # serve loop to notice the stop flag, and a 0.5 s wait on
+            # every stop made the UI's «قطع اشتراک» feel sluggish
+            target=self._httpd.serve_forever,
+            kwargs={"poll_interval": 0.05}, daemon=True)
         self._thread.start()
         return [f"http://{ip}:{self.port}/" for ip in local_ips()]
 
