@@ -98,24 +98,24 @@ def test_metadata_dialog_saves_teacher_year_lesson(lib_with_file, qapp):
 
 
 def test_save_feedback_writes_jsonl(lib_with_file, qapp):
-    """The feedback form's save path: one JSON line per entry."""
+    """The feedback form's save path: one JSON line per entry (the full
+    payload from build_feedback_payload — same shape as the POST)."""
     import json
-    from darspack.ui.dialogs import save_feedback
+
+    from darspack.ui.dialogs import build_feedback_payload, save_feedback
     lib, _, tmp_path = lib_with_file
 
     class Parent:                       # minimal stand-in for MainWindow
         pass
     Parent.lib = lib
-    save_feedback(Parent(), "سؤال: می‌شود فصل را حذف کرد؟")
+    payload = build_feedback_payload(5, "fb_cat_praise",
+                                     "سؤال: می‌شود فصل را حذف کرد؟", "")
+    save_feedback(Parent(), payload)
 
     lines = (tmp_path / "lib" / "feedback.jsonl").read_text(
         encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
-    assert json.loads(lines[0])["text"].startswith("سؤال")
-    logged = lib.conn.execute(
-        "SELECT action FROM activity_log ORDER BY id DESC LIMIT 1"
-    ).fetchone()["action"]
-    assert logged == "feedback"
+    assert json.loads(lines[0])["message"].startswith("سؤال")
 
 
 def test_feedback_button_is_lambda_wired():
@@ -125,7 +125,7 @@ def test_feedback_button_is_lambda_wired():
     source = (REPO_ROOT / "src" / "darspack" / "ui" / "main_window.py").read_text(
         encoding="utf-8")
     assert '(tr("btn_feedback"), dialogs.feedback_dialog)' not in source
-    assert '(tr("btn_feedback"), lambda: dialogs.feedback_dialog(self))' in source
+    assert 'lambda: dialogs.FeedbackDialog(self, self.settings).exec()' in source
 
 
 def test_every_dialog_constructs_offscreen(tmp_path, qapp):
@@ -141,8 +141,8 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
 
     from darspack.ui.dialogs import (
         ActivityDialog, ClassifyDialog, DuplicatesDialog, ExportDialog,
-        MetadataDialog, SettingsDialog, ShareDialog, StatsDialog,
-        VerifyReportDialog,
+        FeedbackDialog, MetadataDialog, SettingsDialog, ShareDialog,
+        StatsDialog, StatsProgressDialog, VerifyReportDialog,
     )
 
     with Library(tmp_path / "lib") as lib:
@@ -173,7 +173,10 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
                                        SimpleNamespace(ok=True, problems=[]),
                                        library=lib, offer_import=False),
             lambda: ActivityDialog(parent, lib),
-            lambda: StatsDialog(parent, lib),
+            lambda: StatsDialog(parent, {"file_count": 0}),
+            lambda: StatsProgressDialog(parent),
+            lambda: FeedbackDialog(parent, {"feedback_endpoint": "",
+                                            "feedback_form_url": ""}),
         ]
         built = []
         for build in dialogs_to_build:
@@ -250,10 +253,13 @@ def test_settings_dialog_writes_json(tmp_path, qapp):
     dlg.lang.setCurrentIndex(1)               # English
     dlg.font_size.setValue(14)
     dlg.library.setText(str(tmp_path))
+    dlg.fb_endpoint.setText("https://example.test/fb")
     dlg._save()
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved == {"language": "en", "font_size": 14,
-                     "library": str(tmp_path)}
+                     "library": str(tmp_path),
+                     "feedback_endpoint": "https://example.test/fb",
+                     "feedback_form_url": ""}
 
 
 def test_duplicates_dialog_jump_searches_first_name(qapp):
@@ -432,8 +438,8 @@ def test_stats_dialog_dedup_bytes(tmp_path, qapp):
         stats = library_stats(lib.conn)
         assert stats["file_count"] == 2
         assert stats["dedup_bytes"] == len(b"same content")
-        dlg = StatsDialog(None, lib)
-        assert dlg is not None
+        dlg = StatsDialog(None, stats)      # results-only view since the
+        assert dlg is not None              # compute moved to StatsWorker
         dlg.deleteLater()
 
 

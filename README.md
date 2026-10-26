@@ -13,7 +13,7 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 - Duplicate detection (same content) and version-conflict detection (same name, different content) — **flagged, never auto-deleted**.
 - Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
 - Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, download, upload).
-- Dark RTL desktop UI, Persian/English toggle, feedback form, activity log; one-command Windows build.
+- Dark RTL desktop UI, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
 
 ## Key ideas
 

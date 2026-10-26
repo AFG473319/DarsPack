@@ -45,6 +45,22 @@ def human_size(n: int) -> str:
     return f"{n} B"
 
 
+def chapter_lesson_display(chapter, lesson) -> str:
+    """One table cell for the book position: «فصل ۳»، «درس ۵»، both, or —.
+
+    The catalog keeps chapter (فصل) and lesson (درس) as separate optional
+    columns (either, both, or neither may be set), so the table merges
+    them into one readable cell instead of two mostly-empty columns.
+    """
+    from ..core.normalize import persian_digits
+    parts = []
+    if chapter:
+        parts.append("فصل " + persian_digits(str(chapter)))
+    if lesson:
+        parts.append("درس " + persian_digits(str(lesson)))
+    return " / ".join(parts) if parts else "—"
+
+
 def jalali_date(iso: str) -> str:
     # F4 (perf audit): jdatetime costs ~200 ms of import time, but rows
     # need it only when the table fills — deferring it past window show
@@ -106,7 +122,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.year_combo, 1)
 
         # --- center: catalog table -----------------------------------
-        columns = [tr("col_name"), tr("col_subject"), tr("col_chapter"),
+        columns = [tr("col_name"), tr("col_subject"), tr("col_chapter_lesson"),
                    tr("col_kind"), tr("col_size"), tr("col_date"),
                    tr("col_year")]
         self.table = QTableWidget(0, len(columns))
@@ -142,7 +158,7 @@ class MainWindow(QMainWindow):
                 (tr("btn_history"), self.show_history),
                 (tr("btn_stats"), self.show_stats),
                 (tr("btn_share"), self.toggle_share),
-                (tr("btn_feedback"), lambda: dialogs.feedback_dialog(self)),
+                (tr("btn_feedback"), lambda: dialogs.FeedbackDialog(self, self.settings).exec()),
                 (tr("btn_help"), lambda: dialogs.text_dialog(
                     self, tr("btn_help"), tr("help_text"))),
                 (tr("btn_about"), lambda: dialogs.text_dialog(
@@ -237,9 +253,9 @@ class MainWindow(QMainWindow):
         from ..core.normalize import persian_digits
         for i, row in enumerate(rows):
             date_str, size_str = self._display_strs_for(row)
-            chapter = persian_digits(str(row["chapter"])) if row["chapter"] else "—"
             year = year_map.get(row["id"]) or "—"
-            values = [row["original_name"], row["subject_name"] or "—", chapter,
+            values = [row["original_name"], row["subject_name"] or "—",
+                      chapter_lesson_display(row["chapter"], row["lesson"]),
                       row["kind"] or "—", size_str,
                       persian_digits(date_str), persian_digits(year)]
             for col, value in enumerate(values):
@@ -423,8 +439,26 @@ class MainWindow(QMainWindow):
         dialogs.ActivityDialog(self, self.lib).exec()
 
     def show_stats(self) -> None:
-        """E5: files per subject/kind, total size, dedup bytes avoided."""
-        dialogs.StatsDialog(self, self.lib).exec()
+        """E5: files per subject/kind, total size, dedup bytes avoided.
+
+        The numbers are computed in a background thread; a small progress
+        dialog opens instantly (what is happening + a cancel button) and
+        the results dialog appears only when the worker finishes. The UI
+        thread never blocks on the queries.
+        """
+        from .workers import StatsWorker
+        self._stats_worker = StatsWorker(str(self.lib.root))
+        progress = dialogs.StatsProgressDialog(self)
+        self._stats_worker.done.connect(
+            lambda stats: self._stats_finished(progress, stats))
+        self._stats_worker.start()
+        progress.exec()          # modal; its cancel stops the worker
+
+    def _stats_finished(self, progress, stats) -> None:
+        progress.accept()        # closes the progress dialog either way
+        if stats is None:        # user cancelled
+            return
+        dialogs.StatsDialog(self, stats).exec()
 
     def edit_metadata(self) -> None:
         file_id = self.selected_file_id()

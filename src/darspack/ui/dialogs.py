@@ -14,8 +14,11 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QProgressBar,
+
     QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QMainWindow, QMessageBox, QPushButton,
     QSpinBox, QTableWidget, QTabWidget, QTableWidgetItem, QTextEdit,
@@ -100,32 +103,137 @@ def qr_svg_bytes(url: str) -> bytes:
     return svg.encode("utf-8")
 
 
-def save_feedback(parent, text: str) -> None:
-    """Persist one feedback entry (in-app form → feedback.jsonl)."""
+def save_feedback(parent, payload: dict) -> None:
+    """Persist one feedback entry (in-app form → feedback.jsonl).
+
+    `payload` is the full dict from build_feedback_payload — the same
+    shape the online endpoint receives, so the local file is a complete
+    mirror of what was (or could not be) sent.
+    """
     target = Path(parent.lib.root) / "feedback.jsonl"
     with open(target, "a", encoding="utf-8") as f:
-        f.write(json.dumps({
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "text": text}, ensure_ascii=False) + "\n")
-    db.log(parent.lib.conn, "feedback", "")
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
-def feedback_dialog(parent=None) -> None:
-    """In-app feedback form. parent=None default: Qt's clicked signal
-    passes its `checked` bool to plain-function slots, so the wiring
-    uses a lambda — this default is the second line of defense."""
-    dlg = QDialog(parent)
-    dlg.setWindowTitle(tr("btn_feedback"))
-    box = QTextEdit()
-    box.setPlaceholderText(tr("feedback_placeholder"))
-    save = QPushButton(tr("ok"))
-    layout = QVBoxLayout(dlg)
-    layout.addWidget(box)
-    layout.addWidget(save)
-    save.clicked.connect(dlg.accept)
-    if dlg.exec() and box.toPlainText().strip():
-        save_feedback(parent, box.toPlainText().strip())
-        QMessageBox.information(parent, tr("btn_feedback"), tr("feedback_thanks"))
+def build_feedback_payload(rating: int, category: str, message: str,
+                           contact: str) -> dict:
+    """One dict per feedback entry — the same shape saved locally and
+    POSTed online, so nothing is ever lost and the receiver gets one
+    predictable schema."""
+    from datetime import datetime
+    from .. import __version__
+    return {
+        "app": "DarsPack",
+        "version": __version__,
+        "rating": rating if rating else None,
+        "category": category,
+        "message": message,
+        "contact": contact,
+        "sent_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+class FeedbackDialog(QDialog):
+    """The «بازخورد» dialog the way apps actually do it: star rating,
+    topic, message, optional contact. Submit saves the entry locally
+    FIRST (a failure never loses feedback), then tries the configured
+    endpoint in a background thread; with no endpoint the user is told
+    it was saved locally (and can open the web form if one is set)."""
+
+    def __init__(self, parent, settings: dict):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.settings = settings
+        self.setWindowTitle(tr("btn_feedback"))
+        self.rating = 0
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(tr("fb_rating")))
+        stars = QHBoxLayout()
+        self.star_buttons = []
+        for i in range(1, 6):
+            star = QPushButton("☆")
+            star.setCheckable(True)
+            star.setFixedWidth(40)
+            star.clicked.connect(lambda checked, n=i: self._set_stars(n))
+            stars.addWidget(star)
+            self.star_buttons.append(star)
+        layout.addLayout(stars)
+
+        layout.addWidget(QLabel(tr("fb_category")))
+        self.category = QComboBox()
+        for key in ("fb_cat_bug", "fb_cat_idea", "fb_cat_question",
+                    "fb_cat_praise"):
+            self.category.addItem(tr(key), key)
+        layout.addWidget(self.category)
+
+        self.message = QTextEdit()
+        self.message.setPlaceholderText(tr("feedback_placeholder"))
+        layout.addWidget(self.message)
+
+        self.contact = QLineEdit()
+        self.contact.setPlaceholderText(tr("fb_contact"))
+        layout.addWidget(self.contact)
+
+        self.submit = QPushButton(tr("fb_submit"))
+        self.submit.setDefault(True)
+        self.submit.clicked.connect(self._submit)
+        layout.addWidget(self.submit)
+
+    def _set_stars(self, n: int) -> None:
+        self.rating = n
+        for i, star in enumerate(self.star_buttons, start=1):
+            star.setText("★" if i <= n else "☆")
+
+    def _endpoint(self) -> str:
+        from .. import feedback_config
+        return (self.settings.get("feedback_endpoint")
+                or feedback_config.FEEDBACK_ENDPOINT)
+
+    def _form_url(self) -> str:
+        from .. import feedback_config
+        return (self.settings.get("feedback_form_url")
+                or feedback_config.FEEDBACK_FORM_URL)
+
+    def _submit(self) -> None:
+        text = self.message.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, tr("btn_feedback"),
+                                    tr("fb_need_message"))
+            return
+        payload = build_feedback_payload(
+            self.rating, self.category.currentData(), text,
+            self.contact.text().strip())
+        save_feedback(self.parent_window, payload)   # local first: never lost
+        db.log(self.parent_window.lib.conn, "feedback", payload["category"])
+        endpoint = self._endpoint()
+        if endpoint:
+            from .workers import FeedbackPoster
+            self._poster = FeedbackPoster(endpoint, payload)
+            self._poster.done.connect(self._posted)
+            self._poster.start()
+            self.accept()                     # dialog closes; poster continues
+            return
+        form_url = self._form_url()
+        if form_url:
+            button = QPushButton(tr("fb_open_form"))
+            button.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl(form_url)))
+            self.layout().replaceWidget(self.submit, button)
+            self.submit.hide()
+            button.show()
+            QMessageBox.information(self, tr("btn_feedback"),
+                                    tr("fb_saved_local"))
+            return
+        QMessageBox.information(self, tr("btn_feedback"), tr("fb_saved_local"))
+        self.accept()
+
+    def _posted(self, ok: bool) -> None:
+        parent = self.parent()
+        if parent is not None:
+            QMessageBox.information(
+                parent, tr("btn_feedback"),
+                tr("fb_thanks_sent") if ok else tr("fb_saved_local"))
 
 
 class ImportDialog(QDialog):
@@ -596,6 +704,14 @@ class SettingsDialog(QDialog):
         browse = QPushButton("…")
         browse.clicked.connect(self._browse)
 
+        from .. import feedback_config
+        self.fb_endpoint = QLineEdit(
+            str(settings.get("feedback_endpoint",
+                             feedback_config.FEEDBACK_ENDPOINT)))
+        self.fb_form_url = QLineEdit(
+            str(settings.get("feedback_form_url",
+                             feedback_config.FEEDBACK_FORM_URL)))
+
         save = QPushButton(tr("ok"))
         save.clicked.connect(self._save)
 
@@ -611,6 +727,10 @@ class SettingsDialog(QDialog):
             else:
                 row.addWidget(widget, 1)
             form.addLayout(row)
+        form.addWidget(QLabel(tr("settings_fb_endpoint")))
+        form.addWidget(self.fb_endpoint)
+        form.addWidget(QLabel(tr("settings_fb_form_url")))
+        form.addWidget(self.fb_form_url)
         form.addWidget(QLabel(tr("settings_restart")))
         form.addWidget(save)
 
@@ -623,6 +743,8 @@ class SettingsDialog(QDialog):
         self.settings["language"] = self.lang.currentData()
         self.settings["font_size"] = self.font_size.value()
         self.settings["library"] = self.library.text().strip()
+        self.settings["feedback_endpoint"] = self.fb_endpoint.text().strip()
+        self.settings["feedback_form_url"] = self.fb_form_url.text().strip()
         self.settings_path.write_text(
             json.dumps(self.settings, ensure_ascii=False, indent=2),
             encoding="utf-8")
@@ -856,15 +978,39 @@ def library_stats(conn) -> dict:
     }
 
 
-class StatsDialog(QDialog):
-    """«آمار»: one dialog quantifying the organizer claim — files per
-    subject/kind with text bars, total size, dedup bytes avoided."""
+class StatsProgressDialog(QDialog):
+    """Opens the instant «آمار» is clicked: says what is happening and
+    offers a real cancel (the user asked for exactly this after the old
+    silent UI-thread freeze). The worker runs in the background."""
 
-    def __init__(self, parent, lib):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle(tr("stats_title"))
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(tr("stats_computing")))
+        bar = QProgressBar()
+        bar.setRange(0, 0)                    # indeterminate = "working…"
+        layout.addWidget(bar)
+        cancel = QPushButton(tr("cancel"))
+        cancel.clicked.connect(self._cancel)
+        layout.addWidget(cancel)
+
+    def _cancel(self) -> None:
+        parent = self.parent()
+        worker = getattr(parent, "_stats_worker", None)
+        if worker is not None:
+            worker.cancel()
+        self.reject()
+
+
+class StatsDialog(QDialog):
+    """«آمار»: the results view. Pure display — it receives the already
+    computed stats dict (StatsWorker computed it off the UI thread)."""
+
+    def __init__(self, parent, stats: dict):
         super().__init__(parent)
         self.setWindowTitle(tr("stats_title"))
         self.resize(480, 520)
-        stats = library_stats(lib.conn)
 
         layout = QVBoxLayout(self)
         if stats["file_count"] == 0:

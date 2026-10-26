@@ -116,3 +116,70 @@ class ImportWorker(QThread):
                         f"import crashed\n{traceback.format_exc()}\n")
         except OSError:
             pass
+
+
+class StatsWorker(QThread):
+    """Compute library stats off the UI thread (the «آمار» dialog).
+
+    Opens its OWN Library (one connection per thread), runs the indexed
+    stats queries, emits the dict — or None if the user cancelled.
+    """
+
+    done = Signal(object)                     # stats dict, or None on cancel
+
+    def __init__(self, library_root, parent=None):
+        super().__init__(parent)
+        self.library_root = library_root
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        stats = None
+        lib = None
+        try:
+            lib = Library(self.library_root).open()
+            if not self._cancelled:
+                from ..ui.dialogs import library_stats
+                stats = library_stats(lib.conn)
+        except Exception:
+            stats = None                      # cancelled or failed: no dialog
+        finally:
+            if lib is not None:
+                try:
+                    lib.close()
+                except Exception:
+                    pass
+            self.done.emit(stats if not self._cancelled else None)
+
+
+class FeedbackPoster(QThread):
+    """POST one feedback payload to the configured endpoint (background).
+
+    Network must never run on the UI thread. done(ok: bool) — True only
+    on a 2xx answer within the timeout. The payload is saved locally
+    BEFORE this thread starts, so a failure never loses feedback.
+    """
+
+    done = Signal(bool)
+
+    def __init__(self, endpoint: str, payload: dict, parent=None):
+        super().__init__(parent)
+        self.endpoint = endpoint
+        self.payload = payload
+
+    def run(self) -> None:
+        import json as _json
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                self.endpoint,
+                data=_json.dumps(self.payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=5) as res:
+                ok = 200 <= res.status < 300
+        except Exception:
+            ok = False
+        self.done.emit(ok)
