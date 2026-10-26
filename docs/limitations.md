@@ -38,14 +38,14 @@ Each was reported in real use via the in-app crash dialog, fixed, and covered by
 3. The phone PIN button did nothing (client JS referenced a non-existent implicit global). Fixed: explicit element lookups + inline errors + static wiring guards.
 4. The feedback button crashed (Qt passes `checked` to plain-function slots). Fixed: lambda wiring + a wiring-guard test.
 
-## Measured on the target laptop (i5-2450M, 8 GB RAM, Windows 11) — 2026-10-24
+## Measured on the target laptop (i5-2450M, 8 GB RAM, Windows 11) — 2026-10-24; re-measured 2026-10-25 after the UI improvement round
 
 | Metric | Value | How |
 |---|---|---|
-| Whole dev environment | 270 MB (venv incl. PySide6-Essentials, PyInstaller) | `du -sh .venv` |
-| Built app (onedir) | 104 MB folder; DarsPack.exe 2.4 MB | `du -sh dist/DarsPack` |
-| Startup to app-ready | 420 ms | time from process start to first settings write, `installer` measurement script |
-| Idle RAM | 76 MB | `tasklist` after 3 s idle |
-| Test suite | 218/218 green, ~29 s | `pytest` |
+| Whole dev environment | 270 MB (venv incl. PySide6-Essentials, PyInstaller, qrcode) | `du -sh .venv` |
+| Built app (onedir) | 104 MB folder; DarsPack.exe 2.5 MB (was 2.4 MB) | `du -sh dist/DarsPack` |
+| Startup to app-ready | 700–1100 ms on an empty library (was 420 ms on 2026-10-24; the machine's background load differs between the two measurements — not directly comparable. The deferred-import work (F4) removed ~420–490 ms of module imports from source runs.) | process start → first settings write |
+| Idle RAM | ~81 MB on an empty library (was 76 MB) | `tasklist` after 8 s idle |
+| Test suite | 244/244 green, ~33–35 s | `pytest` |
 
 Every number above is reproducible from this repository (`installer/build.bat`, `pytest`, `eval/`).
