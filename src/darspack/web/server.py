@@ -65,6 +65,19 @@ MAX_UPLOAD = 200 * 1024 * 1024          # 200 MB — bigger files via USB
 LOCKOUT_SECONDS = 30
 MAX_FAILS = 5
 
+# D2: extensions served inline (the phone browser shows them instead of
+# forcing a download), with a FIXED Content-Type. mimetypes.guess_type is
+# deliberately not used: on Windows it consults the registry, which
+# differs per machine — a literal table is predictable and testable.
+_INLINE_TYPES = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".txt": "text/plain; charset=utf-8",
+}
+
 
 def _int_param(query: dict, key: str) -> int | None:
     """Read an integer query parameter, Persian or Latin digits allowed.
@@ -351,10 +364,17 @@ def _make_handler(server: ShareServer):
                 return
             self.send_response(200)
             name = urllib.parse.quote(row["original_name"])
-            self.send_header("Content-Type",
-                             "application/octet-stream")
+            # D2: whitelist extensions open INSIDE the phone browser (a
+            # classmate checks a جزوه without leaving the app); everything
+            # else — executables, archives, unknown types — downloads.
+            ctype = _INLINE_TYPES.get(
+                Path(row["original_name"]).suffix.lower(),
+                "application/octet-stream")
+            disposition = ("attachment" if ctype == "application/octet-stream"
+                           else "inline")
+            self.send_header("Content-Type", ctype)
             self.send_header("Content-Disposition",
-                             f"attachment; filename*=UTF-8''{name}")
+                             f"{disposition}; filename*=UTF-8''{name}")
             self.send_header("Content-Length", str(path.stat().st_size))
             self.end_headers()
             with open(path, "rb") as f:

@@ -164,6 +164,39 @@ def test_download_endpoint(server):
     assert status == 200 and data == b"content-1"
 
 
+# --- D2: inline viewing for a small whitelist, download for the rest ------
+
+def _headers_for(share, file_id):
+    with urllib.request.urlopen(
+            f"http://127.0.0.1:{share.port}/api/file/{file_id}"
+            f"?pin={share.pin}", timeout=5) as res:
+        return res.headers["Content-Type"], res.headers["Content-Disposition"]
+
+
+def test_inline_viewing_whitelist(server):
+    share, lib = server
+    # a .pdf opens INSIDE the phone browser (files 1 and 2 are PDFs)
+    ctype, disposition = _headers_for(share, 1)
+    assert ctype == "application/pdf"
+    assert disposition.startswith("inline")
+    # an executable and an unknown extension download as octet-stream
+    for name, content in (("prog.exe", b"MZfake"),
+                          ("archive.xyz", b"???")):
+        p = lib.root.parent / name
+        p.write_bytes(content)
+        import_file(lib, p)
+    row = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name='prog.exe'").fetchone()
+    ctype, disposition = _headers_for(share, row["id"])
+    assert ctype == "application/octet-stream"
+    assert disposition.startswith("attachment")
+    row = lib.conn.execute(
+        "SELECT id FROM files WHERE original_name='archive.xyz'").fetchone()
+    ctype, disposition = _headers_for(share, row["id"])
+    assert ctype == "application/octet-stream"
+    assert disposition.startswith("attachment")
+
+
 def test_lockout_after_five_failures(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"
