@@ -115,6 +115,51 @@ def test_api_requires_pin(server):
     assert status == 200 and "files" in json.loads(body)
 
 
+# --- F1: keep-alive + no per-request maintenance --------------------------
+
+def test_protocol_is_http11(server):
+    share, _ = server
+    from darspack.web.server import _make_handler
+    assert _make_handler(share).protocol_version == "HTTP/1.1"
+
+
+def test_keepalive_reuses_one_connection(server):
+    """HTTP/1.1 keep-alive, end to end: TWO requests over ONE connection.
+
+    With HTTP/1.0 the second request would be refused (the server closes
+    after each response). Every response must carry Content-Length or the
+    reused connection would desync — that invariant is what this pins.
+    """
+    import http.client
+    share, _ = server
+    conn = http.client.HTTPConnection("127.0.0.1", share.port, timeout=5)
+    try:
+        conn.request("GET", "/")
+        res = conn.getresponse()
+        assert res.status == 200 and "درس‌پک" in res.read().decode("utf-8")
+        conn.request("GET", f"/api/search?q=&pin={share.pin}")
+        res = conn.getresponse()
+        assert res.status == 200 and "files" in json.loads(res.read())
+    finally:
+        conn.close()
+
+
+def test_no_sweep_in_server_threads(server, monkeypatch):
+    """Request threads never run maintenance (F1): no orphan sweep.
+
+    The sweep used to run per library open on each new connection thread
+    and could even delete an in-flight upload's file (the measured
+    PermissionError race). The desktop app owns maintenance; the server
+    threads only read.
+    """
+    share, _ = server
+    calls = []
+    monkeypatch.setattr(Library, "sweep_orphans", lambda self: calls.append(1))
+    _get(f"http://127.0.0.1:{share.port}/")
+    _get(f"http://127.0.0.1:{share.port}/api/search?pin={share.pin}")
+    assert calls == []
+
+
 def test_search_endpoint_normalizes_digits(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"

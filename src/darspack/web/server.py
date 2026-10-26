@@ -24,6 +24,35 @@ from pathlib import Path
 
 from ..core.library import Library
 
+def _open_server_library(root: str) -> Library:
+    """Open a library for a server thread WITHOUT the maintenance passes (F1).
+
+    Every phone request used to pay a fresh Library.open() — schema init,
+    orphan sweep, health check — ~120–150 ms each, and the orphan sweep
+    even raced in-flight uploads (it could delete a temp file another
+    thread was still importing). The desktop app always opened this
+    library first, so the schema already exists and the server threads
+    only need to read/query.
+
+    Contract with core (decision recorded 2026-10-26):
+        Library(root, maintain=False).open() skips init_schema and
+        sweep_orphans. When core lands that flag we use it; until then a
+        local subclass achieves the same and the try/except disappears.
+    """
+    try:
+        return Library(root, maintain=False).open()
+    except TypeError:                      # core hasn't landed the flag yet
+        from ..core import db
+
+        class _ServerLibrary(Library):
+            def open(self) -> "Library":
+                self.root.mkdir(parents=True, exist_ok=True)
+                self.files_dir.mkdir(exist_ok=True)
+                self.conn = db.connect(self.db_path)
+                return self
+
+        return _ServerLibrary(root).open()
+
 CLIENT_DIR: Path
 if getattr(sys, "frozen", False):
     # PyInstaller build: data files unpack under sys._MEIPASS
@@ -117,7 +146,7 @@ def _make_handler(server: ShareServer):
     def _library() -> Library:
         lib = getattr(local, "library", None)
         if lib is None:
-            lib = Library(server.library_root).open()
+            lib = _open_server_library(server.library_root)
             local.library = lib
             with registry_lock:
                 registry.append(lib)
@@ -136,6 +165,13 @@ def _make_handler(server: ShareServer):
     server._close_libraries = _close_all
 
     class Handler(BaseHTTPRequestHandler):
+        # HTTP/1.1 keep-alive (F1): a phone reuses one connection for its
+        # browse-download-upload round instead of paying a fresh TCP +
+        # library-open per request. This only works because EVERY response
+        # carries an exact Content-Length — _send, _json and _serve_file
+        # must keep that invariant.
+        protocol_version = "HTTP/1.1"
+
         def log_message(self, *args) -> None:   # silence per-request noise
             pass
 
@@ -193,9 +229,14 @@ def _make_handler(server: ShareServer):
         def do_POST(self) -> None:
             route = urllib.parse.urlparse(self.path).path
             if route != "/api/upload":
+                self.close_connection = True   # body unread: don't reuse
                 self._send(404, "not found".encode(), "text/plain")
                 return
             if not self._pin_ok():
+                # the request body was never read — with HTTP/1.1 an
+                # unread body would be misparsed as the next request,
+                # so this connection must not be reused
+                self.close_connection = True
                 return
             query = urllib.parse.parse_qs(
                 urllib.parse.urlparse(self.path).query)
@@ -203,6 +244,7 @@ def _make_handler(server: ShareServer):
             name = Path(name).name or "upload.bin"       # strip any path part
             length = int(self.headers.get("Content-Length") or 0)
             if not 0 < length <= MAX_UPLOAD:
+                self.close_connection = True   # body (partly) unread
                 self._json({"error": "size"}, 413)
                 return
             tmp = Path(_library().root) / f"upload-{secrets.token_hex(4)}-{name}"
