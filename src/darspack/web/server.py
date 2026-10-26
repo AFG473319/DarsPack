@@ -66,6 +66,21 @@ LOCKOUT_SECONDS = 30
 MAX_FAILS = 5
 
 
+def _int_param(query: dict, key: str) -> int | None:
+    """Read an integer query parameter, Persian or Latin digits allowed.
+
+    Anything non-numeric is ignored (the filter just doesn't apply) —
+    a malformed value must never crash a request.
+    """
+    from ..core.normalize import latin_digits
+    raw = latin_digits((query.get(key) or [""])[0])
+    return int(raw) if raw.isdigit() else None
+
+
+def _flag_param(query: dict, key: str) -> bool:
+    return (query.get(key) or ["0"])[0].lower() in ("1", "true")
+
+
 def local_ips() -> list[str]:
     """Best-effort list of this machine's LAN addresses for the QR/URL box."""
     ips = {"127.0.0.1"}
@@ -221,8 +236,15 @@ def _make_handler(server: ShareServer):
                 if self._pin_ok():
                     query = urllib.parse.parse_qs(parsed.query)
                     from ..core.search import search
-                    rows = search(_library().conn, (query.get("q") or [""])[0],
-                                  limit=300)
+                    # C6: the API honors the filters it documents —
+                    # subject_id / kind / unclassified pass straight
+                    # through to search()
+                    rows = search(
+                        _library().conn, (query.get("q") or [""])[0],
+                        subject_id=_int_param(query, "subject_id"),
+                        kind=(query.get("kind") or [None])[0] or None,
+                        unclassified_only=_flag_param(query, "unclassified"),
+                        limit=300)
                     self._json({"files": [
                         {"id": r["id"], "name": r["original_name"],
                          "subject": r["subject_name"],
@@ -259,6 +281,22 @@ def _make_handler(server: ShareServer):
             # library root — a crash between create and import leaves at
             # worst a stray temp file nobody sees, and nothing that the
             # orphan sweep or a library listing can mistake for library data.
+            # G4: optional pre-fill hints on the upload URL. kind/lesson
+            # are the uploader's explicit choice, so they are stored the
+            # same way a درس‌پک import stores them. subject is NEVER
+            # stored (classification-first: only the desktop classify
+            # dialog may set it) — it travels back on the response as
+            # `prefill`, and the file lands in «بدون درس».
+            meta: dict = {}
+            kind_hint = (query.get("kind") or [None])[0]
+            lesson_hint = _int_param(query, "lesson")
+            subject_hint = (query.get("subject") or [None])[0]
+            if kind_hint:
+                meta["kind"] = kind_hint
+            if lesson_hint is not None:
+                meta["lesson"] = lesson_hint
+            if subject_hint:
+                meta["subject"] = subject_hint
             fd, tmp_name = tempfile.mkstemp(prefix="darspack-upload-",
                                             suffix="-" + name)
             tmp = Path(tmp_name)
@@ -272,11 +310,14 @@ def _make_handler(server: ShareServer):
                         remaining -= len(chunk)
                         f.write(chunk)
                 from ..core.importer import import_file
-                result = import_file(_library(), tmp, display_name=name)
+                result = import_file(_library(), tmp, display_name=name,
+                                     meta=meta or None)
             finally:
                 tmp.unlink(missing_ok=True)
-            self._json({"status": result.status,
-                        "message": result.message_fa})
+            reply = {"status": result.status, "message": result.message_fa}
+            if result.prefill:
+                reply["prefill"] = result.prefill
+            self._json(reply)
             from ..core import db
             # Committed NOW (fixes limitations #17): this request thread's
             # connection outlives the request, and an uncommitted write

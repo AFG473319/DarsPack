@@ -307,6 +307,63 @@ def test_upload_without_name_gets_default(server):
     assert row is not None
 
 
+# --- C6: the search filters the API documents ----------------------------
+
+def _fa_digits(number: int) -> str:
+    return "".join("۰۱۲۳۴۵۶۷۸۹"[int(d)] if d.isdigit() else d
+                   for d in str(number))
+
+
+def test_search_filter_params_through_http(server):
+    share, lib = server
+    base = f"http://127.0.0.1:{share.port}"
+    sci = lib.conn.execute(
+        "SELECT id FROM subjects WHERE name='علوم تجربی'").fetchone()["id"]
+    lib.conn.execute(
+        "UPDATE files SET subject_id=? WHERE original_name LIKE 'جزوه%'",
+        (sci,))
+    lib.conn.commit()
+
+    def names(qs):
+        _, body = _get(f"{base}/api/search?{qs}&pin={share.pin}")
+        return [f["name"] for f in json.loads(body)["files"]]
+
+    assert names("subject_id=" + str(sci)) == ["جزوه علوم.pdf"]
+    # Persian digits are accepted in the filter, like everywhere else
+    assert names("subject_id=" + urllib.parse.quote(_fa_digits(sci))) == \
+        ["جزوه علوم.pdf"]
+    assert names("kind=" + urllib.parse.quote("نمونه‌سوال")) == \
+        ["نمونه سوال ریاضی فصل 3.pdf"]
+    # only the file still missing its subject
+    assert names("unclassified=1") == ["نمونه سوال ریاضی فصل 3.pdf"]
+    # a malformed value is ignored, never a crash
+    assert len(names("subject_id=not-a-number")) == 2
+
+
+def test_upload_hints_stored_and_prefill(server):
+    """G4: kind/lesson hints from the uploader's phone are explicit
+    choices and are stored; the subject hint is NEVER stored (only the
+    desktop classify dialog may set a subject) — it comes back on the
+    response as `prefill`, and the file lands in «بدون درس»."""
+    share, lib = server
+    base = f"http://127.0.0.1:{share.port}"
+    before = unclassified_count(lib.conn)
+    _, data = _post(
+        f"{base}/api/upload?name="
+        + urllib.parse.quote("کاربرگ جدید.pdf")
+        + "&kind=" + urllib.parse.quote("کاربرگ")
+        + "&lesson=3&subject=" + urllib.parse.quote("ریاضی")
+        + f"&pin={share.pin}", b"hinted")
+    assert data["status"] == "imported"
+    assert data["prefill"] == {"subject": "ریاضی", "tags": []}
+    row = lib.conn.execute(
+        "SELECT kind, lesson, subject_id FROM files "
+        "WHERE original_name='کاربرگ جدید.pdf'").fetchone()
+    assert row["kind"] == "کاربرگ" and row["lesson"] == 3
+    assert row["subject_id"] is None
+    assert unclassified_count(lib.conn) == before + 1
+
+
 def test_duplicate_upload_reported_once(server):
     """An upload whose content is already catalogued is reported, not
     re-stored — through the full HTTP path (one request)."""
