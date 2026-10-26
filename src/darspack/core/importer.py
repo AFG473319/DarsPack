@@ -29,7 +29,7 @@ class ImportResult:
     path: Path | None = None
     file_id: int | None = None
     existing_id: int | None = None
-    # A5 contract for the classify dialog (brief 30-ui consumes this):
+    # Contract for the classify dialog: imports may carry pre-fill metadata,
     # {"subject": str, "tags": [str]} carried back from a package manifest.
     # The importer NEVER stores them itself — pre-fill only.
     prefill: dict | None = None

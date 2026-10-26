@@ -118,7 +118,7 @@ def suggest(filename_stem: str, subjects=None, learned: dict | None = None) -> d
 
 
 # --- A4: the learned-hint store (hint_rules table) ---------------------------
-# The classify dialog's save path (brief 30-ui) calls learn_hint() once per
+# The classify dialog's save path calls learn_hint() once per
 # saved file; suggest() consumes the table via load_hints(). Pre-fill only —
 # nothing here ever touches a file's stored subject.
 

@@ -74,7 +74,7 @@ STRINGS = {
         "settings_font": "اندازه‌ی فونت",
         "settings_lib": "پوشه‌ی کتابخانه",
         "settings_restart": "تغییر زبان و پوشه‌ی کتابخانه بعد از اجرای دوباره اعمال می‌شود.",
-        "about_text": "درس‌پک {}\nنویسنده: AFG473319\n\nسازمان‌دهنده‌ی آفلاین فایل‌های درسی — فارسی‌اول، بدون نیاز به اینترنت.",
+        "about_text": "درس‌پک {}\nسازنده: AFG473319\n\nسازمان‌دهنده‌ی آفلاین فایل‌های درسی — فارسی‌اول، بدون نیاز به اینترنت.",
         "help_text": "۱) فایل‌ها را با «وارد کردن» به کتابخانه اضافه کنید — پیشنهاد درس و فصل از روی نام فایل داده می‌شود و قابل ویرایش است.\n"
                      "۲) با جعبه‌ی جست‌جو فایل‌ها را پیدا کنید؛ اعداد فارسی و لاتین یکسانند.\n"
                      "۳) «تکراری‌ها و تضادها» فقط پرچم می‌گذارد؛ هیچ فایلی خودکار حذف یا بازنویسی نمی‌شود.\n"
@@ -87,7 +87,7 @@ STRINGS = {
         "ok": "باشه",
         "cancel": "لغو",
 
-        # --- brief 30-ui additions (append-only) ------------------------
+        # --- added for the bulk-classify and metadata features (append-only) ---
         "empty_library": "هنوز فایلی نیست — با «وارد کردن…» شروع کنید",
         "empty_search": "چیزی پیدا نشد؛ اعداد فارسی و لاتین یکسان‌اند (۳ و 3 یکی است)",
         "col_year": "سال",
@@ -203,7 +203,7 @@ STRINGS = {
         "ok": "OK",
         "cancel": "Cancel",
 
-        # --- brief 30-ui additions (append-only) ------------------------
+        # --- added for the bulk-classify and metadata features (append-only) ---
         "empty_library": "No files yet — start with «Import…»",
         "empty_search": "Nothing found; Persian and Latin digits match (۳ and 3 are the same)",
         "col_year": "Year",

@@ -251,7 +251,7 @@ def test_package_import_round_trips_metadata(tmp_path):
     metas = {e["path"]: e for e in read_manifest(out)}
 
     # the receiver extracts files/ to a temp dir and imports with metas —
-    # exactly what the package-import dialog (brief 30-ui) will do
+    # exactly what the package-import dialog will do
     with Library(tmp_path / "receiver") as receiver:
         import tempfile, shutil
         with tempfile.TemporaryDirectory() as td:

@@ -315,9 +315,8 @@ class MainWindow(QMainWindow):
         sweep_orphans only touches top-level files of files/ — the trash
         is exempt by construction.
 
-        This is the UI-side stand-in for the core-side
-        Library.move_to_trash() contract that brief 20-core has not
-        landed yet (tracked for later) — when it lands, this method should call
+        This move currently lives in the UI layer; if a move_to_trash()
+        API is ever added to the core Library, this method should call
         it instead of doing the move itself.
         """
         row = self.lib.conn.execute(

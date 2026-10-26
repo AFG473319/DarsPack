@@ -1,6 +1,6 @@
 # Known Limitations (محدودیت‌های شناخته‌شده)
 
-Honest list of what DarsPack v0.1 does **not** do. Stating flaws openly is part of the project's defense.
+Honest list of what DarsPack v0.1 does **not** do. Stating flaws openly is deliberate: honest engineering earns trust.
 
 ## Product scope
 
