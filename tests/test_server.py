@@ -3,9 +3,7 @@ import http.client
 import json
 import tempfile
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -51,34 +49,56 @@ def ro_server(tmp_path_factory):
         share.stop()
 
 
+def _exchange(url, data=None):
+    """One raw HTTP exchange with the server under test.
+
+    Returns (status, body, response). http.client connects to the URL's
+    host and port DIRECTLY, socket to socket — the request can only ever
+    reach the loopback server under test, and nothing between the test
+    and the server can alter the response. (The earlier urllib-based helpers
+    were flaky here: they received responses and timeouts that
+    this server provably never sends — so the tests now speak
+    http.client directly.)
+
+    http.client does NOT raise on error statuses; _get/_post return
+    whatever arrives, which is exactly what the assertions need.
+    """
+    parts = urllib.parse.urlsplit(url)
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    conn = http.client.HTTPConnection(parts.hostname, parts.port or 80,
+                                      timeout=5 if data is None else 10)
+    try:
+        conn.request("POST" if data is not None else "GET", path, body=data)
+        res = conn.getresponse()
+        return res.status, res.read(), res
+    finally:
+        conn.close()
+
+
 def _get(url):
-    with urllib.request.urlopen(url, timeout=5) as res:
-        return res.status, res.read()
+    return _exchange(url)[:2]
 
 
 def _get_error(url):
-    """(status, body) for a response urllib would normally raise on."""
-    try:
-        with urllib.request.urlopen(url, timeout=5) as res:
-            return res.status, res.read()
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()
+    """Readability alias: a 4xx reply is a normal return value here."""
+    return _get(url)
 
 
 def _post(url, data):
-    req = urllib.request.Request(url, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=10) as res:
-        return res.status, json.loads(res.read())   # decoded once here
+    status, body, _ = _exchange(url, data)
+    return status, json.loads(body)
 
 
 def _post_raw(url, data):
-    """(status, raw body) for a POST, error responses included."""
-    req = urllib.request.Request(url, data=data, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=10) as res:
-            return res.status, res.read()
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read()
+    return _exchange(url, data)[:2]
+
+
+def _headers_for(share, file_id):
+    res = _exchange(f"http://127.0.0.1:{share.port}/api/file/{file_id}"
+                    f"?pin={share.pin}")[2]
+    return res.headers["Content-Type"], res.headers["Content-Disposition"]
 
 
 def test_start_returns_urls_and_random_port(server):
@@ -91,11 +111,8 @@ def test_start_returns_urls_and_random_port(server):
 def test_api_requires_pin(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"
-    try:
-        _get(f"{base}/api/search?q=x")
-        assert False, "expected 403"
-    except urllib.error.HTTPError as exc:
-        assert exc.code == 403
+    status, body = _get(f"{base}/api/search?q=x")
+    assert status == 403
     status, body = _get(f"{base}/api/search?q=x&pin={share.pin}")
     assert status == 200 and "files" in json.loads(body)
 
@@ -166,13 +183,6 @@ def test_download_endpoint(server):
 
 # --- D2: inline viewing for a small whitelist, download for the rest ------
 
-def _headers_for(share, file_id):
-    with urllib.request.urlopen(
-            f"http://127.0.0.1:{share.port}/api/file/{file_id}"
-            f"?pin={share.pin}", timeout=5) as res:
-        return res.headers["Content-Type"], res.headers["Content-Disposition"]
-
-
 def test_inline_viewing_whitelist(server):
     share, lib = server
     # a .pdf opens INSIDE the phone browser (files 1 and 2 are PDFs)
@@ -201,16 +211,11 @@ def test_lockout_after_five_failures(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"
     for _ in range(5):
-        try:
-            _get(f"{base}/api/search?q=x&pin=000000")
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 403
+        status, body = _get(f"{base}/api/search?q=x&pin=000000")
+        assert status == 403
     # even the CORRECT pin is refused while locked out
-    try:
-        _get(f"{base}/api/search?q=x&pin={share.pin}")
-        assert False, "expected lockout 403"
-    except urllib.error.HTTPError as exc:
-        assert exc.code == 403
+    status, body = _get(f"{base}/api/search?q=x&pin={share.pin}")
+    assert status == 403
 
 
 def test_upload_imports_into_library(server, tmp_path):
@@ -246,8 +251,7 @@ def test_upload_crash_leaves_nothing_in_library_root(server, monkeypatch):
               f"/api/upload?name={urllib.parse.quote('کرش.pdf')}"
               f"&pin={share.pin}", b"half-written")
         assert False, "the simulated crash should surface as a dropped request"
-    except (urllib.error.URLError, http.client.RemoteDisconnected,
-            ConnectionError, OSError):
+    except (http.client.RemoteDisconnected, ConnectionError, OSError):
         pass
     staged = [p.name for p in Path(lib.root).iterdir()
               if p.name.startswith(("upload-", "darspack-upload-"))]
@@ -320,10 +324,9 @@ def test_api_subjects_lists_counts(server):
 def test_api_responses_carry_no_store(server):
     # the phone must never serve a stale catalog from a cache (D4)
     share, _ = server
-    req = urllib.request.Request(
+    _, _, res = _exchange(
         f"http://127.0.0.1:{share.port}/api/search?pin={share.pin}")
-    with urllib.request.urlopen(req, timeout=5) as res:
-        assert res.headers["Cache-Control"] == "no-store"
+    assert res.headers["Cache-Control"] == "no-store"
 
 
 # --- the upload path: guards, defaults, duplicates, classification -------

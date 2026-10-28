@@ -9,7 +9,6 @@ page must be served by the server.
 import re
 import shutil
 import subprocess
-import urllib.request
 from pathlib import Path
 
 import pytest
