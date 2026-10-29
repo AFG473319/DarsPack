@@ -28,12 +28,13 @@ src/darspack/
 │   └── schoolyear.py     # Jalali school-year helpers (Mehr→Shahrivar span)          
 ├── ui/                   # PySide6 desktop client
 │   ├── app.py            # QApplication wiring, language toggle, theme, fonts
-│   ├── main_window.py    # library table, filters, search, empty states, row
-│   │                     #   delete → files/.trash, share toggle, history/stats
+│   ├── main_window.py    # library table, filters, search, empty states,
+│   │                     #   multi-select + row delete → files/.trash, bulk
+│   │                     #   reclassify, share toggle, history/stats
 │   ├── dialogs.py        # ALL dialogs in one file: classify (bulk actions,
-│   │                     #   teacher/lesson/year, package prefill), metadata,
-│   │                     #   export, verify, duplicates, settings, share (QR),
-│   │                     #   history, stats
+│   │                     #   teacher/lesson/year, package prefill), bulk edit,
+│   │                     #   metadata, export, verify, duplicates, settings,
+│   │                     #   share (QR), history, stats
 │   └── workers.py        # background import thread (own DB connection;
 │                         #   carries درس‌پک manifest metas + subject/tags prefill)
 ├── web/                  # LAN web client + server
@@ -94,9 +95,14 @@ CREATE TABLE hint_rules (    -- learned token→subject memory (A4): pre-fill on
   token TEXT PRIMARY KEY, subject_id INTEGER REFERENCES subjects(id),
   hits INTEGER NOT NULL DEFAULT 0, last_used TEXT NOT NULL
 );
+CREATE TABLE import_skips (  -- duplicates the importer refused to copy
+  id INTEGER PRIMARY KEY, ts TEXT NOT NULL, sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,      -- bytes the library never had to store
+  original_name TEXT NOT NULL       -- feeds the stats dialog's «حجم صرفه‌جویی‌شده»
+);
 ```
 
-**Schema versions:** the schema carries `PRAGMA user_version`. On every open, `db.migrate()` runs ordered migration steps (each in its own transaction, version bumped after success) — migration 1 added the `lesson` column to catalogs created before درس and فصل became separate columns. Fresh installs create the current shape directly.
+**Schema versions:** the schema carries `PRAGMA user_version`. On every open, `db.migrate()` runs ordered migration steps (each in its own transaction, version bumped after success) — migration 1 added the `lesson` column to catalogs created before درس and فصل became separate columns. Fresh installs create the current shape directly. Tables added with `CREATE TABLE IF NOT EXISTS` (the latest: `import_skips`) also appear on old catalogs at the next open, no version bump needed. Skipped duplicates from before that table existed are not retroactively recorded.
 
 Storage layout (⚖️ flat, no subject folders — the catalog *is* the organization; avoids renames/invalid chars):
 

@@ -682,6 +682,114 @@ class MetadataDialog(QDialog):
         self.accept()
 
 
+class BulkEditDialog(QDialog):
+    """«ویرایش گروهی»: one form applied to every selected file.
+
+    Each field starts at «بدون تغییر»; only the fields the user touches
+    are written. A bulk pass never blanks an existing value, and it never
+    merges or removes files — the same flag-only spirit as everywhere.
+    """
+
+    def __init__(self, parent, lib, file_ids: list):
+        super().__init__(parent)
+        self.lib = lib
+        self.file_ids = list(file_ids)
+        self.setWindowTitle(tr("bulk_edit_title"))
+        self.resize(420, 260)
+        none = tr("bulk_none")
+
+        self.subject = QComboBox()
+        self.subject.setEditable(True)
+        self.subject.addItem(none)
+        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+            self.subject.addItem(r["name"])
+
+        self.chapter = QSpinBox()
+        self.chapter.setRange(0, 40)
+        self.chapter.setSpecialValueText(none)
+
+        self.lesson = QSpinBox()
+        self.lesson.setRange(0, 40)
+        self.lesson.setSpecialValueText(none)
+
+        self.kind = QComboBox()
+        self.kind.addItem(none)
+        for k in ("جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر"):
+            self.kind.addItem(k)
+
+        self.year = QComboBox()
+        self.year.setEditable(True)
+        self.year.addItem(none)
+        from ..core.schoolyear import current_school_year
+        base = int(current_school_year()[:4])
+        for y in (f"{base - 1}-{base}", current_school_year(),
+                  f"{base + 1}-{base + 2}"):
+            self.year.addItem(y)
+        self.year.setCurrentIndex(0)
+
+        form = QVBoxLayout(self)
+        form.addWidget(QLabel(tr("bulk_edit_hint").format(
+            count=persian_digits(str(len(self.file_ids))))))
+        for label, widget in ((tr("meta_subject"), self.subject),
+                              (tr("meta_chapter"), self.chapter),
+                              (tr("meta_lesson"), self.lesson),
+                              (tr("meta_kind"), self.kind),
+                              (tr("meta_year"), self.year)):
+            row = QHBoxLayout()
+            lab = QLabel(label)
+            lab.setMinimumWidth(90)
+            row.addWidget(lab)
+            row.addWidget(widget)
+            form.addLayout(row)
+        buttons = QHBoxLayout()
+        cancel = QPushButton(tr("cancel"))
+        cancel.clicked.connect(self.reject)
+        save = QPushButton(tr("ok"))
+        save.setDefault(True)
+        save.clicked.connect(self._apply)
+        buttons.addWidget(cancel)
+        buttons.addWidget(save)
+        form.addLayout(buttons)
+
+    def _changes(self) -> tuple[list, list]:
+        """(SET clauses, params) for exactly the fields the user chose."""
+        sets, params = [], []
+        none = tr("bulk_none")
+        subject_name = self.subject.currentText().strip()
+        if subject_name and subject_name != none:
+            sets.append("subject_id=?")
+            params.append(db.get_or_create(self.lib.conn, "subjects",
+                                           subject_name))
+        if self.kind.currentIndex() > 0:
+            sets.append("kind=?")
+            params.append(self.kind.currentText())
+        if self.chapter.value():
+            sets.append("chapter=?")
+            params.append(self.chapter.value())
+        if self.lesson.value():
+            sets.append("lesson=?")
+            params.append(self.lesson.value())
+        year = self.year.currentText().strip()
+        if year and year != none:
+            sets.append("school_year=?")
+            params.append(year)
+        return sets, params
+
+    def _apply(self) -> None:
+        sets, params = self._changes()
+        if not sets:                  # nothing chosen → no write at all
+            self.reject()
+            return
+        conn = self.lib.conn
+        with conn:
+            for fid in self.file_ids:
+                conn.execute(
+                    f"UPDATE files SET {', '.join(sets)} WHERE id=?",
+                    (*params, fid))
+            db.log(conn, "bulk_edit", f"{len(self.file_ids)} files")
+        self.accept()
+
+
 class SettingsDialog(QDialog):
     """Language, font size, library folder. Saved next to the catalog."""
 
@@ -963,9 +1071,8 @@ def library_stats(conn) -> dict:
         "SELECT COUNT(*) c, COALESCE(SUM(size_bytes),0) s FROM files"
     ).fetchone()
     dedup = conn.execute(
-        """SELECT COALESCE(SUM((c - 1) * sz), 0) saved FROM
-           (SELECT COUNT(*) c, size_bytes sz FROM files
-            GROUP BY sha256 HAVING c > 1)""").fetchone()["saved"]
+        "SELECT COALESCE(SUM(size_bytes), 0) saved FROM import_skips"
+    ).fetchone()["saved"]
     unclassified = conn.execute(
         "SELECT COUNT(*) c FROM files WHERE subject_id IS NULL").fetchone()["c"]
     return {
@@ -1013,7 +1120,7 @@ class StatsDialog(QDialog):
         self.resize(480, 520)
 
         layout = QVBoxLayout(self)
-        if stats["file_count"] == 0:
+        if stats["file_count"] == 0 and not stats["dedup_bytes"]:
             layout.addWidget(QLabel(tr("stats_empty")))
         else:
             from .main_window import human_size

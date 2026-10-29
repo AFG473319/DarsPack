@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS hint_rules (
   hits       INTEGER NOT NULL DEFAULT 0,     -- fires only at hits >= 2
   last_used  TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS import_skips (
+  id            INTEGER PRIMARY KEY,
+  ts            TEXT NOT NULL,
+  sha256        TEXT NOT NULL,               -- content already present in the library
+  size_bytes    INTEGER NOT NULL,            -- bytes the library never had to copy
+  original_name TEXT NOT NULL                -- the name the user tried to import
+);
 """
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QMenu, QMessageBox, QPushButton, QStatusBar, QTableWidget,
@@ -128,6 +128,8 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, len(columns))
         self.table.setHorizontalHeaderLabels(columns)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        # multi-select (Ctrl/Shift) feeds the bulk actions below
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 420)
@@ -136,6 +138,10 @@ class MainWindow(QMainWindow):
         # file is MOVED to files/.trash — never erased)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_row_menu)
+        # Del works on the focused table only — never hijacks a dialog's key
+        self.delete_shortcut = QShortcut(QKeySequence.Delete, self.table)
+        self.delete_shortcut.setContext(Qt.WidgetShortcut)
+        self.delete_shortcut.activated.connect(self.delete_selected_files)
 
         # E2: empty states — a fresh library and an empty search each get
         # one sentence instead of a silent blank table. The label lives on
@@ -155,6 +161,7 @@ class MainWindow(QMainWindow):
                 (tr("btn_import_pkg"), self.import_package),
                 (tr("btn_dups"), self.show_duplicates),
                 (tr("btn_edit_meta"), self.edit_metadata),
+                (tr("btn_delete"), self.delete_selected_files),
                 (tr("btn_history"), self.show_history),
                 (tr("btn_stats"), self.show_stats),
                 (tr("btn_share"), self.toggle_share),
@@ -296,11 +303,14 @@ class MainWindow(QMainWindow):
             self._center_empty_label()
 
     def selected_file_id(self) -> int | None:
-        selected = self.table.selectedItems()
-        if not selected:
+        """The current row's id (the id lives on column 0 only — perf F2.2)."""
+        row = self.table.currentRow()
+        item = self.table.item(row, 0) if row >= 0 else None
+        file_id = item.data(Qt.UserRole) if item is not None else None
+        if file_id is None:
             QMessageBox.information(self, APP_NAME, tr("err_no_selection"))
             return None
-        return selected[0].data(Qt.UserRole)
+        return file_id
 
     def open_selected_file(self) -> None:
         """Double-click: open the file with the OS default app (PDF viewer…)."""
@@ -313,55 +323,121 @@ class MainWindow(QMainWindow):
             str(self.lib.stored_path(row))))
 
     def _show_row_menu(self, pos) -> None:
-        """E3: the row's right-click menu — «حذف از کتابخانه…»."""
+        """Right-click anywhere on a row acts on the selection.
+
+        The file id lives only on the name cell (perf F2.2), so the row
+        is resolved from whatever cell was clicked and the id read from
+        column 0. Clicking outside the current selection selects that row
+        first (standard desktop behavior); clicking inside a multi-select
+        applies the action to all selected rows.
+        """
         item = self.table.itemAt(pos)
-        if item is None or item.data(Qt.UserRole) is None:
+        if item is None:
+            return
+        row = item.row()
+        selected = {i.row() for i in
+                    self.table.selectionModel().selectedRows()}
+        if row not in selected:
+            self.table.clearSelection()
+            self.table.selectRow(row)
+        if not self._selected_rows():
             return
         menu = QMenu(self)
-        action = menu.addAction(tr("delete_menu"))
-        if menu.exec(self.table.viewport().mapToGlobal(pos)) == action:
-            self.delete_file(item.data(Qt.UserRole))
+        bulk = menu.addAction(tr("bulk_edit_menu"))
+        menu.addSeparator()
+        delete = menu.addAction(tr("delete_menu"))
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == delete:
+            self.delete_selected_files()
+        elif chosen == bulk:
+            self.bulk_edit_selected()
 
-    def delete_file(self, file_id: int) -> None:
-        """E3 (design-approved 2026-10-24): a confirmed, explicit user
-        action may remove a file from the library. The stored file is
-        MOVED to files/.trash/ (never unlinked — the trash copy is the
-        safety net) and its row leaves the catalog, so re-importing the
-        same content works. files/.trash is a SUBFOLDER, and
-        sweep_orphans only touches top-level files of files/ — the trash
-        is exempt by construction.
+    def delete_selected_files(self) -> None:
+        """Del key / «حذف» button / context menu — act on every selected row."""
+        rows = self._selected_rows()
+        if rows:
+            self.delete_files([r["id"] for r in rows])
 
-        This move currently lives in the UI layer; if a move_to_trash()
-        API is ever added to the core Library, this method should call
-        it instead of doing the move itself.
+    def delete_files(self, file_ids: list) -> None:
+        """E3 (design-approved 2026-10-24; bulk added 2026-10-29): a
+        confirmed, explicit user action may remove files from the library.
+        Each stored file is MOVED to files/.trash/ (never unlinked — the
+        trash copy is the safety net) and its row leaves the catalog, so
+        re-importing the same content works. files/.trash is a SUBFOLDER,
+        and sweep_orphans only touches top-level files of files/ — the
+        trash is exempt by construction.
+
+        One file per transaction: a crash can leave a file in the trash
+        with its row still present (the next open's health check flags
+        it), but never a row pointing at an erased file.
         """
-        row = self.lib.conn.execute(
-            """SELECT f.*, s.name AS subject_name FROM files f
-               LEFT JOIN subjects s ON s.id=f.subject_id WHERE f.id=?""",
-            (file_id,)).fetchone()
-        if row is None:
+        rows = []
+        for fid in file_ids:
+            row = self.lib.conn.execute(
+                """SELECT f.*, s.name AS subject_name FROM files f
+                   LEFT JOIN subjects s ON s.id=f.subject_id WHERE f.id=?""",
+                (fid,)).fetchone()
+            if row is not None:
+                rows.append(row)
+        if not rows:
             return
+        from ..core.normalize import persian_digits
+        if len(rows) == 1:
+            text = tr("delete_confirm").format(name=rows[0]["original_name"])
+        else:
+            text = tr("delete_confirm_many").format(
+                count=persian_digits(str(len(rows))))
         answer = QMessageBox.question(
-            self, tr("delete_title"),
-            tr("delete_confirm").format(name=row["original_name"]),
+            self, tr("delete_title"), text,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
         from ..core import db
         trash_dir = self.lib.files_dir / ".trash"
         trash_dir.mkdir(exist_ok=True)
-        dest = trash_dir / row["stored_name"]
-        n = 0
-        while dest.exists():    # a same-named file may already sit in the trash
-            n += 1
-            dest = trash_dir / f"{row['stored_name']}~{n}"
-        os.replace(self.lib.stored_path(row), dest)   # same volume → atomic
-        with self.lib.conn:
-            self.lib.conn.execute("DELETE FROM files WHERE id=?", (file_id,))
-            db.log(self.lib.conn, "delete", row["original_name"])
-        self._display_strs.pop(file_id, None)
+        for row in rows:
+            dest = trash_dir / row["stored_name"]
+            n = 0
+            while dest.exists():    # a same-named file may already be in the trash
+                n += 1
+                dest = trash_dir / f"{row['stored_name']}~{n}"
+            try:
+                os.replace(self.lib.stored_path(row), dest)  # same volume → atomic
+            except FileNotFoundError:
+                pass                 # already gone; the row still leaves
+            with self.lib.conn:
+                self.lib.conn.execute(
+                    "DELETE FROM files WHERE id=?", (row["id"],))
+                db.log(self.lib.conn, "delete", row["original_name"])
+            self._display_strs.pop(row["id"], None)
         self.reload_filters()
         self.refresh()
+        if len(rows) == 1:
+            message = tr("delete_done").format(
+                name=rows[0]["original_name"])
+        else:
+            message = tr("delete_done_many").format(
+                count=persian_digits(str(len(rows))))
+        self.statusBar().showMessage(message, 5000)
+
+    def delete_file(self, file_id: int) -> None:
+        """Single-file entry point (kept for callers and tests)."""
+        self.delete_files([file_id])
+
+    def bulk_edit_selected(self) -> None:
+        """«ویرایش گروهی»: one metadata form applied to the selection."""
+        rows = self._selected_rows()
+        if not rows:
+            return
+        dialog = dialogs.BulkEditDialog(self, self.lib,
+                                        [r["id"] for r in rows])
+        if dialog.exec():
+            from ..core.normalize import persian_digits
+            self.reload_filters()
+            self.refresh()
+            self.statusBar().showMessage(
+                tr("bulk_edit_done").format(
+                    count=persian_digits(str(len(rows)))), 5000)
 
     # ---- actions ------------------------------------------------------
 
@@ -461,6 +537,10 @@ class MainWindow(QMainWindow):
         dialogs.StatsDialog(self, stats).exec()
 
     def edit_metadata(self) -> None:
+        """One row → the full metadata dialog; several rows → bulk edit."""
+        if len(self._selected_rows()) > 1:
+            self.bulk_edit_selected()
+            return
         file_id = self.selected_file_id()
         if file_id is None:
             return

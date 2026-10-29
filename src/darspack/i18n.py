@@ -79,7 +79,8 @@ STRINGS = {
                      "۲) با جعبه‌ی جست‌جو فایل‌ها را پیدا کنید؛ اعداد فارسی و لاتین یکسانند.\n"
                      "۳) «تکراری‌ها و تضادها» فقط پرچم می‌گذارد؛ هیچ فایلی خودکار حذف یا بازنویسی نمی‌شود.\n"
                      "۴) «خروجی بسته» یک ZIP با فهرست و هش هر فایل می‌سازد؛ «راستی‌آزمایی» سالم بودن بسته را بعد از کپی چک می‌کند.\n"
-                     "۵) «اشتراک‌گذاری در شبکه» یک صفحه‌ی وب برای گوشی‌های همان Wi-Fi باز می‌کند — با رمز.",
+                     "۵) «اشتراک‌گذاری در شبکه» یک صفحه‌ی وب برای گوشی‌های همان Wi-Fi باز می‌کند — با رمز.\n"
+                     "۶) فایل را با کلید Delete یا دکمه‌ی «حذف» از کتابخانه بردارید (به پوشه‌ی ‎.trash منتقل می‌شود — پاک نمی‌شود). با Ctrl/Shift چند فایل را انتخاب کنید و همه را یک‌جا حذف یا ویرایش کنید.",
         "feedback_title": "بازخورد شما",
         "feedback_placeholder": "چه چیزی خوب بود؟ چه چیزی باید بهتر شود؟",
         "feedback_thanks": "ممنون! بازخورد شما ذخیره شد.",
@@ -104,6 +105,14 @@ STRINGS = {
         "delete_confirm": "«{name}» از کتابخانه حذف شود؟\n\nفایل به پوشه‌ی سطل (‎.trash) منتقل می‌شود — هیچ‌چیز پاک نمی‌شود — و ردیفش از فهرست برداشته می‌شود. اگر همان فایل را دوباره وارد کنید، به‌عنوان فایل تازه ثبت می‌شود.",
         "delete_done": "«{name}» به سطل منتقل شد.",
         "delete_menu": "حذف از کتابخانه…",
+        "delete_confirm_many": "این {count} فایل از کتابخانه حذف شود؟\n\nفایل‌ها به پوشه‌ی سطل (‎.trash) منتقل می‌شوند — هیچ‌چیز پاک نمی‌شود — و ردیف‌هایشان از فهرست برداشته می‌شود.",
+        "delete_done_many": "{count} فایل به سطل منتقل شد.",
+        "btn_delete": "حذف",
+        "bulk_edit_menu": "ویرایش گروهی…",
+        "bulk_edit_title": "ویرایش گروهی",
+        "bulk_edit_hint": "مقادیر انتخاب‌شده روی {count} فایل اعمال می‌شود؛ هر فیلدی که «بدون تغییر» بماند، دست نمی‌خورد.",
+        "bulk_none": "بدون تغییر",
+        "bulk_edit_done": "{count} فایل به‌روز شد.",
         "btn_history": "تاریخچه",
         "btn_stats": "آمار",
         "history_title": "تاریخچه‌ی فعالیت‌ها",
@@ -211,7 +220,8 @@ STRINGS = {
                      "2) Find files with the search box; Persian and Latin digits match each other.\n"
                      "3) Duplicates & conflicts are only flagged — nothing is ever auto-deleted or overwritten.\n"
                      "4) Export builds a ZIP with an index and a per-file hash; Verify checks a copied package's integrity.\n"
-                     "5) Share on network opens a web page for phones on the same Wi-Fi — protected by a PIN.",
+                     "5) Share on network opens a web page for phones on the same Wi-Fi — protected by a PIN.\n"
+                     "6) Remove a file with the Delete key or the Delete button (it moves to the .trash folder — never erased). Select several files with Ctrl/Shift to delete or edit them together.",
         "feedback_title": "Your feedback",
         "feedback_placeholder": "What worked? What should be better?",
         "feedback_thanks": "Thank you! Your feedback was saved.",
@@ -236,6 +246,14 @@ STRINGS = {
         "delete_confirm": "Remove «{name}» from the library?\n\nThe file moves to the trash folder (‎.trash) — nothing is erased — and its row leaves the list. Re-importing the same file registers it as new.",
         "delete_done": "«{name}» moved to the trash folder.",
         "delete_menu": "Remove from library…",
+        "delete_confirm_many": "Remove these {count} files from the library?\n\nThe files move to the trash folder (‎.trash) — nothing is erased — and their rows leave the list.",
+        "delete_done_many": "{count} files moved to the trash folder.",
+        "btn_delete": "Delete",
+        "bulk_edit_menu": "Edit selected…",
+        "bulk_edit_title": "Edit selected files",
+        "bulk_edit_hint": "The chosen values are applied to {count} files; fields left at «No change» are untouched.",
+        "bulk_none": "No change",
+        "bulk_edit_done": "{count} files updated.",
         "btn_history": "History",
         "btn_stats": "Stats",
         "history_title": "Activity history",

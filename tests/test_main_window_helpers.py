@@ -241,6 +241,91 @@ def test_delete_declined_keeps_everything(tmp_path, qapp, monkeypatch):
             win.lib.close()
 
 
+def test_bulk_delete_moves_every_selected_file_to_the_trash(
+        tmp_path, qapp, monkeypatch):
+    """Bulk delete (2026-10-29): one confirmation for the whole selection,
+    every file moved to files/.trash, one activity row per file."""
+    from PySide6.QtWidgets import QTableWidgetSelectionRange
+    with Library(tmp_path / "lib") as lib:
+        for name in ("a.pdf", "b.pdf"):
+            src = tmp_path / name
+            src.write_bytes(name.encode())
+            import_file(lib, src)
+
+        asked = {}
+
+        def fake_question(parent, title, text, *args, **kwargs):
+            asked["text"] = text
+            return QMessageBox.Yes
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            monkeypatch.setattr(QMessageBox, "question", fake_question)
+            win.table.setRangeSelected(
+                QTableWidgetSelectionRange(0, 0, 1, win.table.columnCount() - 1),
+                True)
+            win.delete_selected_files()
+
+            assert "۲" in asked["text"]              # the count is Persian
+            assert lib.conn.execute(
+                "SELECT COUNT(*) c FROM files").fetchone()["c"] == 0
+            trashed = {p.read_bytes() for p in (lib.files_dir / ".trash").iterdir()}
+            assert trashed == {b"a.pdf", b"b.pdf"}
+            deletes = lib.conn.execute(
+                "SELECT COUNT(*) c FROM activity_log WHERE action='delete'"
+            ).fetchone()["c"]
+            assert deletes == 2
+        finally:
+            win.lib.close()
+
+
+def test_row_menu_opens_on_any_column(tmp_path, qapp, monkeypatch):
+    """The file id lives only on the name cell (perf F2.2) — right-clicking
+    the subject or size cell must still resolve the row (bug report
+    2026-10-29: the menu only opened on the name column)."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "a.pdf"
+        src.write_bytes(b"row menu")
+        import_file(lib, src)
+
+        class FakeMenu:
+            """Stands in for QMenu; exec() picks the last action = delete."""
+            def __init__(self, parent=None):
+                self.actions = []
+
+            def addAction(self, text):
+                action = object()
+                self.actions.append((text, action))
+                return action
+
+            def addSeparator(self):
+                pass
+
+            def exec(self, *_args):
+                return self.actions[-1][1]
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            monkeypatch.setattr(mw_module, "QMenu", FakeMenu)
+            monkeypatch.setattr(
+                QMessageBox, "question",
+                staticmethod(lambda *a, **k: QMessageBox.Yes))
+            click = win.table.visualItemRect(win.table.item(0, 2)).center()
+            win._show_row_menu(click)       # column 2 (فصل / درس) is not col 0
+
+            assert lib.conn.execute(
+                "SELECT COUNT(*) c FROM files").fetchone()["c"] == 0
+            assert len(list((lib.files_dir / ".trash").iterdir())) == 1
+        finally:
+            win.lib.close()
+
+
 def test_sweep_never_touches_the_trash(tmp_path):
     """E3 safety net: files/.trash is a subfolder of files/ and
     sweep_orphans only reconciles top-level files — a trashed file

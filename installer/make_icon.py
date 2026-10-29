@@ -4,8 +4,8 @@
 
 Why a hand-written ICO packer instead of Pillow: PySide6 is already in
 the stack, and the ICO container is a 6-byte header plus one 16-byte
-directory entry per image. Adding Pillow (~3 MB) just to concatenate
-five PNGs would break the project's dependency budget.
+directory entry per image. Adding Pillow (~3 MB) just to pack the frames
+would break the project's dependency budget.
 
 The small master is used only at 16/24 px; every other size renders the
 full master.
@@ -87,10 +87,11 @@ def bmp_entry(image: QImage) -> bytes:
 
 
 def ico_bytes(images: list[tuple[int, QImage]]) -> bytes:
-    # Small sizes stay uncompressed for maximum Windows/PyInstaller
-    # compatibility; 128/256 use PNG, which Vista+ accepts.
+    # Windows accepts PNG-compressed frames in an ICO only at 256×256.
+    # A PNG frame at any other size makes the taskbar fall back to its
+    # generic window icon (found 2026-10-29: the 128 px frame was PNG).
     payloads = [
-        (size, bmp_entry(image) if size <= 64 else png_bytes(image))
+        (size, png_bytes(image) if size >= 256 else bmp_entry(image))
         for size, image in images
     ]
     offset = 6 + 16 * len(payloads)

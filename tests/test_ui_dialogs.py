@@ -173,7 +173,8 @@ def test_every_dialog_constructs_offscreen(tmp_path, qapp):
                                        SimpleNamespace(ok=True, problems=[]),
                                        library=lib, offer_import=False),
             lambda: ActivityDialog(parent, lib),
-            lambda: StatsDialog(parent, {"file_count": 0}),
+            lambda: StatsDialog(parent, {"file_count": 0,
+                                         "dedup_bytes": 0}),
             lambda: StatsProgressDialog(parent),
             lambda: FeedbackDialog(parent, {"feedback_endpoint": "",
                                             "feedback_form_url": ""}),
@@ -424,23 +425,57 @@ def test_bar_and_library_stats(lib_with_file, qapp):
 
 
 def test_stats_dialog_dedup_bytes(tmp_path, qapp):
-    """E5: two identical contents → dedup bytes = one copy's size.
-    (The duplicate import is rejected, so plant it via keep_duplicate.)"""
-    from darspack.core.importer import import_file
-    from darspack.core.library import Library
-
+    """E5: a skipped duplicate is space the library never stored; a
+    duplicate the user explicitly kept is NOT counted as saved."""
     from darspack.ui.dialogs import StatsDialog, library_stats
     with Library(tmp_path / "lib") as lib:
         src = tmp_path / "a.pdf"
         src.write_bytes(b"same content")
         import_file(lib, src)
-        import_file(lib, src, keep_duplicate=True)
+        skipped = import_file(lib, src)          # rejected at import
+        assert skipped.status == "duplicate"
+        stats = library_stats(lib.conn)
+        assert stats["file_count"] == 1
+        assert stats["dedup_bytes"] == len(b"same content")
+
+        import_file(lib, src, keep_duplicate=True)   # user chose to keep it
         stats = library_stats(lib.conn)
         assert stats["file_count"] == 2
-        assert stats["dedup_bytes"] == len(b"same content")
+        assert stats["dedup_bytes"] == len(b"same content")   # unchanged
         dlg = StatsDialog(None, stats)      # results-only view since the
         assert dlg is not None              # compute moved to StatsWorker
         dlg.deleteLater()
+
+
+def test_bulk_edit_dialog_writes_only_chosen_fields(tmp_path, qapp):
+    """Bulk reclassify: only the fields the user set are written; fields
+    left at «بدون تغییر» keep every row's existing value."""
+    from darspack.ui.dialogs import BulkEditDialog
+    with Library(tmp_path / "lib") as lib:
+        ids = []
+        for name in ("a.pdf", "b.pdf"):
+            src = tmp_path / name
+            src.write_bytes(name.encode())
+            ids.append(import_file(lib, src).file_id)
+        with lib.conn:
+            lib.conn.execute(
+                "UPDATE files SET chapter=3, school_year='1404-1405'")
+
+        untouched = BulkEditDialog(None, lib, ids)
+        untouched._apply()          # nothing chosen → no write, dialog rejects
+        rows = lib.conn.execute("SELECT * FROM files ORDER BY id").fetchall()
+        assert [r["kind"] for r in rows] == [None, None]
+
+        dlg = BulkEditDialog(None, lib, ids)
+        dlg.kind.setCurrentText("کاربرگ")
+        dlg._apply()
+        rows = lib.conn.execute("SELECT * FROM files ORDER BY id").fetchall()
+        assert [r["kind"] for r in rows] == ["کاربرگ", "کاربرگ"]
+        assert all(r["chapter"] == 3 for r in rows)          # untouched
+        assert all(r["school_year"] == "1404-1405" for r in rows)
+        assert all(r["subject_id"] is None for r in rows)    # untouched
+        dlg.deleteLater()
+        untouched.deleteLater()
 
 
 def test_share_dialog_live_refresh(tmp_path, qapp):

@@ -42,6 +42,19 @@ def test_identical_file_is_reported_as_duplicate(lib, sample):
     assert count == 1                            # nothing re-stored
 
 
+def test_duplicate_skip_is_recorded_for_saved_space(lib, sample):
+    """E5: a skipped duplicate records the bytes the library never copied;
+    a duplicate the user explicitly chose to keep records nothing."""
+    import_file(lib, sample("a.pdf"))
+    import_file(lib, sample("b.pdf"))                          # skipped
+    import_file(lib, sample("c.pdf"), keep_duplicate=True)     # kept on purpose
+    skips = lib.conn.execute(
+        "SELECT size_bytes, original_name FROM import_skips").fetchall()
+    assert len(skips) == 1
+    assert skips[0]["size_bytes"] == len(b"lesson-content")
+    assert skips[0]["original_name"] == "b.pdf"
+
+
 def test_keep_duplicate_overrides(lib, sample):
     import_file(lib, sample("a.pdf"))
     kept = import_file(lib, sample("b.pdf", data=b"lesson-content"),

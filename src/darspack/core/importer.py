@@ -80,6 +80,12 @@ def import_file(lib, src, meta: dict | None = None,
             "SELECT id, original_name FROM files WHERE sha256=?", (sha,)
         ).fetchone()
         if dup and not keep_duplicate:
+            # Remember what the skip saved (E5 stats): bytes that never
+            # entered the library. History, not a running counter — the
+            # number stays explainable and auditable.
+            conn.execute(
+                """INSERT INTO import_skips(ts, sha256, size_bytes, original_name)
+                   VALUES (?,?,?,?)""", (_now(), sha, size, shown_name))
             # Name the twin (C4): «از قبل در کتابخانه هست» without the
             # name is a dead end; naming it answers «این همانی که...؟»
             # and teaches the R3 story (same content, different names).
