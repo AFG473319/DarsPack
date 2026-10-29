@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- DarsPack mark: a lesson pack (stacked pages) held by a bookmark ribbon.
+       Flat fills only — no gradients, shadows or text, so it stays crisp
+       from 1024 px down to the 32 px taskbar size. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#2d3f6e"/>
+  <rect x="296" y="314" width="380" height="460" rx="28" fill="#d8c9ac"/>
+  <rect x="328" y="282" width="380" height="460" rx="28" fill="#e9dcc4"/>
+  <rect x="360" y="250" width="380" height="460" rx="28" fill="#f6edda"/>
+  <path d="M570 226H702V830L636 782L570 830Z" fill="#e0a83c"/>
+</svg>

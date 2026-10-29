@@ -108,6 +108,14 @@ def test_start_returns_urls_and_random_port(server):
     assert status == 200 and "درس‌پک" in body.decode("utf-8")
 
 
+def test_favicon_is_served(ro_server):
+    share, _ = ro_server
+    status, body, res = _exchange(f"http://127.0.0.1:{share.port}/favicon.ico")
+    assert status == 200
+    assert res.headers["Content-Type"] == "image/x-icon"
+    assert body[:4] == b"\x00\x00\x01\x00"
+
+
 def test_api_requires_pin(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"

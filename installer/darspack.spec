@@ -16,7 +16,9 @@ a = Analysis(
     pathex=[str(ROOT / "src")],
     binaries=[],
     datas=[(str(ROOT / "src" / "darspack" / "web" / "client"),
-            "darspack/web/client")],
+            "darspack/web/client"),
+           (str(ROOT / "src" / "darspack" / "assets"),
+            "darspack/assets")],
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],
@@ -31,6 +33,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="DarsPack",
+    icon=str(ROOT / "src" / "darspack" / "assets" / "icon" / "darspack.ico"),
     console=False,          # windowed app — no console flash
     disable_windowed_traceback=False,
 )

@@ -10,10 +10,10 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
-from .. import APP_NAME
+from .. import APP_NAME, asset_path
 from .. import i18n
 from ..core.library import Library
 
@@ -103,6 +103,7 @@ def run() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setWindowIcon(QIcon(str(asset_path("icon/darspack.ico"))))
     app.setLayoutDirection(
         Qt.RightToLeft if i18n.language() == "fa" else Qt.LeftToRight)
     app.setStyleSheet(DARK_QSS)

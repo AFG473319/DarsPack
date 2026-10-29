@@ -250,6 +250,8 @@ def _make_handler(server: ShareServer):
             route = parsed.path
             if route == "/" or route == "/index.html":
                 self._serve_client()
+            elif route == "/favicon.ico":
+                self._serve_favicon()
             elif route == "/api/manifest":
                 if self._pin_ok():
                     from ..web.sync import catalog_manifest
@@ -371,6 +373,13 @@ def _make_handler(server: ShareServer):
                 self._send(200, index.read_bytes(), "text/html; charset=utf-8")
             else:
                 self._send(500, "client missing".encode(), "text/plain")
+
+        def _serve_favicon(self) -> None:
+            icon = CLIENT_DIR / "favicon.ico"
+            if icon.is_file():
+                self._send(200, icon.read_bytes(), "image/x-icon")
+            else:
+                self._send(404, b"not found", "text/plain")
 
         def _serve_file(self, file_id: str) -> None:
             from ..core.normalize import latin_digits
