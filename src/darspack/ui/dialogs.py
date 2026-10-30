@@ -358,13 +358,15 @@ class ClassifyDialog(QDialog):
         self.table = QTableWidget(len(file_ids), len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(40)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
         self.table.setSelectionMode(QTableWidget.NoSelection)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, width in ((1, 140), (2, 80), (3, 100),
-                           (4, 80), (5, 130), (6, 130)):
+        for col, width in ((1, 150), (2, 85), (3, 110),
+                           (4, 85), (5, 130), (6, 140)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
 
@@ -427,25 +429,51 @@ class ClassifyDialog(QDialog):
                               year, tags_edit))
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(tr("classify_hint")))
+        layout.setSpacing(10)
 
-        # A2: bulk actions — the realistic import is a whole per-subject
-        # folder, so the FIRST row's value can be copied onto every row
-        # where that field is still empty/undecided. Per-row edits always
-        # win: the bulk pass runs once, here, before saving.
-        bulk = QHBoxLayout()
+        banner = QFrame()
+        banner.setObjectName("BannerCard")
+        banner_layout = QVBoxLayout(banner)
+        banner_layout.setContentsMargins(14, 10, 14, 10)
+        banner_layout.setSpacing(4)
+        title_lbl = QLabel(tr("classify_title"))
+        title_lbl.setObjectName("DialogTitle")
+        hint_lbl = QLabel(tr("classify_hint"))
+        hint_lbl.setObjectName("DialogHint")
+        hint_lbl.setWordWrap(True)
+        banner_layout.addWidget(title_lbl)
+        banner_layout.addWidget(hint_lbl)
+        layout.addWidget(banner)
+
+        # A2: bulk actions toolbar
+        bulk_bar = QFrame()
+        bulk_bar.setObjectName("BulkBar")
+        bulk_layout = QHBoxLayout(bulk_bar)
+        bulk_layout.setContentsMargins(12, 6, 12, 6)
+        bulk_layout.setSpacing(8)
+
+        bulk_caption = QLabel(tr("bulk_caption"))
+        bulk_caption.setObjectName("Muted")
+        bulk_caption.setStyleSheet("font-weight: 600;")
+        bulk_layout.addWidget(bulk_caption)
+
         for attr, key in (("subject", "bulk_subject"),
                           ("chapter", "bulk_chapter"),
                           ("kind", "bulk_kind"),
                           ("lesson", "bulk_lesson")):
             btn = QPushButton(tr(key))
+            btn.setObjectName("BulkBtn")
             btn.clicked.connect(lambda _, a=attr: self._bulk_apply(a))
-            bulk.addWidget(btn)
-        layout.addLayout(bulk)
+            bulk_layout.addWidget(btn)
+        bulk_layout.addStretch(1)
+        layout.addWidget(bulk_bar)
 
         layout.addWidget(self.table)
         buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 4, 0, 0)
+        buttons.setSpacing(10)
         later = QPushButton(tr("classify_later"))
+        later.setObjectName("Secondary")
         later.clicked.connect(self.reject)
         save = QPushButton(tr("classify_save"))
         save.setObjectName("Primary")
@@ -455,7 +483,7 @@ class ClassifyDialog(QDialog):
         buttons.addWidget(later)
         buttons.addStretch(1)
         layout.addLayout(buttons)
-        polish_dialog(self, 940)
+        polish_dialog(self, 980)
 
     # self.rows layout (positions 0–3 pinned by existing tests):
     # (file_id, subject, chapter, kind, lesson, year, tags)
@@ -1065,6 +1093,11 @@ class ActivityDialog(QDialog):
             self.event_table.setHorizontalHeaderLabels(
                 (tr("hist_time"), tr("hist_action"), tr("hist_detail")))
             self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
+            self.event_table.verticalHeader().setVisible(False)
+            self.event_table.verticalHeader().setDefaultSectionSize(38)
+            self.event_table.setShowGrid(False)
+            self.event_table.setAlternatingRowColors(True)
+            self.event_table.setSelectionBehavior(QTableWidget.SelectRows)
             self.event_table.horizontalHeader().setStretchLastSection(True)
             from .main_window import jalali_date
             for i, ev in enumerate(events):
@@ -1094,8 +1127,13 @@ class ActivityDialog(QDialog):
             from PySide6.QtWidgets import QHeaderView
             self.rule_table = QTableWidget(len(rules), 3)
             self.rule_table.setHorizontalHeaderLabels(
-                ("#", tr("meta_subject"), tr("hints_hits")))
+                (tr("hints_token"), tr("meta_subject"), tr("hints_hits_col")))
             self.rule_table.setEditTriggers(QTableWidget.NoEditTriggers)
+            self.rule_table.verticalHeader().setVisible(False)
+            self.rule_table.verticalHeader().setDefaultSectionSize(38)
+            self.rule_table.setShowGrid(False)
+            self.rule_table.setAlternatingRowColors(True)
+            self.rule_table.setSelectionBehavior(QTableWidget.SelectRows)
             self.rule_table.horizontalHeader().setSectionResizeMode(
                 0, QHeaderView.Stretch)
             for i, rule in enumerate(rules):
@@ -1106,6 +1144,7 @@ class ActivityDialog(QDialog):
                         num(rule["hits"]))))
             layout.addWidget(self.rule_table)
             forget = QPushButton(tr("hints_forget"))
+            forget.setObjectName("Danger")
             forget.clicked.connect(self._forget_selected_rule)
             layout.addWidget(forget)
         else:

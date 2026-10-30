@@ -1,4 +1,4 @@
-"""The visual system (سامانهٔ ظاهر): one palette, one QSS, one font.
+"""The visual system (سامانه‌ی ظاهر): one palette, one QSS, one font.
 
 Every colour and size the UI uses lives here. Widgets never hard-code a
 hex value; they use an objectName that the stylesheet paints. That keeps
@@ -81,6 +81,23 @@ QPushButton#WarnPill {
 }
 QPushButton#WarnPill:hover { background: #4a3b1d; }
 
+QFrame#BannerCard {
+    background: $surface; border: 1px solid $border_soft;
+    border-radius: $radius; padding: 12px 16px;
+}
+QFrame#BulkBar {
+    background: $surface; border: 1px solid $border;
+    border-radius: $radius; padding: 6px 12px;
+}
+QPushButton#BulkBtn {
+    background: $surface_2; color: $text; border: 1px solid $border;
+    border-radius: 6px; padding: 5px 12px; font-size: 9.5pt;
+}
+QPushButton#BulkBtn:hover {
+    background: $surface_3; border-color: $accent; color: $accent_text;
+}
+QPushButton#BulkBtn:pressed { background: $primary; }
+
 QLineEdit, QComboBox, QSpinBox, QTextEdit {
     background: $surface_2; border: 1px solid $border;
     border-radius: $radius; padding: 6px 10px; min-height: 20px;
@@ -117,13 +134,22 @@ QSpinBox::up-button, QSpinBox::down-button {
     width: 18px; border: 0; background: transparent;
 }
 QCheckBox { spacing: 8px; }
-QCheckBox::indicator {
+QCheckBox::indicator, QAbstractItemView::indicator {
     width: 18px; height: 18px; border-radius: 5px;
     border: 1px solid $border; background: $surface_2;
 }
-QCheckBox::indicator:hover { border-color: $muted; }
-QCheckBox::indicator:checked {
-    background: $accent; border: 2px solid $bg;
+QCheckBox::indicator:hover, QAbstractItemView::indicator:hover {
+    border-color: $muted;
+}
+QCheckBox::indicator:checked, QAbstractItemView::indicator:checked {
+    background: $accent; border: 1px solid $accent;
+    image: url($check_icon);
+}
+QCheckBox::indicator:checked:hover, QAbstractItemView::indicator:checked:hover {
+    background: $accent_hover; border: 1px solid $accent_hover;
+}
+QCheckBox::indicator:disabled, QAbstractItemView::indicator:disabled {
+    border-color: $border_soft; background: $surface;
 }
 QCheckBox:focus { color: $text; }
 QTextEdit { padding: 8px 10px; }
@@ -200,11 +226,30 @@ QTableWidget::item {
     padding: 0 10px; border-bottom: 1px solid $border_soft;
 }
 QTableWidget::item:selected { background: $selection; color: $text; }
+
+QTableWidget QComboBox, QTableWidget QSpinBox, QTableWidget QLineEdit {
+    background: $surface_2; border: 1px solid $border_soft;
+    border-radius: 6px; padding: 3px 8px; min-height: 26px;
+}
+QTableWidget QComboBox:hover, QTableWidget QSpinBox:hover, QTableWidget QLineEdit:hover {
+    border-color: $muted;
+}
+QTableWidget QComboBox:focus, QTableWidget QSpinBox:focus, QTableWidget QLineEdit:focus {
+    border-color: $accent; background: $surface_3;
+}
+
+QHeaderView {
+    background: $header; border: none;
+}
 QHeaderView::section {
     background: $header; color: $muted; padding: 9px 10px;
     border: none; border-bottom: 1px solid $border; font-weight: 600;
 }
+QHeaderView::section:vertical {
+    background: $header; color: $muted; border: none; border-left: 1px solid $border;
+}
 QTableCornerButton::section { background: $header; border: none; }
+QAbstractScrollArea::corner { background: $surface; border: none; }
 
 QScrollBar:vertical {
     background: transparent; width: 10px; margin: 2px;
@@ -272,4 +317,6 @@ def build_qss(palette: dict | None = None) -> str:
     values = dict(PALETTE)
     values.update(METRICS)
     values.update(palette or {})
+    check_icon = asset_path("icons/check.svg")
+    values["check_icon"] = str(check_icon).replace("\\", "/")
     return _QSS.substitute(values)
