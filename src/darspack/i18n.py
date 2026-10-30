@@ -161,6 +161,10 @@ STRINGS = {
         "hist_action": "فعالیت",
         "hist_detail": "جزئیات",
         "share_new_files": "{} فایل جدید از زمان شروع اشتراک",
+        "menu_open": "باز کردن فایل",
+        "menu_reveal": "نمایش در پوشه",
+        "menu_copy_name": "کپی نام فایل",
+        "menu_copy_path": "کپی مسیر فایل",
     },
     "en": {
         "app_title": "DarsPack",
@@ -312,6 +316,10 @@ STRINGS = {
         "hist_action": "Activity",
         "hist_detail": "Detail",
         "share_new_files": "{} new files since sharing started",
+        "menu_open": "Open file",
+        "menu_reveal": "Show in folder",
+        "menu_copy_name": "Copy file name",
+        "menu_copy_path": "Copy file path",
     },
 }
 

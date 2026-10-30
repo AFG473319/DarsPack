@@ -586,3 +586,70 @@ def test_delete_collision_preserves_extension(tmp_path, qapp, monkeypatch):
             assert collided_file.suffix == ".pdf"
         finally:
             win.lib.close()
+
+
+def test_row_menu_dismiss_fires_no_actions(tmp_path, qapp, monkeypatch):
+    """Dismissing the row context menu (Esc / click away) must return None
+    and NEVER trigger any actions (e.g. bulk edit or open)."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "a.pdf"
+        src.write_bytes(b"content")
+        import_file(lib, src)
+
+        class DismissMenu:
+            def __init__(self, parent=None):
+                self.actions = []
+            def addAction(self, text):
+                action = object()
+                self.actions.append((text, action))
+                return action
+            def addSeparator(self):
+                pass
+            def exec(self, *_args):
+                return None  # User dismissed the menu
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            called = []
+            monkeypatch.setattr(mw_module, "QMenu", DismissMenu)
+            monkeypatch.setattr(win, "bulk_edit_selected", lambda: called.append("bulk"))
+            monkeypatch.setattr(win, "open_selected_file", lambda: called.append("open"))
+            monkeypatch.setattr(win, "delete_selected_files", lambda: called.append("delete"))
+
+            click = win.table.visualItemRect(win.table.item(0, 0)).center()
+            win._show_row_menu(click)
+
+            assert called == [], f"Expected no action on menu dismiss, got {called}"
+        finally:
+            win.lib.close()
+
+
+def test_header_click_sorts_table(tmp_path, qapp):
+    """Clicking column header sorts table by logical sort key."""
+    with Library(tmp_path / "lib") as lib:
+        f1 = tmp_path / "small.pdf"
+        f1.write_bytes(b"small")
+        import_file(lib, f1)
+
+        f2 = tmp_path / "large.pdf"
+        f2.write_bytes(b"large" * 100)
+        import_file(lib, f2)
+
+    win = mw_module.MainWindow(tmp_path / "lib",
+                               {"language": "fa", "font_size": 10,
+                                "library": str(tmp_path / "lib")},
+                               tmp_path / "settings.json")
+    try:
+        # Column 4 is size
+        win._on_header_clicked(4)
+        row0_name = win.table.item(0, 0).text()
+        assert row0_name == "small.pdf"
+
+        win._on_header_clicked(4)
+        row0_name = win.table.item(0, 0).text()
+        assert row0_name == "large.pdf"
+    finally:
+        win.lib.close()

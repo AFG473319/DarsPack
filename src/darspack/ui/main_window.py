@@ -18,6 +18,7 @@ from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
     QStatusBar, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
@@ -88,6 +89,22 @@ def jalali_date(iso: str) -> str:
         return iso          # bad input never crashes the table — passes through
 
 
+class TableSortItem(QTableWidgetItem):
+    """QTableWidgetItem with support for logical sort keys stored in SORT_KEY_ROLE."""
+    SORT_KEY_ROLE = Qt.UserRole + 1
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, QTableWidgetItem):
+            my_key = self.data(self.SORT_KEY_ROLE)
+            other_key = other.data(self.SORT_KEY_ROLE)
+            if my_key is not None and other_key is not None:
+                try:
+                    return my_key < other_key
+                except TypeError:
+                    pass
+        return super().__lt__(other)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, library_root: Path, settings: dict, settings_path: Path):
         super().__init__()
@@ -106,6 +123,9 @@ class MainWindow(QMainWindow):
         self.resize(1150, 720)
         self.setMinimumSize(1000, 600)
         self._file_icon = icons.icon("file-text", theme.PALETTE["muted"], 16)
+        self._pdf_icon = icons.icon("file-text", theme.PALETTE["accent"], 16)
+        self._archive_icon = icons.icon("archive", theme.PALETTE["muted"], 16)
+        self._package_icon = icons.icon("package", theme.PALETTE["accent"], 16)
 
         # --- search + filter state -----------------------------------
         # A shell puts the magnifier on the leading (right) edge in RTL,
@@ -293,6 +313,8 @@ class MainWindow(QMainWindow):
                            (4, 100), (5, 120), (6, 100)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
+        self._sort_orders: dict[int, Qt.SortOrder] = {}
+        header.sectionClicked.connect(self._on_header_clicked)
         self.table.doubleClicked.connect(self.open_selected_file)
         # E3: right-click a row → «حذف از کتابخانه…» (confirmed, and the
         # file is MOVED to files/.trash — never erased)
@@ -415,7 +437,28 @@ class MainWindow(QMainWindow):
         self.kind_combo.blockSignals(False)
         self.year_combo.blockSignals(False)
 
+    def _file_icon_for(self, name: str):
+        ext = Path(name).suffix.lower()
+        if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
+            return self._archive_icon
+        if ext == ".darspack":
+            return self._package_icon
+        if ext == ".pdf":
+            return self._pdf_icon
+        return self._file_icon
+
+    def _on_header_clicked(self, logical_index: int) -> None:
+        """User clicked a column header: toggle sort direction and sort items logically."""
+        current_order = self._sort_orders.get(logical_index, Qt.DescendingOrder)
+        new_order = Qt.AscendingOrder if current_order == Qt.DescendingOrder else Qt.DescendingOrder
+        self._sort_orders[logical_index] = new_order
+        self.table.sortItems(logical_index, new_order)
+        self.table.horizontalHeader().setSortIndicator(logical_index, new_order)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+
     def _search_changed(self) -> None:
+        self._sort_orders.clear()
+        self.table.horizontalHeader().setSortIndicatorShown(False)
         self._search_timer.start()      # restart the countdown per keystroke
 
     def _display_strs_for(self, row) -> tuple:
@@ -452,15 +495,28 @@ class MainWindow(QMainWindow):
                       chapter_lesson_display(row["chapter"], row["lesson"]),
                       row["kind"] or "—", size_str,
                       persian_digits(date_str), persian_digits(year_str)]
+            sort_keys = [
+                row["original_name"].lower(),
+                row["subject_name"] or "",
+                (row["chapter"] or 0, row["lesson"] or 0),
+                row["kind"] or "",
+                row["size_bytes"] or 0,
+                row["imported_at"] or "",
+                row["school_year"] or "",
+            ]
             for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
+                item = TableSortItem(value)
+                item.setData(TableSortItem.SORT_KEY_ROLE, sort_keys[col])
                 if col == 0:
                     item.setData(Qt.UserRole, row["id"])
-                    item.setIcon(self._file_icon)
+                    item.setIcon(self._file_icon_for(row["original_name"]))
                     item.setToolTip(row["original_name"])
                 elif col == 1:
                     item.setToolTip(row["subject_name"] or "—")
                 self.table.setItem(i, col, item)
+        active_col = self.table.horizontalHeader().sortIndicatorSection()
+        if self.table.horizontalHeader().isSortIndicatorShown() and active_col in self._sort_orders:
+            self.table.sortItems(active_col, self._sort_orders[active_col])
         self.table.setUpdatesEnabled(True)
         self._update_empty_state(len(rows))
         self._update_action_states()
@@ -587,6 +643,43 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(
             str(self.lib.stored_path(row))))
 
+    def reveal_selected_file(self) -> None:
+        """Reveal the selected file in the system file manager."""
+        file_id = self.selected_file_id()
+        if file_id is None:
+            return
+        row = self.lib.conn.execute(
+            "SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+        if not row:
+            return
+        path = self.lib.stored_path(row)
+        if not path.exists():
+            return
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", f'/select,"{path}"'])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+    def copy_selected_names(self) -> None:
+        """Copy original filenames of selected files to clipboard."""
+        rows = self._selected_rows()
+        if not rows:
+            return
+        QApplication.clipboard().setText("\n".join(r["original_name"] for r in rows))
+
+    def copy_selected_paths(self) -> None:
+        """Copy full stored filesystem paths of selected files to clipboard."""
+        rows = self._selected_rows()
+        if not rows:
+            return
+        paths = []
+        for r in rows:
+            rec = self.lib.conn.execute(
+                "SELECT stored_name FROM files WHERE id=?", (r["id"],)).fetchone()
+            if rec and rec["stored_name"]:
+                paths.append(str(self.lib.files_dir / rec["stored_name"]))
+        QApplication.clipboard().setText("\n".join(paths))
+
     def _show_row_menu(self, pos) -> None:
         """Right-click anywhere on a row acts on the selection.
 
@@ -605,16 +698,49 @@ class MainWindow(QMainWindow):
         if row not in selected:
             self.table.clearSelection()
             self.table.selectRow(row)
-        if not self._selected_rows():
+        rows = self._selected_rows()
+        if not rows:
             return
+
         menu = QMenu(self)
-        bulk = menu.addAction(tr("bulk_edit_menu"))
+
+        def add_item(text: str, icon_name: str | None = None, icon_color: str | None = None):
+            act = menu.addAction(text)
+            if icon_name and hasattr(act, "setIcon"):
+                color = icon_color or theme.PALETTE["text"]
+                act.setIcon(icons.icon(icon_name, color, 16))
+            return act
+
+        open_act = reveal_act = edit_act = copy_name_act = copy_path_act = bulk_act = None
+        if len(rows) == 1:
+            open_act = add_item(tr("menu_open"), "external-link")
+            reveal_act = add_item(tr("menu_reveal"), "folder-open")
+            edit_act = add_item(tr("btn_edit_meta"), "file-text")
+            copy_name_act = add_item(tr("menu_copy_name"), "copy")
+            copy_path_act = add_item(tr("menu_copy_path"), "copy")
+        else:
+            bulk_act = add_item(tr("bulk_edit_menu"), "file-text")
+            copy_name_act = add_item(tr("menu_copy_name"), "copy")
+
         menu.addSeparator()
-        delete = menu.addAction(tr("delete_menu"))
+        delete_act = add_item(tr("delete_menu"), "trash-2", theme.PALETTE["danger"])
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
-        if chosen == delete:
+        if chosen is None:
+            return
+
+        if chosen == delete_act:
             self.delete_selected_files()
-        elif chosen == bulk:
+        elif chosen == open_act:
+            self.open_selected_file()
+        elif chosen == reveal_act:
+            self.reveal_selected_file()
+        elif chosen == edit_act:
+            self.edit_metadata()
+        elif chosen == copy_name_act:
+            self.copy_selected_names()
+        elif chosen == copy_path_act:
+            self.copy_selected_paths()
+        elif chosen == bulk_act:
             self.bulk_edit_selected()
 
     def delete_selected_files(self) -> None:
