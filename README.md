@@ -4,7 +4,7 @@
 
 DarsPack (درس‌پک) helps Iranian middle-school students keep their class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) in one findable place. It is a Windows desktop app that also serves a phone-friendly web client over local Wi-Fi. Persian-first RTL interface with an English toggle.
 
-> Status: **working v0.1** — core engine, RTL desktop UI, LAN phone client, and Windows build are implemented and covered by an automated test suite (250+ tests); see `docs/limitations.md` for known limitations.
+> Status: **working v0.1** — core engine, brand RTL desktop UI, LAN phone client, and the Windows build are implemented and covered by 300+ automated tests (317 at the 2026-10-29 UI round); see `docs/limitations.md` for known limitations.
 
 ## What works
 
@@ -14,7 +14,7 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 - **Manual delete and bulk actions** — Delete key, «حذف» button or right-click anywhere on a row; select several files (Ctrl/Shift) to remove them together (moved to the library's `.trash` folder, never erased) or reclassify them in one form.
 - Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
 - Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, download, multi-file upload) with a web-app manifest for «Add to Home screen».
-- Persian-first dark RTL UI with the bundled Vazirmatn typeface and one consistent icon set, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
+- Persian-first dark RTL UI with the bundled Vazirmatn typeface, one consistent icon set, a compact app bar and toolbar, kind badges, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
 
 ## Key ideas
 
@@ -31,6 +31,7 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 | `docs/architecture.md` | Module map, SQLite schema, package format, LAN protocol, test strategy |
 | `docs/dependencies.md` | Dependency register (what / why / licence / size) |
 | `docs/limitations.md` | Known limitations and measured performance on the target laptop |
+| `docs/feedback-setup.md` | Optional online feedback endpoint setup |
 ***REMOVED***
 | `eval/benchmark-plan.md` | Controlled benchmark: find-time, duplicate/conflict detection accuracy, package verification |
 | `installer/` | PyInstaller spec + one-command build script (`build.bat`) |
@@ -41,7 +42,7 @@ From source (Python 3.12+, SQLite and the packages in `docs/dependencies.md`):
 
 ```
 python -m venv .venv
-.venv/Scripts/pip install PySide6-Essentials jdatetime pytest
+.venv/Scripts/pip install PySide6-Essentials jdatetime qrcode pytest
 .venv/Scripts/pip install -e .          # or add src/ to PYTHONPATH
 .venv/Scripts/python -m darspack
 ```

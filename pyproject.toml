@@ -2,7 +2,7 @@
 name = "darspack"
 version = "0.1.0"
 description = "Offline-first, Persian-first organizer for school materials (درس‌پک)"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = ["jdatetime>=5.0"]
 
 [project.optional-dependencies]
