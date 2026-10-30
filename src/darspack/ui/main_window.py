@@ -8,6 +8,7 @@ SQL itself. Heavy work (import, package import) runs in workers.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import os
 import subprocess
 import sys
@@ -222,6 +223,8 @@ class MainWindow(QMainWindow):
         self.packages_menu = QMenu(self)
         self._menu_action(self.packages_menu, tr("btn_export"), "download",
                           self.export_package)
+        self._menu_action(self.packages_menu, tr("btn_exam_pack"), "package",
+                          self.open_exam_pack_dialog)
         self._menu_action(self.packages_menu, tr("btn_verify"), "circle-check",
                           self.verify_package)
         self._menu_action(self.packages_menu, tr("btn_import_pkg"),
@@ -248,6 +251,8 @@ class MainWindow(QMainWindow):
             self.more_menu, tr("btn_delete"), "trash-2",
             self.delete_selected_files)
         self.edit_action.setEnabled(False)
+        self._menu_action(self.more_menu, tr("btn_trash_bin"), "trash-2",
+                          self.open_trash_dialog)
         self.delete_action.setEnabled(False)
         self.more_menu.addSeparator()
         self._menu_action(self.more_menu, tr("btn_history"), "history",
@@ -840,6 +845,8 @@ class MainWindow(QMainWindow):
         from ..core import db
         trash_dir = self.lib.files_dir / ".trash"
         trash_dir.mkdir(exist_ok=True)
+        trash_meta_dir = self.lib.files_dir / ".trash_meta"
+        trash_meta_dir.mkdir(exist_ok=True)
         for row in rows:
             stored_p = Path(row["stored_name"])
             dest = trash_dir / row["stored_name"]
@@ -849,6 +856,30 @@ class MainWindow(QMainWindow):
                 dest = trash_dir / f"{stored_p.stem}~{n}{stored_p.suffix}"
             try:
                 os.replace(self.lib.stored_path(row), dest)  # same volume → atomic
+                tag_rows = self.lib.conn.execute(
+                    "SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id WHERE ft.file_id=?",
+                    (row["id"],)
+                ).fetchall()
+                file_tags = [r[0] for r in tag_rows]
+                meta = {
+                    "original_name": row["original_name"],
+                    "stored_name": row["stored_name"],
+                    "subject_id": row["subject_id"],
+                    "subject_name": row["subject_name"],
+                    "chapter": row["chapter"],
+                    "lesson": row["lesson"] if "lesson" in row.keys() else None,
+                    "kind": row["kind"],
+                    "school_year": row["school_year"],
+                    "sha256": row["sha256"],
+                    "size": row["size_bytes"],
+                    "imported_at": row["imported_at"] if "imported_at" in row.keys() else None,
+                    "deleted_at": _dt.datetime.now().isoformat(),
+                    "note": row["note"] if "note" in row.keys() else "",
+                    "tags": file_tags,
+                }
+                meta_dest = trash_meta_dir / f"{dest.name}.json"
+                meta_dest.write_text(
+                    json.dumps(meta, ensure_ascii=False), encoding="utf-8")
             except FileNotFoundError:
                 pass                 # already gone; the row still leaves
             with self.lib.conn:
@@ -925,6 +956,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP_NAME, text)
         finally:
             self._import_busy = False
+
+    def open_trash_dialog(self) -> None:
+        dialog = dialogs.TrashDialog(self, self.lib)
+        dialog.exec()
+        if dialog.restored_any:
+            self.reload_filters()
+            self.refresh()
+
+    def open_exam_pack_dialog(self) -> None:
+        dialogs.ExamPackDialog(self, self.lib).exec()
 
     def export_package(self) -> None:
         selected_scope = [r["id"] for r in self._selected_rows()]

@@ -31,6 +31,7 @@ from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
 from .workers import ImportWorker
+from . import theme
 
 
 def text_dialog(parent, title: str, text: str) -> None:
@@ -1039,6 +1040,9 @@ ACTION_FA = {
     "healthcheck": "بررسی سلامت فایل‌ها",
     "seed_subjects": "درس‌های پیش‌فرض",
     "backup": "پشتیبان‌گیری",
+    "restore": "بازیابی از سطل زباله",
+    "empty_trash": "پاک‌سازی سطل زباله",
+    "exam_pack": "بسته شب امتحان",
 }
 
 
@@ -1255,3 +1259,343 @@ class StatsDialog(QDialog):
         buttons.addStretch(1)
         layout.addLayout(buttons)
         polish_dialog(self, 520)
+
+
+class TrashDialog(QDialog):
+    """View deleted files in files/.trash/ with one-click restore and safe empty."""
+
+    def __init__(self, parent, lib):
+        super().__init__(parent)
+        self.lib = lib
+        self.restored_any = False
+        self.setWindowTitle(tr("trash_title"))
+        self.resize(750, 480)
+
+        layout = QVBoxLayout(self)
+
+        headers = [tr("trash_col_name"), tr("trash_col_subject"), tr("trash_col_size"), tr("trash_col_date")]
+        self.table = QTableWidget(0, len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 120)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table.setColumnWidth(2, 90)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.table.setColumnWidth(3, 130)
+
+        layout.addWidget(self.table)
+
+        self.empty_label = QLabel(tr("trash_empty_state"))
+        self.empty_label.setAlignment(Qt.AlignCenter)
+        self.empty_label.setStyleSheet(f"color: {theme.PALETTE['muted']}; padding: 20px; font-size: 13px;")
+        layout.addWidget(self.empty_label)
+
+        btn_box = QHBoxLayout()
+        self.btn_restore = QPushButton(tr("trash_restore_btn"))
+        self.btn_restore.clicked.connect(self._restore_selected)
+        btn_box.addWidget(self.btn_restore)
+
+        self.btn_empty = QPushButton(tr("trash_empty_btn"))
+        self.btn_empty.setObjectName("Danger")
+        self.btn_empty.setStyleSheet(f"color: {theme.PALETTE['danger']};")
+        self.btn_empty.clicked.connect(self._empty_trash)
+        btn_box.addWidget(self.btn_empty)
+
+        btn_box.addStretch()
+        btn_close = QPushButton(tr("close"))
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+
+        layout.addLayout(btn_box)
+        polish_dialog(self, 650)
+        self._reload()
+
+    def _reload(self) -> None:
+        from .main_window import human_size, jalali_date
+        items = self.lib.list_trash()
+        self.trash_items = items
+        self.table.setRowCount(len(items))
+        if not items:
+            self.table.hide()
+            self.empty_label.show()
+            self.btn_restore.setEnabled(False)
+            self.btn_empty.setEnabled(False)
+            return
+
+        self.table.show()
+        self.empty_label.hide()
+        self.btn_restore.setEnabled(True)
+        self.btn_empty.setEnabled(True)
+
+        for row, it in enumerate(items):
+            name_item = QTableWidgetItem(it["original_name"])
+            name_item.setData(Qt.UserRole, it["trash_name"])
+            name_item.setToolTip(it["trash_name"])
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(row, 0, name_item)
+
+            sub_item = QTableWidgetItem(it["subject_name"] or "—")
+            sub_item.setTextAlignment(Qt.AlignCenter)
+            sub_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(row, 1, sub_item)
+
+            size_item = QTableWidgetItem(human_size(it["size"]))
+            size_item.setTextAlignment(Qt.AlignCenter)
+            size_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(row, 2, size_item)
+
+            date_str = jalali_date(it["deleted_at"]) if it.get("deleted_at") else "—"
+            date_item = QTableWidgetItem(date_str)
+            date_item.setTextAlignment(Qt.AlignCenter)
+            date_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(row, 3, date_item)
+
+    def _restore_selected(self) -> None:
+        selected_rows = sorted(set(idx.row() for idx in self.table.selectedIndexes()))
+        if not selected_rows:
+            QMessageBox.information(self, tr("trash_title"), tr("trash_no_selection"))
+            return
+
+        restored_count = 0
+        failed_names = []
+        for r in selected_rows:
+            item = self.table.item(r, 0)
+            if item is None:
+                continue
+            trash_name = item.data(Qt.UserRole)
+            try:
+                self.lib.restore_trash_file(trash_name)
+                restored_count += 1
+            except Exception:
+                failed_names.append(item.text())
+
+        if restored_count > 0:
+            self.restored_any = True
+            QMessageBox.information(
+                self, tr("trash_title"),
+                tr("trash_restore_done").format(i18n.num(restored_count)))
+            self._reload()
+        if failed_names:
+            QMessageBox.warning(
+                self, tr("trash_title"),
+                tr("trash_restore_failed").format(i18n.num(len(failed_names))) + f"\n({', '.join(failed_names[:3])})")
+
+    def _empty_trash(self) -> None:
+        ans = QMessageBox.question(
+            self, tr("trash_empty_btn"), tr("trash_empty_confirm"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if ans == QMessageBox.Yes:
+            count = self.lib.empty_trash()
+            QMessageBox.information(
+                self, tr("trash_empty_btn"),
+                tr("trash_empty_done").format(i18n.num(count)))
+            self._reload()
+
+
+class ExamPackDialog(QDialog):
+    """Build a curated exam revision package ('بسته‌ساز شب امتحان') for a subject."""
+
+    EXAM_KINDS = {"نمونه‌سوال", "جزوه", "کاربرگ"}
+
+    def __init__(self, parent, lib):
+        super().__init__(parent)
+        self.lib = lib
+        self.setWindowTitle(tr("exam_pack_title"))
+        self.resize(750, 520)
+
+        layout = QVBoxLayout(self)
+
+        filter_card = QFrame()
+        filter_card.setObjectName("filterCard")
+        filter_card.setStyleSheet(
+            f"QFrame#filterCard {{ background-color: {theme.PALETTE['surface_2']}; "
+            f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: 8px; }}"
+        )
+        card_layout = QHBoxLayout(filter_card)
+        card_layout.setContentsMargins(12, 8, 12, 8)
+        card_layout.setSpacing(14)
+
+        card_layout.addWidget(QLabel(tr("exam_pack_subject")))
+        self.subject_combo = QComboBox()
+        self.subject_combo.setMinimumWidth(160)
+        self.subject_combo.addItem(tr("all_subjects"), "")
+        subjects = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name")]
+        for s in subjects:
+            self.subject_combo.addItem(s, s)
+        self.subject_combo.currentIndexChanged.connect(self._reload_files)
+        card_layout.addWidget(self.subject_combo)
+
+        card_layout.addSpacing(15)
+        self.exam_only_check = QCheckBox(tr("exam_pack_filter_kinds"))
+        self.exam_only_check.setChecked(True)
+        self.exam_only_check.toggled.connect(self._reload_files)
+        card_layout.addWidget(self.exam_only_check)
+        card_layout.addStretch()
+
+        layout.addWidget(filter_card)
+
+        headers = ["✓", tr("col_name"), tr("col_subject"), tr("col_kind"), tr("col_chapter"), tr("col_size")]
+        self.table = QTableWidget(0, len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 36)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        for col, width in ((2, 120), (3, 110), (4, 90), (5, 90)):
+            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            self.table.setColumnWidth(col, width)
+        self.table.itemChanged.connect(self._on_item_changed)
+        layout.addWidget(self.table)
+
+        self.summary_label = QLabel()
+        self.summary_label.setStyleSheet(f"color: {theme.PALETTE['muted']}; font-size: 12.5px; padding: 2px 4px;")
+        layout.addWidget(self.summary_label)
+
+        btn_box = QHBoxLayout()
+        btn_create = QPushButton(tr("exam_pack_btn_create"))
+        btn_create.setObjectName("Primary")
+        btn_create.setStyleSheet(
+            f"background-color: {theme.PALETTE['primary']}; color: {theme.PALETTE['text']}; "
+            f"font-weight: bold; padding: 6px 18px; border-radius: 6px;"
+        )
+        btn_create.clicked.connect(self._create_package)
+        btn_box.addWidget(btn_create)
+
+        btn_box.addStretch()
+        btn_cancel = QPushButton(tr("cancel"))
+        btn_cancel.setObjectName("Secondary")
+        btn_cancel.setStyleSheet("padding: 6px 14px; border-radius: 6px;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancel)
+
+        layout.addLayout(btn_box)
+        polish_dialog(self, 680)
+        self._updating = False
+        self._reload_files()
+
+    def _reload_files(self) -> None:
+        from .main_window import human_size
+        self._updating = True
+        subject = self.subject_combo.currentData()
+        exam_only = self.exam_only_check.isChecked()
+
+        query = """SELECT f.*, s.name AS subject_name FROM files f
+                   LEFT JOIN subjects s ON s.id=f.subject_id
+                   WHERE f.available=1"""
+        params = []
+        if subject:
+            query += " AND s.name=?"
+            params.append(subject)
+        query += " ORDER BY s.name, f.kind, f.original_name"
+
+        rows = self.lib.conn.execute(query, params).fetchall()
+        matching_rows = []
+        for r in rows:
+            if exam_only:
+                kind = r["kind"] or ""
+                orig = r["original_name"] or ""
+                is_exam = (any(k in kind for k in self.EXAM_KINDS) or
+                           any(k in orig for k in ("امتحان", "سوال", "سؤال", "خلاصه", "فرمول", "جزوه")))
+                if not is_exam:
+                    continue
+            matching_rows.append(r)
+
+        self.table.setRowCount(len(matching_rows))
+        for i, r in enumerate(matching_rows):
+            chk_item = QTableWidgetItem()
+            chk_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            chk_item.setCheckState(Qt.Checked)
+            chk_item.setData(Qt.UserRole, r["id"])
+            self.table.setItem(i, 0, chk_item)
+
+            name_item = QTableWidgetItem(r["original_name"])
+            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(i, 1, name_item)
+
+            sub_item = QTableWidgetItem(r["subject_name"] or "—")
+            sub_item.setTextAlignment(Qt.AlignCenter)
+            sub_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(i, 2, sub_item)
+
+            kind_item = QTableWidgetItem(r["kind"] or "—")
+            kind_item.setTextAlignment(Qt.AlignCenter)
+            kind_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(i, 3, kind_item)
+
+            chap_item = QTableWidgetItem(persian_digits(str(r["chapter"])) if r["chapter"] is not None else "—")
+            chap_item.setTextAlignment(Qt.AlignCenter)
+            chap_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(i, 4, chap_item)
+
+            sz_item = QTableWidgetItem(human_size(r["size_bytes"]))
+            sz_item.setData(Qt.UserRole, r["size_bytes"])
+            sz_item.setTextAlignment(Qt.AlignCenter)
+            sz_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.table.setItem(i, 5, sz_item)
+
+        self._updating = False
+        self._update_summary()
+
+    def _on_item_changed(self, item) -> None:
+        if not self._updating and item.column() == 0:
+            self._update_summary()
+
+    def _selected_file_ids_and_size(self) -> tuple[list[int], int]:
+        ids = []
+        total_size = 0
+        for r in range(self.table.rowCount()):
+            chk_item = self.table.item(r, 0)
+            if chk_item and chk_item.checkState() == Qt.Checked:
+                ids.append(chk_item.data(Qt.UserRole))
+                sz_item = self.table.item(r, 5)
+                if sz_item:
+                    total_size += sz_item.data(Qt.UserRole) or 0
+        return ids, total_size
+
+    def _update_summary(self) -> None:
+        from .main_window import human_size
+        ids, total_sz = self._selected_file_ids_and_size()
+        self.summary_label.setText(
+            tr("exam_pack_summary_count").format(
+                i18n.num(len(ids)), human_size(total_sz)))
+
+    def _create_package(self) -> None:
+        ids, _ = self._selected_file_ids_and_size()
+        if not ids:
+            QMessageBox.information(
+                self, tr("exam_pack_title"), tr("exam_pack_no_files"))
+            return
+
+        subject = self.subject_combo.currentText()
+        if not self.subject_combo.currentData():
+            subject = "جامع"
+        default_name = f"بسته-امتحان-{subject}-{datetime.now():%Y%m%d}.zip"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, tr("exam_pack_title"), default_name, "ZIP (*.zip)")
+        if not path:
+            return
+
+        info = manifest_core.export_package(
+            self.lib.conn, self.lib.files_dir, ids, path)
+        with self.lib.conn:
+            db.log(self.lib.conn, "exam_pack", f"{info['count']} files -> {path}")
+        QMessageBox.information(
+            self, tr("exam_pack_title"),
+            tr("exam_pack_done").format(i18n.num(info["count"])))
+        self.accept()

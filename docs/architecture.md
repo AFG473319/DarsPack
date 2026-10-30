@@ -112,7 +112,9 @@ Storage layout (⚖️ flat, no subject folders — the catalog *is* the organiz
 ```
 <library root, default Documents\DarsPackLibrary, user-relocatable>
 ├── catalog.db
-└── files/000001.pdf, 000002.docx, …     # id + original extension only
+├── files/000001.pdf, 000002.docx, …     # id + original extension only
+├── files/.trash/                       # deleted files moved here (safe storage)
+└── files/.trash_meta/<name>.json       # deleted file metadata sidecars (tags, original_name, imported_at)
 ```
 
 Import is crash-safe: copy to `files/tmp_…` → verify size → atomic rename → single DB transaction → activity-log entry.
@@ -156,6 +158,15 @@ package.zip
 
 ### 4.6 Jalali school year
 `school_year(jdate) → '1405-1406'` (Mehr 1 starts a year). Tests: year boundary on 1 Mehr, leap Esfand 29 (1399/1403), late-Shahrivar files.
+
+### 4.7 Trash Bin & Safe Restore (سطل زباله)
+When files are deleted from the library, they are not permanently destroyed. Instead, the physical file is moved to `files/.trash/`, its row in `files` is removed (cascading `file_tags`), and an atomic metadata sidecar is saved in `files/.trash_meta/{trash_name}.json` containing the original filename, stored name, subject, chapter, lesson, kind, tags, and original `imported_at` timestamp.
+- **TrashDialog:** Displays all trashed files with original names, subjects, sizes, and Jalali deletion dates.
+- **Restore:** Restores the file atomically to `files/`, handles name collisions (`~1`, `~2`), restores catalog metadata, and re-associates all tags.
+- **Empty Trash:** Permanently purges files and sidecars from disk with confirmation.
+
+### 4.8 Exam Revision Pack Builder (بسته‌ساز شب امتحان)
+Allows students and teachers to curate revision bundles (`ExamPackDialog`) filtered by subject and exam-oriented material (`نمونه‌سوال`, `جزوه`, `کاربرگ`). Files are presented in a checklist table showing subject, kind, chapter, and file size, and can be exported as a standalone portable package (`.zip` with manifest and RTL offline index) or imported into another DarsPack instance.
 
 ## 5. Threading model (keeps the UI responsive)
 

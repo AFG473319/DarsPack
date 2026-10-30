@@ -7,9 +7,14 @@ metadata, and renaming a subject never moves a byte on disk.
 """
 from __future__ import annotations
 
+import json
+import os
+from datetime import datetime
 from pathlib import Path
 
 from . import db
+from .hashing import sha256_file
+from .normalize import normalize
 from .suggest import DEFAULT_SUBJECTS
 
 
@@ -116,3 +121,134 @@ class Library:
     def stored_path(self, row) -> Path:
         """Absolute path of a catalog row's file inside the library."""
         return self.files_dir / row["stored_name"]
+
+    @property
+    def trash_dir(self) -> Path:
+        return self.files_dir / ".trash"
+
+    @property
+    def trash_meta_dir(self) -> Path:
+        return self.files_dir / ".trash_meta"
+
+    def list_trash(self) -> list[dict]:
+        """List files currently in files/.trash/ with metadata."""
+        if not self.trash_dir.exists():
+            return []
+        items = []
+        for p in self.trash_dir.iterdir():
+            if not p.is_file():
+                continue
+            meta_path = self.trash_meta_dir / f"{p.name}.json"
+            meta = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            stat = p.stat()
+            deleted_at = meta.get("deleted_at") or datetime.fromtimestamp(stat.st_mtime).isoformat()
+            items.append({
+                "trash_name": p.name,
+                "original_name": meta.get("original_name") or p.name,
+                "stored_name": meta.get("stored_name") or p.name,
+                "size": stat.st_size,
+                "deleted_at": deleted_at,
+                "subject_name": meta.get("subject_name") or "?",
+                "kind": meta.get("kind") or "?",
+                "chapter": meta.get("chapter"),
+                "lesson": meta.get("lesson"),
+                "school_year": meta.get("school_year"),
+                "sha256": meta.get("sha256"),
+                "note": meta.get("note", ""),
+                "meta": meta,
+            })
+        items.sort(key=lambda x: x["deleted_at"], reverse=True)
+        return items
+
+    def restore_trash_file(self, trash_filename: str) -> dict:
+        """Restore a single file from .trash back into files/ and catalog."""
+        clean_name = Path(trash_filename).name
+        src = self.trash_dir / clean_name
+        if not src.exists():
+            raise FileNotFoundError(f"Trash file not found: {trash_filename}")
+
+        meta_path = self.trash_meta_dir / f"{clean_name}.json"
+        meta = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        original_name = meta.get("original_name") or clean_name
+        # Find a non-colliding stored name in files/
+        base_stored = meta.get("stored_name") or clean_name
+        dest = self.files_dir / base_stored
+        p_base = Path(base_stored)
+        n = 0
+        while dest.exists():
+            n += 1
+            dest = self.files_dir / f"{p_base.stem}~{n}{p_base.suffix}"
+
+        sha = meta.get("sha256")
+        size = src.stat().st_size
+        if not sha:
+            sha = sha256_file(src)
+
+        subject_id = meta.get("subject_id")
+        subject_name = meta.get("subject_name")
+        if not subject_id and subject_name:
+            sub_row = self.conn.execute(
+                "SELECT id FROM subjects WHERE name=?", (subject_name,)).fetchone()
+            if sub_row:
+                subject_id = sub_row["id"]
+
+        imported_at = meta.get("imported_at") or datetime.now().isoformat()
+        tags = meta.get("tags") or []
+
+        # Atomic restore: file move is performed inside the DB transaction.
+        # If filesystem move fails, SQLite transaction rolls back.
+        # If DB insert fails, the file has not been moved from .trash/ yet.
+        with self.conn:
+            cur = self.conn.execute(
+                """INSERT INTO files
+                   (stored_name, original_name, name_norm, sha256, size_bytes,
+                    imported_at, subject_id, chapter, lesson, kind,
+                    school_year, available, note)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                (dest.name, original_name, normalize(original_name), sha, size,
+                 imported_at, subject_id, meta.get("chapter"),
+                 meta.get("lesson"), meta.get("kind"), meta.get("school_year"),
+                 meta.get("note", "")))
+            new_id = cur.lastrowid
+
+            for t in tags:
+                if t and str(t).strip():
+                    tag_id = db.get_or_create(self.conn, "tags", str(t).strip())
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?, ?)",
+                        (new_id, tag_id))
+
+            db.log(self.conn, "restore", f"{original_name} (id={new_id})")
+
+            os.replace(src, dest)
+            meta_path.unlink(missing_ok=True)
+
+        return {"id": new_id, "original_name": original_name, "stored_name": dest.name}
+
+    def empty_trash(self) -> int:
+        """Permanently delete all files currently in files/.trash/."""
+        if not self.trash_dir.exists():
+            return 0
+        count = 0
+        for p in list(self.trash_dir.iterdir()):
+            if p.is_file():
+                p.unlink(missing_ok=True)
+                count += 1
+        if self.trash_meta_dir.exists():
+            for m in list(self.trash_meta_dir.iterdir()):
+                if m.is_file():
+                    m.unlink(missing_ok=True)
+        if self.conn:
+            db.log(self.conn, "empty_trash", f"{count} files permanently deleted")
+        return count

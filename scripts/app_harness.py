@@ -292,6 +292,47 @@ def run_smoke_test(out_dir: Path | None = None) -> dict:
         report["screenshots"].append(str(shot_dup))
         dup_dlg.close()
 
+        # 4f. Trash Dialog (seed files so table is captured populated)
+        trash_dir = driver.window.lib.files_dir / ".trash"
+        trash_dir.mkdir(exist_ok=True)
+        trash_meta_dir = driver.window.lib.files_dir / ".trash_meta"
+        trash_meta_dir.mkdir(exist_ok=True)
+        (trash_dir / "old_quiz.pdf").write_bytes(b"%PDF-oldquiz")
+        (trash_meta_dir / "old_quiz.pdf.json").write_text(json.dumps({
+            "original_name": "آزمون_فصل_اول_علوم.pdf",
+            "stored_name": "old_quiz.pdf",
+            "subject_name": "علوم تجربی",
+            "size": 12400,
+            "deleted_at": "2026-10-30T14:00:00",
+            "kind": "نمونه‌سوال"
+        }, ensure_ascii=False), encoding="utf-8")
+        (trash_dir / "draft_notes.docx").write_bytes(b"PK-notes")
+        (trash_meta_dir / "draft_notes.docx.json").write_text(json.dumps({
+            "original_name": "خلاصه_درس_دوم_فارسی.docx",
+            "stored_name": "draft_notes.docx",
+            "subject_name": "فارسی",
+            "size": 45200,
+            "deleted_at": "2026-10-30T15:30:00",
+            "kind": "جزوه"
+        }, ensure_ascii=False), encoding="utf-8")
+
+        trash_dlg = dialogs.TrashDialog(driver.window, driver.window.lib)
+        shot_trash = driver.capture_screenshot(out_dir / "08_trash_dialog.png", trash_dlg)
+        report["dialogs"]["trash_ready"] = True
+        report["screenshots"].append(str(shot_trash))
+        trash_dlg.close()
+
+        # 4g. Exam Pack Dialog
+        exam_dlg = dialogs.ExamPackDialog(driver.window, driver.window.lib)
+        # Assert no raw i18n keys leak into dialog headers or controls
+        headers_text = [exam_dlg.table.horizontalHeaderItem(c).text() for c in range(exam_dlg.table.columnCount())]
+        assert "col_chapter" not in headers_text, "Raw col_chapter key leaked to header"
+        assert exam_dlg.subject_combo.itemText(0) != "filter_all_subjects", "Raw filter_all_subjects leaked to combo"
+        shot_exam = driver.capture_screenshot(out_dir / "09_exam_pack_dialog.png", exam_dlg)
+        report["dialogs"]["exam_pack_ready"] = True
+        report["screenshots"].append(str(shot_exam))
+        exam_dlg.close()
+
         # 5. Server Test
         from darspack.web.server import ShareServer
         server = ShareServer(str(driver.sandbox.library_dir))

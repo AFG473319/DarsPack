@@ -7,6 +7,8 @@ language switch restoring cleanly — the dialogs read the module-global
 language, so a test that leaves it on English would silently turn every
 later dialog test English too.
 """
+import re
+from pathlib import Path
 from darspack import i18n
 
 
@@ -53,3 +55,19 @@ def test_invalid_language_code_stays_persian():
         assert i18n.tr("app_title") == "درس‌پک"
     finally:
         i18n.set_language("fa")
+
+
+def test_all_source_tr_keys_exist_in_strings():
+    """Scan all Python files in src/ for tr(...) calls and assert every key exists in STRINGS."""
+    src_dir = Path(__file__).parent.parent / "src"
+    pattern = re.compile(r'\btr\(\s*["\']([a-zA-Z0-9_]+)["\']')
+    found_keys = set()
+    for py_file in src_dir.rglob("*.py"):
+        text = py_file.read_text(encoding="utf-8")
+        for m in pattern.finditer(text):
+            found_keys.add(m.group(1))
+
+    missing_fa = {k for k in found_keys if k not in i18n.STRINGS["fa"]}
+    missing_en = {k for k in found_keys if k not in i18n.STRINGS["en"]}
+    assert not missing_fa, f"Missing keys in STRINGS['fa']: {missing_fa}"
+    assert not missing_en, f"Missing keys in STRINGS['en']: {missing_en}"
