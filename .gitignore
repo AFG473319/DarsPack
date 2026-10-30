@@ -17,6 +17,7 @@ library/
 eval/survey*
 eval/timed-test-results.md
 eval/_generated/
+eval/screenshots/
 
 # OS noise
 Thumbs.db
