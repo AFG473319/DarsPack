@@ -57,4 +57,8 @@ installer\build.bat
 
 ## License
 
-TBD.
+[GNU General Public License v3.0 or later (GPL-3.0-or-later)](LICENSE).
+
+Bundled assets have their own permissive licenses:
+- **Vazirmatn** font: [SIL Open Font License 1.1](src/darspack/assets/fonts/OFL.txt)
+- **Lucide** icons: [ISC License](src/darspack/assets/icons/LICENSE)
