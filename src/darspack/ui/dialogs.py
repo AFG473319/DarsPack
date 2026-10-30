@@ -14,21 +14,22 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QLocale, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QProgressBar,
 
-    QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QMainWindow, QMessageBox, QPushButton,
-    QSpinBox, QTableWidget, QTabWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
+    QMessageBox,
+    QPushButton, QSpinBox, QTableWidget, QTabWidget, QTableWidgetItem,
+    QTextEdit, QVBoxLayout, QWidget,
 )
 
-from .. import __version__
+from .. import __version__, i18n
 from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
-from ..i18n import STRINGS, tr
+from ..i18n import STRINGS, num, tr
 from .workers import ImportWorker
 
 
@@ -36,16 +37,14 @@ def text_dialog(parent, title: str, text: str) -> None:
     QMessageBox.information(parent, title, text)
 
 
-def make_teacher_combo(conn, current_name: str | None) -> QComboBox:
-    """Editable teacher combo (A3): blank = no teacher, existing teachers
-    listed, new names are created on save via get_or_create("teachers",…)."""
-    combo = QComboBox()
-    combo.setEditable(True)
-    combo.addItem("")                       # «no teacher» stays possible
-    for r in conn.execute("SELECT name FROM teachers ORDER BY name"):
-        combo.addItem(r["name"])
-    combo.setCurrentText(current_name or "")
-    return combo
+def polish_dialog(dialog, min_width: int | None = None) -> None:
+    """One rhythm for every dialog: breathing room, spacing, min width."""
+    layout = dialog.layout()
+    if layout is not None:
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+    if min_width:
+        dialog.setMinimumWidth(min_width)
 
 
 def make_year_combo(current: str | None) -> QComboBox:
@@ -61,6 +60,16 @@ def make_year_combo(current: str | None) -> QComboBox:
         combo.addItem(y)
     combo.setCurrentText(chosen)
     return combo
+
+
+def make_spinbox(minimum: int = 0, maximum: int = 40) -> QSpinBox:
+    """A number field that renders ۰-۹ in the Persian UI (a Persian
+    QLocale is what makes QSpinBox display Persian digits)."""
+    spin = QSpinBox()
+    spin.setRange(minimum, maximum)
+    if i18n.language() == "fa":
+        spin.setLocale(QLocale(QLocale.Persian, QLocale.Iran))
+    return spin
 
 
 def package_metas(zip_path) -> dict:
@@ -153,8 +162,10 @@ class FeedbackDialog(QDialog):
         self.star_buttons = []
         for i in range(1, 6):
             star = QPushButton("☆")
+            star.setObjectName("Star")          # flat QSS toggle, not a blue box
             star.setCheckable(True)
-            star.setFixedWidth(40)
+            star.setFixedSize(40, 40)
+            star.setCursor(Qt.PointingHandCursor)
             star.clicked.connect(lambda checked, n=i: self._set_stars(n))
             stars.addWidget(star)
             self.star_buttons.append(star)
@@ -176,13 +187,23 @@ class FeedbackDialog(QDialog):
         layout.addWidget(self.contact)
 
         self.submit = QPushButton(tr("fb_submit"))
+        self.submit.setObjectName("Primary")
         self.submit.setDefault(True)
         self.submit.clicked.connect(self._submit)
-        layout.addWidget(self.submit)
+        cancel = QPushButton(tr("cancel"))
+        cancel.setObjectName("Secondary")
+        cancel.clicked.connect(self.reject)
+        self.buttons = QHBoxLayout()
+        self.buttons.addWidget(self.submit)
+        self.buttons.addWidget(cancel)
+        self.buttons.addStretch(1)
+        layout.addLayout(self.buttons)
+        polish_dialog(self, 460)
 
     def _set_stars(self, n: int) -> None:
         self.rating = n
         for i, star in enumerate(self.star_buttons, start=1):
+            star.setChecked(i <= n)             # QSS paints checked stars gold
             star.setText("★" if i <= n else "☆")
 
     def _endpoint(self) -> str:
@@ -219,7 +240,7 @@ class FeedbackDialog(QDialog):
             button = QPushButton(tr("fb_open_form"))
             button.clicked.connect(
                 lambda: QDesktopServices.openUrl(QUrl(form_url)))
-            self.layout().replaceWidget(self.submit, button)
+            self.buttons.replaceWidget(self.submit, button)
             self.submit.hide()
             button.show()
             QMessageBox.information(self, tr("btn_feedback"),
@@ -244,6 +265,7 @@ class ImportDialog(QDialog):
         self.setWindowTitle(tr("import_title"))
         self.parent_window = parent
         pick_files = QPushButton(tr("import_pick_files"))
+        pick_files.setObjectName("Primary")
         pick_folder = QPushButton(tr("import_pick_folder"))
         self.keep = QCheckBox(tr("import_keep"))
         layout = QVBoxLayout(self)
@@ -254,6 +276,7 @@ class ImportDialog(QDialog):
         layout.addWidget(self.keep)
         pick_files.clicked.connect(self._pick_files)
         pick_folder.clicked.connect(self._pick_folder)
+        polish_dialog(self, 420)
 
     def _pick_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, tr("import_title"))
@@ -290,6 +313,7 @@ class ExportDialog(QDialog):
         btn_selected.clicked.connect(lambda: self._export(selected_ids))
         btn_filtered.clicked.connect(
             lambda: self._export([r["id"] for r in parent.last_rows]))
+        polish_dialog(self, 460)
 
     def _export(self, file_ids: list) -> None:
         if not file_ids:
@@ -325,29 +349,32 @@ class ClassifyDialog(QDialog):
         super().__init__(parent)
         self.lib = lib
         self.setWindowTitle(tr("classify_title"))
-        self.resize(860, 520)
+        self.resize(940, 560)
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
-                   tr("meta_kind"), tr("meta_lesson"), tr("meta_teacher"),
+                   tr("meta_kind"), tr("meta_lesson"),
                    tr("meta_year"), tr("meta_tags_col")]
         self.table = QTableWidget(len(file_ids), len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setSelectionMode(QTableWidget.NoSelection)
-        self.table.setColumnWidth(0, 380)
-        self.table.setColumnWidth(5, 120)
-        self.table.setColumnWidth(6, 110)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col, width in ((1, 140), (2, 80), (3, 100),
+                           (4, 80), (5, 130), (6, 130)):
+            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            self.table.setColumnWidth(col, width)
 
         subjects = [r["name"] for r in lib.conn.execute(
             "SELECT name FROM subjects ORDER BY name")]
         self.rows = []                            # (file_id, widgets)
         for r, fid in enumerate(file_ids):
             file_row = lib.conn.execute(
-                """SELECT f.*, s.name AS subject_name, t.name AS teacher_name
+                """SELECT f.*, s.name AS subject_name
                    FROM files f
                    LEFT JOIN subjects s ON s.id=f.subject_id
-                   LEFT JOIN teachers t ON t.id=f.teacher_id
                    WHERE f.id=?""", (fid,)).fetchone()
 
             name_item = QTableWidgetItem(file_row["original_name"])
@@ -370,8 +397,7 @@ class ClassifyDialog(QDialog):
                 or suggested["subject"] or "")
             self.table.setCellWidget(r, 1, subject)
 
-            chapter = QSpinBox()
-            chapter.setRange(0, 40)
+            chapter = make_spinbox()
             chapter.setValue(file_row["chapter"] or 0)
             self.table.setCellWidget(r, 2, chapter)
 
@@ -382,26 +408,22 @@ class ClassifyDialog(QDialog):
 
             # A3b: درس (lesson) is a separate number from فصل (chapter) —
             # either, both, or neither may be set (design decision).
-            lesson = QSpinBox()
-            lesson.setRange(0, 40)
+            lesson = make_spinbox()
             lesson.setValue(file_row["lesson"] or 0)
             self.table.setCellWidget(r, 4, lesson)
 
-            teacher = make_teacher_combo(lib.conn, file_row["teacher_name"])
-            self.table.setCellWidget(r, 5, teacher)
-
             year = make_year_combo(file_row["school_year"])
-            self.table.setCellWidget(r, 6, year)
+            self.table.setCellWidget(r, 5, year)
 
             # A5: the manifest's tags arrive as pre-fill too
             tags_edit = QLineEdit()
             tags_edit.setText("، ".join(prefill.get("tags") or []))
-            self.table.setCellWidget(r, 7, tags_edit)
+            self.table.setCellWidget(r, 6, tags_edit)
 
             # widget positions 0–3 are pinned by existing tests; the
             # newer fields go after them
             self.rows.append((fid, subject, chapter, kind, lesson,
-                              teacher, year, tags_edit))
+                              year, tags_edit))
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(tr("classify_hint")))
@@ -425,14 +447,17 @@ class ClassifyDialog(QDialog):
         later = QPushButton(tr("classify_later"))
         later.clicked.connect(self.reject)
         save = QPushButton(tr("classify_save"))
+        save.setObjectName("Primary")
         save.setDefault(True)
         save.clicked.connect(self._save_all)
-        buttons.addWidget(later)
         buttons.addWidget(save)
+        buttons.addWidget(later)
+        buttons.addStretch(1)
         layout.addLayout(buttons)
+        polish_dialog(self, 940)
 
     # self.rows layout (positions 0–3 pinned by existing tests):
-    # (file_id, subject, chapter, kind, lesson, teacher, year, tags)
+    # (file_id, subject, chapter, kind, lesson, year, tags)
     _BULK_INDEX = {"subject": 1, "chapter": 2, "kind": 3, "lesson": 4}
     _BULK_EMPTY = {"chapter": 0, "lesson": 0, "kind": "سایر"}
 
@@ -486,19 +511,16 @@ class ClassifyDialog(QDialog):
     def _save_all(self) -> None:
         conn = self.lib.conn
         with conn:
-            for fid, subject, chapter, kind, lesson, teacher, year, tags in self.rows:
+            for fid, subject, chapter, kind, lesson, year, tags in self.rows:
                 name = subject.currentText().strip()
                 subject_id = (db.get_or_create(conn, "subjects", name)
                               if name else None)
-                teacher_name = teacher.currentText().strip()
-                teacher_id = (db.get_or_create(conn, "teachers", teacher_name)
-                              if teacher_name else None)
                 conn.execute(
                     """UPDATE files SET subject_id=?, chapter=?, kind=?,
-                       lesson=?, teacher_id=?, school_year=? WHERE id=?""",
+                       lesson=?, school_year=? WHERE id=?""",
                     (subject_id, chapter.value() or None,
                      kind.currentText(), lesson.value() or None,
-                     teacher_id, year.currentText().strip() or None, fid))
+                     year.currentText().strip() or None, fid))
                 if name:
                     self._learn_tokens(fid, name)
                 self._save_tags(conn, fid, tags.text())
@@ -536,8 +558,10 @@ class VerifyReportDialog(QDialog):
                f"{'ok' if report.ok else len(report.problems)} problems — {path}")
         if report.ok and offer_import:
             btn = QPushButton(tr("pkg_import_btn"))
+            btn.setObjectName("Primary")
             btn.clicked.connect(self._import_contents)
             layout.addWidget(btn)
+        polish_dialog(self, 520)
 
     def _import_contents(self) -> None:
         """Extract to a temp folder and import through the normal pipeline.
@@ -590,13 +614,12 @@ class MetadataDialog(QDialog):
         super().__init__(parent)
         self.lib, self.file_id = lib, file_id
         self.setWindowTitle(tr("meta_title"))
-        # joins so the dialog can show the current subject's and teacher's
-        # NAMES instead of bare ids
+        # joins so the dialog can show the current subject's NAME
+        # instead of a bare id
         self.row = lib.conn.execute(
-            """SELECT f.*, s.name AS subject_name, t.name AS teacher_name
+            """SELECT f.*, s.name AS subject_name
                FROM files f
                LEFT JOIN subjects s ON s.id = f.subject_id
-               LEFT JOIN teachers t ON t.id = f.teacher_id
                WHERE f.id=?""", (file_id,)).fetchone()
 
         self.subject = QComboBox()
@@ -605,8 +628,7 @@ class MetadataDialog(QDialog):
             self.subject.addItem(r["name"])
         self.subject.setCurrentText(self.row["subject_name"] or "")
 
-        self.chapter = QSpinBox()
-        self.chapter.setRange(0, 40)          # 0 = no chapter
+        self.chapter = make_spinbox()         # 0 = no chapter
         self.chapter.setValue(self.row["chapter"] or 0)
 
         self.kind = QComboBox()
@@ -616,11 +638,9 @@ class MetadataDialog(QDialog):
 
         # A3b: درس (lesson) is a separate number from فصل (chapter) —
         # either, both, or neither may be set (design decision).
-        self.lesson = QSpinBox()
-        self.lesson.setRange(0, 40)
+        self.lesson = make_spinbox()
         self.lesson.setValue(self.row["lesson"] or 0)
 
-        self.teacher = make_teacher_combo(lib.conn, self.row["teacher_name"])
         self.year = make_year_combo(self.row["school_year"])
 
         self.tags = QLineEdit()
@@ -632,14 +652,26 @@ class MetadataDialog(QDialog):
         self.note = QLineEdit(self.row["note"] or "")
 
         save = QPushButton(tr("ok"))
+        save.setObjectName("Primary")
+        save.setDefault(True)
         save.clicked.connect(self._save)
+        cancel = QPushButton(tr("cancel"))
+        cancel.setObjectName("Secondary")
+        cancel.clicked.connect(self.reject)
 
         form = QVBoxLayout(self)
+        from .main_window import human_size, jalali_date
+        header = QLabel(
+            f"{self.row['original_name']}\n"
+            f"{human_size(self.row['size_bytes'])} · "
+            f"{num(jalali_date(self.row['imported_at']))}")
+        header.setObjectName("DialogHint")
+        header.setWordWrap(True)
+        form.addWidget(header)
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
                               (tr("meta_lesson"), self.lesson),
                               (tr("meta_kind"), self.kind),
-                              (tr("meta_teacher"), self.teacher),
                               (tr("meta_year"), self.year),
                               (tr("meta_tags"), self.tags),
                               (tr("meta_note"), self.note)):
@@ -649,7 +681,12 @@ class MetadataDialog(QDialog):
             row.addWidget(lab)
             row.addWidget(widget)
             form.addLayout(row)
-        form.addWidget(save)
+        buttons = QHBoxLayout()
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        buttons.addStretch(1)
+        form.addLayout(buttons)
+        polish_dialog(self, 460)
 
     def _save(self) -> None:
         conn = self.lib.conn
@@ -657,16 +694,13 @@ class MetadataDialog(QDialog):
             subject_id = (db.get_or_create(conn, "subjects",
                                            self.subject.currentText())
                           if self.subject.currentText().strip() else None)
-            teacher_id = (db.get_or_create(conn, "teachers",
-                                           self.teacher.currentText())
-                          if self.teacher.currentText().strip() else None)
             chapter = self.chapter.value() or None
             conn.execute(
                 """UPDATE files SET subject_id=?, chapter=?, lesson=?,
-                   kind=?, teacher_id=?, school_year=?, note=?
+                   kind=?, school_year=?, note=?
                    WHERE id=?""",
                 (subject_id, chapter, self.lesson.value() or None,
-                 self.kind.currentText(), teacher_id,
+                 self.kind.currentText(),
                  self.year.currentText().strip() or None,
                  self.note.text(), self.file_id))
             conn.execute("DELETE FROM file_tags WHERE file_id=?", (self.file_id,))
@@ -704,12 +738,10 @@ class BulkEditDialog(QDialog):
         for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
             self.subject.addItem(r["name"])
 
-        self.chapter = QSpinBox()
-        self.chapter.setRange(0, 40)
+        self.chapter = make_spinbox()
         self.chapter.setSpecialValueText(none)
 
-        self.lesson = QSpinBox()
-        self.lesson.setRange(0, 40)
+        self.lesson = make_spinbox()
         self.lesson.setSpecialValueText(none)
 
         self.kind = QComboBox()
@@ -729,7 +761,7 @@ class BulkEditDialog(QDialog):
 
         form = QVBoxLayout(self)
         form.addWidget(QLabel(tr("bulk_edit_hint").format(
-            count=persian_digits(str(len(self.file_ids))))))
+            count=num(len(self.file_ids)))))
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
                               (tr("meta_lesson"), self.lesson),
@@ -742,14 +774,18 @@ class BulkEditDialog(QDialog):
             row.addWidget(widget)
             form.addLayout(row)
         buttons = QHBoxLayout()
-        cancel = QPushButton(tr("cancel"))
-        cancel.clicked.connect(self.reject)
         save = QPushButton(tr("ok"))
+        save.setObjectName("Primary")
         save.setDefault(True)
         save.clicked.connect(self._apply)
-        buttons.addWidget(cancel)
+        cancel = QPushButton(tr("cancel"))
+        cancel.setObjectName("Secondary")
+        cancel.clicked.connect(self.reject)
         buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        buttons.addStretch(1)
         form.addLayout(buttons)
+        polish_dialog(self, 460)
 
     def _changes(self) -> tuple[list, list]:
         """(SET clauses, params) for exactly the fields the user chose."""
@@ -803,8 +839,7 @@ class SettingsDialog(QDialog):
         self.lang.addItem("English", "en")
         self.lang.setCurrentIndex(0 if settings.get("language", "fa") == "fa" else 1)
 
-        self.font_size = QSpinBox()
-        self.font_size.setRange(8, 18)
+        self.font_size = make_spinbox(8, 18)
         self.font_size.setValue(int(settings.get("font_size", 10)))
 
         self.library = QLineEdit(str(settings.get("library", "")))
@@ -821,7 +856,12 @@ class SettingsDialog(QDialog):
                              feedback_config.FEEDBACK_FORM_URL)))
 
         save = QPushButton(tr("ok"))
+        save.setObjectName("Primary")
+        save.setDefault(True)
         save.clicked.connect(self._save)
+        cancel = QPushButton(tr("cancel"))
+        cancel.setObjectName("Secondary")
+        cancel.clicked.connect(self.reject)
 
         form = QVBoxLayout(self)
         for label, widget in ((tr("settings_lang"), self.lang),
@@ -835,12 +875,32 @@ class SettingsDialog(QDialog):
             else:
                 row.addWidget(widget, 1)
             form.addLayout(row)
-        form.addWidget(QLabel(tr("settings_fb_endpoint")))
-        form.addWidget(self.fb_endpoint)
-        form.addWidget(QLabel(tr("settings_fb_form_url")))
-        form.addWidget(self.fb_form_url)
-        form.addWidget(QLabel(tr("settings_restart")))
-        form.addWidget(save)
+
+        # endpoints are developer-facing: behind an «پیشرفته» toggle
+        self.advanced = QCheckBox(tr("settings_advanced"))
+        self.advanced_fields = QWidget()
+        advanced_layout = QVBoxLayout(self.advanced_fields)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(6)
+        advanced_layout.addWidget(QLabel(tr("settings_fb_endpoint")))
+        advanced_layout.addWidget(self.fb_endpoint)
+        advanced_layout.addWidget(QLabel(tr("settings_fb_form_url")))
+        advanced_layout.addWidget(self.fb_form_url)
+        self.advanced_fields.setVisible(False)
+        self.advanced.toggled.connect(self.advanced_fields.setVisible)
+        form.addWidget(self.advanced)
+        form.addWidget(self.advanced_fields)
+
+        restart = QLabel(tr("settings_restart"))
+        restart.setObjectName("DialogHint")
+        restart.setWordWrap(True)
+        form.addWidget(restart)
+        buttons = QHBoxLayout()
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        buttons.addStretch(1)
+        form.addLayout(buttons)
+        polish_dialog(self, 460)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(self, tr("settings_lib"))
@@ -867,26 +927,50 @@ class ShareDialog(QDialog):
         self.on_close = on_close
         self.setWindowTitle(tr("share_title"))
         layout = QVBoxLayout(self)
-        pin_label = QLabel(f"{tr('share_pin')}: {persian_digits(server.pin)}")
+        caption = QLabel(tr("share_pin"))
+        caption.setAlignment(Qt.AlignCenter)
+        caption.setStyleSheet("color: #a0a0a8;")
+        layout.addWidget(caption)
+        pin_label = QLabel(persian_digits(str(server.pin)))
         pin_label.setAlignment(Qt.AlignCenter)
-        pin_label.setStyleSheet("font-size: 26px; font-weight: bold;")
+        pin_label.setStyleSheet(
+            "font-size: 30px; font-weight: bold; letter-spacing: 6px;")
         layout.addWidget(pin_label)
+        copy_pin = QPushButton(tr("copy_pin"))
+        copy_pin.setObjectName("Ghost")
+        copy_pin.clicked.connect(
+            lambda: QApplication.clipboard().setText(str(server.pin)))
+        layout.addWidget(copy_pin, 0, Qt.AlignCenter)
         layout.addWidget(QLabel(tr("share_urls")))
         for url in urls:
             line = QLabel(url)
             line.setTextInteractionFlags(Qt.TextSelectableByMouse)
             layout.addWidget(line)
+        lan = pick_lan_url(urls)
+        if lan is not None:
+            copy_url = QPushButton(tr("copy_url"))
+            copy_url.setObjectName("Ghost")
+            copy_url.clicked.connect(
+                lambda: QApplication.clipboard().setText(lan))
+            layout.addWidget(copy_url, 0, Qt.AlignCenter)
         # D3 (design-approved dependency): a scannable QR of the LAN URL —
         # typing the address on a phone keyboard is the share flow's
-        # weakest link. The dependency-free URL list above stays.
-        lan = pick_lan_url(urls)
+        # weakest link. The dependency-free URL list above stays. The QR
+        # sits on a padded white card instead of a bare white block.
         if lan is not None:
             from PySide6.QtSvgWidgets import QSvgWidget
             qr = QSvgWidget()
             qr.load(qr_svg_bytes(lan))
             qr.setFixedSize(180, 180)
+            card = QFrame()
+            card.setObjectName("QrCard")
+            card.setStyleSheet(
+                "QFrame#QrCard { background: #ffffff; border-radius: 12px; }")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 12, 12, 12)
+            card_layout.addWidget(qr, 0, Qt.AlignCenter)
             layout.addWidget(QLabel(tr("qr_caption")))
-            layout.addWidget(qr, 0, Qt.AlignCenter)
+            layout.addWidget(card, 0, Qt.AlignCenter)
         layout.addWidget(QLabel(tr("share_hint")))
         # D4: poll the catalog every 5 s — a phone upload becomes visible
         # on the desktop while sharing, not only after the dialog closes.
@@ -901,8 +985,10 @@ class ShareDialog(QDialog):
         self._poll_timer.timeout.connect(self._check_files)
         self._poll_timer.start()
         stop = QPushButton(tr("btn_stop_share"))
+        stop.setObjectName("Secondary")
         stop.clicked.connect(self.accept)
         layout.addWidget(stop)
+        polish_dialog(self, 440)
 
     def _count_files(self) -> int:
         parent = self.parent()
@@ -920,7 +1006,7 @@ class ShareDialog(QDialog):
         if count > self._file_count_at_start >= 0:
             self._upload_label.setText(
                 tr("share_new_files").format(
-                    persian_digits(str(count - self._file_count_at_start))))
+                    num(count - self._file_count_at_start)))
             self._upload_label.show()
             if hasattr(parent, "refresh"):
                 parent.refresh()
@@ -1013,7 +1099,7 @@ class ActivityDialog(QDialog):
                 self.rule_table.setItem(i, 1, QTableWidgetItem(rule["subject"]))
                 self.rule_table.setItem(
                     i, 2, QTableWidgetItem(tr("hints_hits").format(
-                        persian_digits(str(rule["hits"])))))
+                        num(rule["hits"]))))
             layout.addWidget(self.rule_table)
             forget = QPushButton(tr("hints_forget"))
             forget.clicked.connect(self._forget_selected_rule)
@@ -1024,6 +1110,7 @@ class ActivityDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
+        polish_dialog(self, 720)
 
     def _forget_selected_rule(self) -> None:
         """A4 transparency: delete the selected learned rule — the app's
@@ -1046,15 +1133,30 @@ class ActivityDialog(QDialog):
         return page
 
 
-# --- E5: library stats (dependency-free Unicode bars) ----------------------
+# --- E5: library stats -----------------------------------------------------
 
-def bar(count: int, max_count: int, width: int = 12) -> str:
-    """A proportional ▓▓▓░░ bar — plain text, no chart dependency, and
-    direction-neutral glyphs that survive the RTL layout."""
-    if max_count <= 0 or count <= 0:
-        return "░" * width
-    filled = round(count / max_count * width)
-    return "▓" * filled + "░" * (width - filled)
+def stat_bar_row(name: str, count: int, max_count: int) -> QWidget:
+    """One stats row: label + a real bar + count. The old ▓/░ text bar
+    rendered as gray tiles in Segoe UI."""
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(8)
+    name_label = QLabel(name)
+    name_label.setMinimumWidth(110)
+    bar = QProgressBar()
+    bar.setRange(0, max(1, max_count))
+    bar.setValue(count)
+    bar.setTextVisible(False)
+    bar.setFixedHeight(8)
+    bar.setObjectName("StatBar")
+    count_label = QLabel(num(count))
+    count_label.setMinimumWidth(32)
+    count_label.setAlignment(Qt.AlignCenter)
+    layout.addWidget(name_label)
+    layout.addWidget(bar, 1)
+    layout.addWidget(count_label)
+    return row
 
 
 def library_stats(conn) -> dict:
@@ -1099,8 +1201,10 @@ class StatsProgressDialog(QDialog):
         bar.setRange(0, 0)                    # indeterminate = "working…"
         layout.addWidget(bar)
         cancel = QPushButton(tr("cancel"))
+        cancel.setObjectName("Secondary")
         cancel.clicked.connect(self._cancel)
         layout.addWidget(cancel)
+        polish_dialog(self, 420)
 
     def _cancel(self) -> None:
         parent = self.parent()
@@ -1132,15 +1236,22 @@ class StatsDialog(QDialog):
                 f"{human_size(stats['dedup_bytes'])}"))
             layout.addWidget(QLabel(
                 f"{tr('stats_unclassified')}: "
-                f"{persian_digits(str(stats['unclassified']))}"))
+                f"{num(stats['unclassified'])}"))
 
             layout.addWidget(QLabel(f"<b>{tr('stats_per_subject')}</b>"))
             max_sub = max((c for _, c in stats["per_subject"]), default=0)
             for name, count in stats["per_subject"]:
-                layout.addWidget(QLabel(
-                    f"{persian_digits(str(count))}  {bar(count, max_sub)}  {name}"))
+                layout.addWidget(stat_bar_row(name, count, max_sub))
             layout.addWidget(QLabel(f"<b>{tr('stats_per_kind')}</b>"))
             max_kind = max((c for _, c in stats["per_kind"]), default=0)
             for kind, count in stats["per_kind"]:
-                layout.addWidget(QLabel(
-                    f"{persian_digits(str(count))}  {bar(count, max_kind)}  {kind}"))
+                layout.addWidget(stat_bar_row(kind, count, max_kind))
+
+        close = QPushButton(tr("close"))
+        close.setObjectName("Secondary")
+        close.clicked.connect(self.accept)
+        buttons = QHBoxLayout()
+        buttons.addWidget(close)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        polish_dialog(self, 520)

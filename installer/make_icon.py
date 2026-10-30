@@ -32,6 +32,7 @@ SMALL = ASSETS / "darspack-small.svg"
 PNG_SIZES = [1024, 512, 256, 128, 64, 48, 32, 24, 16]
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 FAVICON_SIZES = [16, 32, 48]
+PWA_SIZES = [192, 512]
 
 
 def source_for(size: int) -> Path:
@@ -122,8 +123,17 @@ def main() -> None:
                          for size in FAVICON_SIZES])
     (CLIENT / "favicon.ico").write_bytes(favicon)
 
+    # PWA install icons: a phone's manifest needs exact 192 and 512 px PNGs
+    pwa_dir = CLIENT / "icons"
+    pwa_dir.mkdir(exist_ok=True)
+    for size in PWA_SIZES:
+        image = render(MASTER, size)
+        if not image.save(str(pwa_dir / f"icon-{size}.png"), "PNG"):
+            raise SystemExit(f"could not write icon-{size}.png")
+
     print(f"wrote {len(PNG_SIZES)} PNGs, darspack.ico "
-          f"({len(app_icon)} bytes), favicon.ico ({len(favicon)} bytes)")
+          f"({len(app_icon)} bytes), favicon.ico ({len(favicon)} bytes), "
+          f"PWA icons {PWA_SIZES}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # DarsPack Architecture (Phase B)
 
-Status: **working v0.1** — core, desktop UI, LAN server + phone client, and the Windows build are implemented; 66 tests green (2026-10-24). Now in a real-use bug-fixing phase (the built exe is dogfooded and reports crashes via the in-app error dialog).
+Status: **working v0.1** — core, desktop UI, LAN server + phone client, and the Windows build are implemented; 317 tests green (2026-10-29). Now in a real-use bug-fixing phase (the built exe is dogfooded and reports crashes via the in-app error dialog).
 Stack and platform constraints are locked and documented below.
 
 ## 1. Design principles
@@ -28,11 +28,14 @@ src/darspack/
 │   └── schoolyear.py     # Jalali school-year helpers (Mehr→Shahrivar span)          
 ├── ui/                   # PySide6 desktop client
 │   ├── app.py            # QApplication wiring, language toggle, theme, fonts
-│   ├── main_window.py    # library table, filters, search, empty states,
+│   ├── theme.py          # brand palette + QSS tokens, bundled Vazirmatn loader
+│   ├── icons.py          # tinted Lucide SVGs (cached pixmaps)
+│   ├── delegates.py      # table painters (kind badges, no per-row widgets)
+│   ├── main_window.py    # app bar + toolbar, library table, filters, empty states,
 │   │                     #   multi-select + row delete → files/.trash, bulk
 │   │                     #   reclassify, share toggle, history/stats
 │   ├── dialogs.py        # ALL dialogs in one file: classify (bulk actions,
-│   │                     #   teacher/lesson/year, package prefill), bulk edit,
+│   │                     #   lesson/year, package prefill), bulk edit,
 │   │                     #   metadata, export, verify, duplicates, settings,
 │   │                     #   share (QR), history, stats
 │   └── workers.py        # background import thread (own DB connection;
@@ -40,7 +43,7 @@ src/darspack/
 ├── web/                  # LAN web client + server
 │   ├── server.py         # stdlib ThreadingHTTPServer, PIN gate, endpoints           
 │   ├── sync.py           # manifest/diff logic shared with packaging                 
-│   └── client/           # static RTL HTML/CSS/JS — no build step, no framework
+│   └── client/           # static RTL HTML/CSS/JS + PWA manifest/icons — no build step
 └── i18n.py               # fa/en string dictionaries (plain dicts, no Qt Linguist)
 tests/                    # one test file per core module
 eval/make_testset.py      # generates the labelled synthetic set from eval/benchmark-plan.md
@@ -70,7 +73,7 @@ CREATE TABLE files (
   sha256 TEXT NOT NULL,                  -- indexed; the dedup key
   imported_at TEXT NOT NULL,             -- ISO datetime
   subject_id INTEGER REFERENCES subjects(id),
-  teacher_id INTEGER REFERENCES teachers(id),
+  teacher_id INTEGER REFERENCES teachers(id),  -- legacy; kept for old catalogs, not edited by the UI
   chapter INTEGER,                       -- فصل, nullable
   lesson INTEGER,                        -- درس, nullable — separate from فصل
   school_year TEXT,                      -- e.g. '1405-1406' (Mehr→Shahrivar span)
@@ -156,7 +159,7 @@ package.zip
 
 ## 5. Threading model (keeps the UI responsive)
 
-- Import/hash: `QThreadPool` worker per batch, progress signals → progress bar; UI never blocks.
+- Import/hash: one `QThread` worker per batch, progress signals → progress bar; UI never blocks.
 - Web server: its own `ThreadingHTTPServer` thread, started/stopped by the share toggle.
 - SQLite: one connection per thread, WAL mode; writes serialized by a single `threading.Lock`. Simple, explainable, sufficient for one user.
 
@@ -183,7 +186,7 @@ No secrets exist pre-cloud (none stored, none asked). No telemetry, no auto netw
 | test_dedup.py | R1/R2/R3 on the planted-labelled fixture set |
 | test_manifest.py | export→verify round-trip; tamper (one flipped byte → exact file named); missing member |
 | test_search.py | normalized matching, Persian/Latin digit queries, ranking, unclassified filter |
-| test_classify.py | the classification flow: prefill from the heuristic / a package manifest / learned hints, bulk apply, teacher/lesson/year fields, unclassified tracking |
+| test_classify.py | the classification flow: prefill from the heuristic / a package manifest / learned hints, bulk apply, lesson/year fields, unclassified tracking |
 | test_server.py | PIN gate, lockout, upload→importer path, manifest endpoint, per-thread libraries |
 | test_sync.py | catalog manifest + the pure diff |
 | test_worker_errors.py | the import worker ALWAYS emits done; one bad file never hangs the UI |
@@ -203,5 +206,5 @@ Every reported performance number (startup, RAM, export/verify time) is measured
 | `LIKE` search | SQLite FTS5 | Persian tokenization is weak; honest limitation instead |
 | dict i18n | Qt Linguist | explainable in one sentence |
 | raw-body upload | multipart | `cgi` is deprecated/removed; one less parser |
-| QThreadPool hashing | single-thread | keeps the UI responsive with real speedup on large PDFs |
+| `QThread` hashing | QThreadPool / single-thread | keeps the UI responsive with real speedup on large PDFs |
 | PyInstaller onedir + Inno | onefile exe | faster startup, smaller installer — measure both before deciding |

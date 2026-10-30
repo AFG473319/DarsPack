@@ -14,21 +14,24 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QStatusBar, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QStatusBar, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
+    QVBoxLayout, QWidget,
 )
 
-from .. import APP_NAME, __version__, i18n
+from .. import APP_NAME, __version__, asset_path, i18n
 from ..core.dedup import duplicate_groups, rename_hints, version_conflicts
 from ..core.search import search as catalog_search
 from ..core.search import unclassified_count
 from ..core import manifest as manifest_core
 from ..i18n import tr
-from . import dialogs
+from . import dialogs, icons, theme
+from .delegates import KindBadgeDelegate
 from .workers import ImportWorker
 
 if TYPE_CHECKING:      # F4 (perf audit): ShareServer pulls http/ssl/email —
@@ -37,12 +40,19 @@ if TYPE_CHECKING:      # F4 (perf audit): ShareServer pulls http/ssl/email —
 KINDS = ["جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر"]
 
 
-def human_size(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB"):
+def human_size(n: int, lang: str | None = None) -> str:
+    """Bytes → a human size in the UI language («۱٫۵ کیلوبایت», «1.5 KB»)."""
+    lang = lang or i18n.language()
+    for unit, key in (("B", "unit_b"), ("KB", "unit_kb"),
+                      ("MB", "unit_mb"), ("GB", "unit_gb")):
         if n < 1024 or unit == "GB":
-            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+            text = (str(int(n)) if unit == "B"
+                    else f"{n:.1f}".rstrip("0").rstrip("."))
+            if lang == "fa":
+                text = text.replace(".", "٫")
+            return f"{i18n.num(text, lang)} {tr(key, lang)}"
         n /= 1024
-    return f"{n} B"
+    return f"{i18n.num(n, lang)} {tr('unit_b', lang)}"
 
 
 def chapter_lesson_display(chapter, lesson) -> str:
@@ -92,13 +102,45 @@ class MainWindow(QMainWindow):
         # was the single most expensive part of the refresh fill.
         self._display_strs: dict = {}
 
-        self.setWindowTitle(f"{tr('app_title')} — {library_root}")
-        self.resize(1000, 640)
+        self.setWindowTitle(tr("app_title"))
+        self.resize(1150, 720)
+        self.setMinimumSize(1000, 600)
+        self._file_icon = icons.icon("file-text", theme.PALETTE["muted"], 16)
 
-        # --- top row: search + filters -------------------------------
+        # --- search + filter state -----------------------------------
+        # A shell puts the magnifier on the leading (right) edge in RTL,
+        # inside the field's rounded border — QLineEdit actions sit on the
+        # physical left and looked misplaced next to right-aligned text.
+        self.search_shell = QFrame()
+        self.search_shell.setObjectName("SearchShell")
+        self.search_shell.setFixedWidth(350)
+        self.search_shell.setFixedHeight(38)
+        shell = QHBoxLayout(self.search_shell)
+        shell.setContentsMargins(10, 0, 6, 0)
+        shell.setSpacing(6)
+        search_icon = QLabel()
+        search_icon.setPixmap(
+            icons.tinted_pixmap("search", theme.PALETTE["muted"], 18))
+        search_icon.setFixedSize(18, 18)
+        search_icon.setAttribute(Qt.WA_TransparentForMouseEvents)
+        shell.addWidget(search_icon)
         self.search_box = QLineEdit()
+        self.search_box.setObjectName("SearchField")
         self.search_box.setPlaceholderText(tr("search_placeholder"))
-        self.search_box.setClearButtonEnabled(True)
+        shell.addWidget(self.search_box, 1)
+        self.clear_search_button = QToolButton()
+        self.clear_search_button.setObjectName("SearchClear")
+        self.clear_search_button.setIcon(
+            icons.icon("x", theme.PALETTE["muted"], 14))
+        self.clear_search_button.setIconSize(QSize(14, 14))
+        self.clear_search_button.setFixedSize(24, 24)
+        self.clear_search_button.setToolTip(tr("clear_search"))
+        self.clear_search_button.setCursor(Qt.PointingHandCursor)
+        self.clear_search_button.clicked.connect(self.search_box.clear)
+        self.clear_search_button.hide()
+        shell.addWidget(self.clear_search_button)
+        self.search_box.textChanged.connect(self._update_clear_button)
+        self.search_box.installEventFilter(self)
         # C3 (perf audit F2.1): typing re-triggers the countdown instead of
         # refreshing per keystroke — fast typing costs exactly one refresh.
         # Filter combos stay connected to refresh directly (immediate).
@@ -111,15 +153,115 @@ class MainWindow(QMainWindow):
         self.subject_combo = QComboBox()
         self.kind_combo = QComboBox()
         self.year_combo = QComboBox()
+        for combo, width in ((self.subject_combo, 150),
+                             (self.kind_combo, 130),
+                             (self.year_combo, 120)):
+            combo.setFixedWidth(width)
+            combo.setFixedHeight(36)
         self.subject_combo.currentIndexChanged.connect(self.refresh)
         self.kind_combo.currentIndexChanged.connect(self.refresh)
         self.year_combo.currentIndexChanged.connect(self.refresh)
 
-        top = QHBoxLayout()
-        top.addWidget(self.search_box, 3)
-        top.addWidget(self.subject_combo, 1)
-        top.addWidget(self.kind_combo, 1)
-        top.addWidget(self.year_combo, 1)
+        # --- app bar: brand + search + one primary action -------------
+        app_bar = QWidget()
+        app_bar.setObjectName("AppBar")
+        bar = QHBoxLayout(app_bar)
+        bar.setContentsMargins(16, 10, 16, 10)
+        bar.setSpacing(12)
+
+        brand = QSvgWidget(str(asset_path("icon/darspack.svg")))
+        brand.setFixedSize(34, 34)
+        bar.addWidget(brand)
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        title = QLabel(tr("app_title"))
+        title.setObjectName("BrandTitle")
+        subtitle = QLabel(tr("app_subtitle"))
+        subtitle.setObjectName("BrandSub")
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        bar.addLayout(titles)
+        bar.addStretch(1)
+        bar.addWidget(self.search_shell)
+        self.import_button = QPushButton(tr("btn_import"))
+        self.import_button.setObjectName("Primary")
+        self.import_button.setIcon(
+            icons.icon("plus", theme.PALETTE["on_accent"], 18))
+        self.import_button.setIconSize(QSize(18, 18))
+        self.import_button.setFixedHeight(38)
+        self.import_button.clicked.connect(self.open_import_dialog)
+        bar.addWidget(self.import_button)
+
+        # --- secondary bar: grouped actions + filters -----------------
+        filter_bar = QWidget()
+        filter_bar.setObjectName("FilterBar")
+        toolbar = QHBoxLayout(filter_bar)
+        toolbar.setContentsMargins(16, 8, 16, 8)
+        toolbar.setSpacing(8)
+
+        self.packages_menu = QMenu(self)
+        self._menu_action(self.packages_menu, tr("btn_export"), "download",
+                          self.export_package)
+        self._menu_action(self.packages_menu, tr("btn_verify"), "circle-check",
+                          self.verify_package)
+        self._menu_action(self.packages_menu, tr("btn_import_pkg"),
+                          "folder-open", self.import_package)
+        self.packages_button = self._tool_button(tr("btn_packages"),
+                                                 "package")
+        self.packages_button.setPopupMode(QToolButton.InstantPopup)
+        self.packages_button.setMenu(self.packages_menu)
+        toolbar.addWidget(self.packages_button)
+
+        self.duplicates_button = self._tool_button(tr("btn_dups"), "copy")
+        self.duplicates_button.clicked.connect(self.show_duplicates)
+        toolbar.addWidget(self.duplicates_button)
+
+        self.share_button = self._tool_button(tr("btn_share"), "share-2")
+        self.share_button.clicked.connect(self.toggle_share)
+        toolbar.addWidget(self.share_button)
+
+        self.more_menu = QMenu(self)
+        self.more_menu.setMinimumWidth(220)
+        self.edit_action = self._menu_action(
+            self.more_menu, tr("btn_edit_meta"), "file-text", self.edit_metadata)
+        self.delete_action = self._menu_action(
+            self.more_menu, tr("btn_delete"), "trash-2",
+            self.delete_selected_files)
+        self.edit_action.setEnabled(False)
+        self.delete_action.setEnabled(False)
+        self.more_menu.addSeparator()
+        self._menu_action(self.more_menu, tr("btn_history"), "history",
+                          self.show_history)
+        self._menu_action(self.more_menu, tr("btn_stats"), "chart-column",
+                          self.show_stats)
+        self.more_menu.addSeparator()
+        self._menu_action(
+            self.more_menu, tr("btn_feedback"), "message-square",
+            lambda: dialogs.FeedbackDialog(self, self.settings).exec())
+        self._menu_action(self.more_menu, tr("btn_help"), "circle-help",
+                          lambda: dialogs.text_dialog(
+                              self, tr("btn_help"), tr("help_text")))
+        self._menu_action(
+            self.more_menu, tr("btn_about"), "info",
+            lambda: dialogs.text_dialog(
+                self, tr("btn_about"),
+                tr("about_text").format(__version__)))
+        self._menu_action(self.more_menu, tr("btn_settings"), "settings",
+                          self.open_settings)
+        self.more_button = QToolButton()
+        self.more_button.setObjectName("IconGhost")
+        self.more_button.setIcon(
+            icons.icon("ellipsis-vertical", theme.PALETTE["muted"], 18))
+        self.more_button.setIconSize(QSize(18, 18))
+        self.more_button.setToolTip(tr("more_actions"))
+        self.more_button.setFixedSize(36, 36)
+        self.more_button.setPopupMode(QToolButton.InstantPopup)
+        self.more_button.setMenu(self.more_menu)
+        toolbar.addWidget(self.more_button)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.subject_combo)
+        toolbar.addWidget(self.kind_combo)
+        toolbar.addWidget(self.year_combo)
 
         # --- center: catalog table -----------------------------------
         columns = [tr("col_name"), tr("col_subject"), tr("col_chapter_lesson"),
@@ -131,8 +273,26 @@ class MainWindow(QMainWindow):
         # multi-select (Ctrl/Shift) feeds the bulk actions below
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 420)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setMouseTracking(True)
+        self.table.setIconSize(QSize(16, 16))
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(
+            theme.METRICS["row_height"])
+        self.table.setItemDelegateForColumn(
+            3, KindBadgeDelegate(self.table))
+        # Stretch the NAME column. setStretchLastSection stretched
+        # «سال» (the last logical column in RTL), which squeezed «درس» into
+        # «مطالعات ...» while the name stayed fixed at 420 px.
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(80)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col, width in ((1, 150), (2, 150), (3, 110),
+                           (4, 100), (5, 120), (6, 100)):
+            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            self.table.setColumnWidth(col, width)
         self.table.doubleClicked.connect(self.open_selected_file)
         # E3: right-click a row → «حذف از کتابخانه…» (confirmed, and the
         # file is MOVED to files/.trash — never erased)
@@ -142,50 +302,90 @@ class MainWindow(QMainWindow):
         self.delete_shortcut = QShortcut(QKeySequence.Delete, self.table)
         self.delete_shortcut.setContext(Qt.WidgetShortcut)
         self.delete_shortcut.activated.connect(self.delete_selected_files)
+        self.table.itemSelectionChanged.connect(self._update_action_states)
 
         # E2: empty states — a fresh library and an empty search each get
         # one sentence instead of a silent blank table. The label lives on
         # the table's viewport so refresh() can show/hide it in place.
         self.empty_label = QLabel(self.table.viewport())
+        self.empty_label.setObjectName("EmptyHint")
         self.empty_label.setAlignment(Qt.AlignCenter)
         self.empty_label.setWordWrap(True)
-        self.empty_label.setStyleSheet("color: #a0a0a8; font-size: 14px;")
+        self.empty_label.setFixedWidth(380)     # stable centered wrap
         self.empty_label.hide()
+        # The empty state offers the action instead of only describing
+        # it — one primary click starts the import dialog.
+        self.empty_button = QPushButton(tr("btn_import"),
+                                        self.table.viewport())
+        self.empty_button.setObjectName("EmptyCta")
+        self.empty_button.setFixedSize(170, 38)
+        self.empty_button.clicked.connect(self.open_import_dialog)
+        self.empty_button.hide()
+        # The viewport's final geometry arrives after the first layout, so
+        # centering at refresh() time is stale — re-center on every
+        # viewport resize (first show, scrollbars, window resizes).
+        self.table.viewport().installEventFilter(self)
 
-        # --- bottom: action buttons ----------------------------------
-        buttons = QHBoxLayout()
-        for text, handler in [
-                (tr("btn_import"), self.open_import_dialog),
-                (tr("btn_export"), self.export_package),
-                (tr("btn_verify"), self.verify_package),
-                (tr("btn_import_pkg"), self.import_package),
-                (tr("btn_dups"), self.show_duplicates),
-                (tr("btn_edit_meta"), self.edit_metadata),
-                (tr("btn_delete"), self.delete_selected_files),
-                (tr("btn_history"), self.show_history),
-                (tr("btn_stats"), self.show_stats),
-                (tr("btn_share"), self.toggle_share),
-                (tr("btn_feedback"), lambda: dialogs.FeedbackDialog(self, self.settings).exec()),
-                (tr("btn_help"), lambda: dialogs.text_dialog(
-                    self, tr("btn_help"), tr("help_text"))),
-                (tr("btn_about"), lambda: dialogs.text_dialog(
-                    self, tr("btn_about"),
-                    tr("about_text").format(__version__))),
-                (tr("btn_settings"), self.open_settings)]:
-            btn = QPushButton(text)
-            btn.clicked.connect(handler)
-            buttons.addWidget(btn)
+        # --- assembly -------------------------------------------------
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(16, 12, 16, 12)
+        content_layout.addWidget(self.table)
 
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.addLayout(top)
-        layout.addWidget(self.table)
-        layout.addLayout(buttons)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(app_bar)
+        layout.addWidget(filter_bar)
+        layout.addWidget(content, 1)
         self.setCentralWidget(central)
-        self.setStatusBar(QStatusBar())
+
+        status = QStatusBar()
+        status.setSizeGripEnabled(False)
+        self.count_label = QLabel("")
+        self.count_label.setObjectName("Muted")
+        self.count_label.setContentsMargins(12, 0, 0, 0)
+        status.addWidget(self.count_label)
+        self.unclassified_button = QPushButton("")
+        self.unclassified_button.setObjectName("WarnPill")
+        self.unclassified_button.setCursor(Qt.PointingHandCursor)
+        self.unclassified_button.clicked.connect(self._show_unclassified)
+        status.addPermanentWidget(self.unclassified_button)
+        self.setStatusBar(status)
+
+        QShortcut(QKeySequence(QKeySequence.StandardKey.Find),
+                  self).activated.connect(self.search_box.setFocus)
+        QShortcut(QKeySequence(QKeySequence.StandardKey.Open),
+                  self).activated.connect(self.open_import_dialog)
 
         self.reload_filters()
         self.refresh()
+
+    def _tool_button(self, text: str, icon_name: str) -> QToolButton:
+        button = QToolButton()
+        button.setText(text)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setIcon(icons.icon(icon_name, theme.PALETTE["text"], 18))
+        button.setIconSize(QSize(18, 18))
+        button.setCursor(Qt.PointingHandCursor)
+        button.setFixedHeight(36)
+        return button
+
+    def _menu_action(self, menu: QMenu, text: str, icon_name: str,
+                     slot) -> QAction:
+        action = menu.addAction(
+            icons.icon(icon_name, theme.PALETTE["muted"], 16), text)
+        action.triggered.connect(slot)
+        return action
+
+    def _update_clear_button(self, text: str) -> None:
+        self.clear_search_button.setVisible(bool(text))
+
+    def _show_unclassified(self) -> None:
+        index = self.subject_combo.findData(-1)
+        if index >= 0:
+            self.subject_combo.setCurrentIndex(index)
 
     # ---- catalog view -------------------------------------------------
 
@@ -269,38 +469,116 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 if col == 0:
                     item.setData(Qt.UserRole, row["id"])
+                    item.setIcon(self._file_icon)
+                    item.setToolTip(row["original_name"])
+                elif col == 1:
+                    item.setToolTip(row["subject_name"] or "—")
                 self.table.setItem(i, col, item)
         self.table.setUpdatesEnabled(True)
         self._update_empty_state(len(rows))
+        self._update_action_states()
         unclassified = unclassified_count(self.lib.conn)   # F6: computed once
-        self.statusBar().showMessage(
-            tr("status_files").format(len(rows))
-            + ("  ·  " + tr("status_unclassified").format(unclassified)
-               if unclassified else ""))
+        self.count_label.setText(
+            tr("status_files").format(i18n.num(len(rows))))
+        self.unclassified_button.setText(
+            tr("status_unclassified").format(i18n.num(unclassified)))
+        self.unclassified_button.setVisible(bool(unclassified))
+
+    def _update_action_states(self) -> None:
+        """Edit/delete follow the table selection."""
+        has_selection = bool(self.table.selectedItems())
+        self.edit_action.setEnabled(has_selection)
+        self.delete_action.setEnabled(has_selection)
 
     def _update_empty_state(self, shown: int) -> None:
         """E2: hide the hint when rows exist; otherwise pick the right
-        message — a fresh library vs a search that found nothing."""
+        message — a fresh library vs a search that found nothing. A fresh
+        library also gets the «وارد کردن» CTA."""
         if shown:
             self.empty_label.hide()
+            self.empty_button.hide()
             return
         total = self.lib.conn.execute(
             "SELECT COUNT(*) c FROM files").fetchone()["c"]
+        fresh = total == 0
         self.empty_label.setText(
-            tr("empty_library") if total == 0 else tr("empty_search"))
+            tr("empty_library") if fresh else tr("empty_search"))
+        self.empty_button.setVisible(fresh)
         self._center_empty_label()
         self.empty_label.show()
 
     def _center_empty_label(self) -> None:
         vp = self.table.viewport()
         self.empty_label.adjustSize()
-        self.empty_label.move(max(8, (vp.width() - self.empty_label.width()) // 2),
-                              max(8, (vp.height() - self.empty_label.height()) // 2))
+        show_button = not self.empty_button.isHidden()
+        gap = 12 if show_button else 0
+        button_h = self.empty_button.sizeHint().height() if show_button else 0
+        block_h = self.empty_label.height() + gap + button_h
+        top = max(8, (vp.height() - block_h) // 2)
+        self.empty_label.move(
+            max(8, (vp.width() - self.empty_label.width()) // 2), top)
+        if show_button:
+            self.empty_button.move(
+                max(8, (vp.width() - self.empty_button.width()) // 2),
+                top + self.empty_label.height() + gap)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if not self.empty_label.isHidden():
             self._center_empty_label()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._apply_dark_titlebar()
+
+    def _apply_dark_titlebar(self) -> None:
+        """The app is dark-only; a light Windows title bar would clash on
+        a machine whose system theme is light. DwmSetWindowAttribute is
+        the documented way to ask for the dark frame (attribute 20, with
+        19 as the older Windows 10 fallback)."""
+        if sys.platform != "win32" or getattr(self, "_dark_titlebar", False):
+            return
+        try:
+            import ctypes
+            value = ctypes.c_int(1)
+            for attribute in (20, 19):
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    int(self.winId()), attribute, ctypes.byref(value),
+                    ctypes.sizeof(value))
+                if result == 0:
+                    self._dark_titlebar = True
+                    break
+        except Exception:
+            pass                    # cosmetic only; never block startup
+
+    def eventFilter(self, obj, event) -> bool:
+        table = getattr(self, "table", None)
+        if (table is not None
+                and obj is table.viewport()
+                and event.type() == QEvent.Resize
+                and not self.empty_label.isHidden()):
+            self._center_empty_label()
+        elif (obj is self.search_box
+              and event.type() in (QEvent.FocusIn, QEvent.FocusOut)):
+            focused = event.type() == QEvent.FocusIn
+            self.search_shell.setProperty("focused", focused)
+            self.search_shell.style().unpolish(self.search_shell)
+            self.search_shell.style().polish(self.search_shell)
+        elif (table is not None and obj is table.viewport()
+              and event.type() == QEvent.ToolTip):
+            index = table.indexAt(event.pos())
+            if index.isValid() and self._cell_text_fits(index):
+                QToolTip.hideText()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _cell_text_fits(self, index) -> bool:
+        """True when the cell shows its text in full; tooltips then add
+        nothing. The name column also reserves room for its file icon."""
+        text = str(index.data(Qt.DisplayRole) or "")
+        reserved = 44 if index.column() == 0 else 20
+        available = self.table.visualRect(index).width() - reserved
+        return self.table.fontMetrics().horizontalAdvance(text) <= available
 
     def selected_file_id(self) -> int | None:
         """The current row's id (the id lives on column 0 only — perf F2.2)."""
@@ -381,12 +659,11 @@ class MainWindow(QMainWindow):
                 rows.append(row)
         if not rows:
             return
-        from ..core.normalize import persian_digits
         if len(rows) == 1:
             text = tr("delete_confirm").format(name=rows[0]["original_name"])
         else:
             text = tr("delete_confirm_many").format(
-                count=persian_digits(str(len(rows))))
+                count=i18n.num(len(rows)))
         answer = QMessageBox.question(
             self, tr("delete_title"), text,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -417,7 +694,7 @@ class MainWindow(QMainWindow):
                 name=rows[0]["original_name"])
         else:
             message = tr("delete_done_many").format(
-                count=persian_digits(str(len(rows))))
+                count=i18n.num(len(rows)))
         self.statusBar().showMessage(message, 5000)
 
     def delete_file(self, file_id: int) -> None:
@@ -432,12 +709,10 @@ class MainWindow(QMainWindow):
         dialog = dialogs.BulkEditDialog(self, self.lib,
                                         [r["id"] for r in rows])
         if dialog.exec():
-            from ..core.normalize import persian_digits
             self.reload_filters()
             self.refresh()
             self.statusBar().showMessage(
-                tr("bulk_edit_done").format(
-                    count=persian_digits(str(len(rows)))), 5000)
+                tr("bulk_edit_done").format(count=i18n.num(len(rows))), 5000)
 
     # ---- actions ------------------------------------------------------
 

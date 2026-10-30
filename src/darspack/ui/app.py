@@ -16,35 +16,9 @@ from PySide6.QtWidgets import QApplication
 from .. import APP_NAME, asset_path
 from .. import i18n
 from ..core.library import Library
+from . import theme
 
 DEFAULT_LIBRARY = Path.home() / "Documents" / "DarsPackLibrary"
-
-# Dark theme via QSS — Qt's CSS dialect. One stylesheet, no per-widget colors.
-DARK_QSS = """
-QWidget { background-color: #1e1f24; color: #e8e8ea; font-family: 'Segoe UI'; }
-QLineEdit, QComboBox, QSpinBox, QTextEdit {
-    background-color: #2a2b31; border: 1px solid #3a3b42;
-    border-radius: 6px; padding: 5px 8px;
-}
-QPushButton {
-    background-color: #2d3f6e; border: none; border-radius: 6px;
-    padding: 7px 12px;
-}
-QPushButton:hover { background-color: #3a5290; }
-QPushButton:disabled { background-color: #33343a; color: #88888f; }
-QTableWidget {
-    background-color: #23242a; gridline-color: #3a3b42;
-    border: 1px solid #3a3b42; border-radius: 6px;
-}
-QHeaderView::section {
-    background-color: #2a2b31; border: none; padding: 6px;
-}
-QTableWidget::item:selected { background-color: #2d3f6e; }
-QStatusBar { color: #a0a0a8; }
-QListWidget { background-color: #23242a; border: 1px solid #3a3b42; }
-QTabWidget::pane { border: 1px solid #3a3b42; }
-QLabel { background: transparent; }
-"""
 
 
 def load_settings() -> tuple[dict, Path]:
@@ -72,7 +46,7 @@ def load_settings() -> tuple[dict, Path]:
 def apply_font_size(settings: dict, app: QApplication | None = None) -> None:
     app = app or QApplication.instance()
     if app is not None:
-        font = QFont("Segoe UI")
+        font = QFont(theme.load_fonts())
         font.setPointSize(int(settings.get("font_size", 10)))
         app.setFont(font)
 
@@ -106,7 +80,9 @@ def run() -> None:
     app.setWindowIcon(QIcon(str(asset_path("icon/darspack.ico"))))
     app.setLayoutDirection(
         Qt.RightToLeft if i18n.language() == "fa" else Qt.LeftToRight)
-    app.setStyleSheet(DARK_QSS)
+    app.setStyle("Fusion")          # one predictable base before the QSS
+    theme.load_fonts()
+    app.setStyleSheet(theme.build_qss())
     apply_font_size(settings, app)
     _install_excepthook()
 

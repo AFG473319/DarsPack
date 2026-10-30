@@ -10,7 +10,14 @@ Project rule: every dependency is registered here **before** installation — wh
 | pytest 9.1.1 | Test runner | Automated tests for every critical algorithm | MIT | part of the 250 MB venv below | installed (dev only) |
 | PyInstaller 6.22.3 | Bundles Python + app into a Windows executable (onedir) | End users must not need Python installed | GPLv2 with bootloader exception (built app unrestricted) | part of the 270 MB venv below | installed (dev only) |
 
-**Whole development environment: 270 MB** (`.venv/` including all of the above). Built output: 104 MB app folder, 2.4 MB launcher exe — see `docs/limitations.md` for measured numbers. The full `PySide6` distribution is intentionally NOT installed — its Addons half (WebEngine, 3D, multimedia, …) would add hundreds of megabytes DarsPack never uses; `PySide6-Essentials` ships exactly the widgets we need.
+### Bundled UI assets (not Python packages)
+
+| Asset | What it does | Why DarsPack needs it | Licence | Measured size | Status |
+|---|---|---|---|---|---|
+| Vazirmatn 33.003, static weights Regular/Medium/SemiBold/Bold | Persian-first typeface | The UI's default font: proper Persian shaping and a consistent, modern look. Bundled so target PCs do not need it installed; falls back to Segoe UI if a file ever fails to load. | SIL OFL-1.1 (`assets/fonts/OFL.txt`) | 482 kB for four TTFs + 4.3 kB licence (2026-10-29) | bundled 2026-10-29 |
+| Lucide 0.468.0, 23 SVG icons | Consistent line icons for the toolbar, menus and file rows | One visual language instead of text-only buttons; 20 px SVGs are crisp on every DPI. No icon font and no pip package. | ISC (`assets/icons/LICENSE`) | 26 kB for 23 SVGs + 3.2 kB licence (2026-10-29) | bundled 2026-10-29 |
+
+**Whole development environment: 270 MB** (`.venv/` including all of the above). Built output: 105 MB app folder, 2.6 MB launcher exe (2026-10-29) — see `docs/limitations.md` for measured numbers. The full `PySide6` distribution is intentionally NOT installed — its Addons half (WebEngine, 3D, multimedia, …) would add hundreds of megabytes DarsPack never uses; `PySide6-Essentials` ships exactly the widgets we need.
 
 Everything else is the Python standard library: `sqlite3`, `hashlib`, `zipfile`, `http.server`, `json`, `threading`, `hmac`, `tempfile`. No other third-party packages are planned for v1; adding one requires an entry here first and a size check.
 

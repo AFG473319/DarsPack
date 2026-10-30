@@ -33,6 +33,19 @@ def test_unknown_key_falls_back_to_the_key_itself():
     assert i18n.tr("no_such_key") == "no_such_key"
 
 
+def test_num_formats_digits_for_the_active_language():
+    """i18n.num() is the one place UI numbers become Persian digits —
+    English stays Latin, Persian uses ۰-۹."""
+    assert i18n.num(3) == "۳"
+    assert i18n.num("1405-1406") == "۱۴۰۵-۱۴۰۶"
+    i18n.set_language("en")
+    try:
+        assert i18n.num(3) == "3"
+    finally:
+        i18n.set_language("fa")
+    assert i18n.num(3) == "۳"
+
+
 def test_invalid_language_code_stays_persian():
     i18n.set_language("xx")
     try:

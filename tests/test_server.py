@@ -116,6 +116,33 @@ def test_favicon_is_served(ro_server):
     assert body[:4] == b"\x00\x00\x01\x00"
 
 
+def test_pwa_assets_are_public(ro_server):
+    """The browser fetches the manifest, install icons and font BEFORE
+    the PIN is entered, so these routes must not require one."""
+    share, _ = ro_server
+    base = f"http://127.0.0.1:{share.port}"
+    status, body, res = _exchange(f"{base}/manifest.webmanifest")
+    assert status == 200
+    assert res.headers["Content-Type"].startswith("application/manifest+json")
+    manifest = json.loads(body)
+    assert manifest["display"] == "standalone"
+    assert {icon["sizes"] for icon in manifest["icons"]} == \
+        {"192x192", "512x512"}
+
+    for name, ctype in (("icon-192.png", "image/png"),
+                        ("icon-512.png", "image/png")):
+        status, body, res = _exchange(f"{base}/icons/{name}")
+        assert status == 200 and body.startswith(b"\x89PNG")
+        assert res.headers["Content-Type"] == ctype
+
+    status, body, res = _exchange(f"{base}/fonts/Vazirmatn-Regular.ttf")
+    assert status == 200 and body[:4] == b"\x00\x01\x00\x00"
+    assert res.headers["Content-Type"] == "font/ttf"
+
+    assert _get(f"{base}/icons/nope.png")[0] == 404
+    assert _get(f"{base}/fonts/nope.ttf")[0] == 404
+
+
 def test_api_requires_pin(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"
@@ -177,6 +204,22 @@ def test_search_endpoint_normalizes_digits(server):
                    + f"&pin={share.pin}")
     names = [f["name"] for f in json.loads(body)["files"]]
     assert names == ["نمونه سوال ریاضی فصل 3.pdf"]
+
+
+def test_search_returns_chapter_and_lesson(server):
+    """The phone client needs both book positions; the API used to omit
+    lesson entirely, so a file with both showed only «فصل ۳»."""
+    share, lib = server
+    with lib.conn:
+        lib.conn.execute(
+            "UPDATE files SET chapter=3, lesson=7 WHERE original_name=?",
+            ("نمونه سوال ریاضی فصل 3.pdf",))
+    base = f"http://127.0.0.1:{share.port}"
+    _, body = _get(f"{base}/api/search?q=&pin={share.pin}")
+    target = next(f for f in json.loads(body)["files"]
+                  if f["name"] == "نمونه سوال ریاضی فصل 3.pdf")
+    assert target["chapter"] == 3
+    assert target["lesson"] == 7
 
 
 def test_download_endpoint(server):

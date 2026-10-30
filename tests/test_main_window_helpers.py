@@ -26,12 +26,20 @@ def test_jalali_date_bad_input_passes_through():
 
 
 def test_human_size_table():
-    # the sizes column: bytes stay integers, bigger units get one decimal
-    assert human_size(0) == "0 B"
-    assert human_size(1023) == "1023 B"
-    assert human_size(1024) == "1.0 KB"
-    assert human_size(1536) == "1.5 KB"
-    assert human_size(5 * 1024 ** 3) == "5.0 GB"
+    # the sizes column: bytes stay integers, bigger units get a decimal
+    # only when needed (no «660.0 KB» noise)
+    assert human_size(0, "en") == "0 B"
+    assert human_size(1023, "en") == "1023 B"
+    assert human_size(1024, "en") == "1 KB"
+    assert human_size(1536, "en") == "1.5 KB"
+    assert human_size(5 * 1024 ** 3, "en") == "5 GB"
+    # Persian UI: Persian digits, Persian units, Persian decimal separator
+    assert human_size(0, "fa") == "۰ بایت"
+    assert human_size(1023, "fa") == "۱۰۲۳ بایت"
+    assert human_size(1024, "fa") == "۱ کیلوبایت"
+    assert human_size(1536, "fa") == "۱٫۵ کیلوبایت"
+    assert human_size(660 * 1024, "fa") == "۶۶۰ کیلوبایت"
+    assert human_size(5 * 1024 ** 3, "fa") == "۵ گیگابایت"
 
 
 # --- MainWindow-level behavior (offscreen) ---------------------------------
@@ -107,10 +115,201 @@ def test_display_strs_cache_hits_on_second_refresh(window):
 
 
 def test_empty_library_shows_start_hint(window):
-    """E2: a fresh library greets with the «start with import» sentence."""
+    """E2: a fresh library greets with a short line; the CTA below it
+    carries the action, so the sentence no longer repeats the button."""
     window.refresh()
     assert not window.empty_label.isHidden()
-    assert window.empty_label.text() == "هنوز فایلی نیست — با «وارد کردن…» شروع کنید"
+    assert window.empty_label.text() == "هنوز فایلی اینجا نیست."
+
+
+def test_empty_library_offers_the_import_cta(window):
+    """The empty state must offer the action, not just describe
+    it — one click on the welcome button starts the import dialog."""
+    window.refresh()
+    assert not window.empty_button.isHidden()
+    calls = []
+    window.open_import_dialog = lambda: calls.append(1)
+    window.empty_button.click()
+    assert calls == [1]
+
+
+def test_empty_state_is_centered_on_first_show(window, qapp):
+    """Bug report 2026-10-29: the welcome text sat left of center on the
+    first show. The label is centered against the table viewport, whose
+    final geometry arrives only after the window is laid out — the
+    viewport resize must re-center it."""
+    window.resize(1200, 700)
+    window.show()
+    qapp.processEvents()
+    try:
+        center = window.table.viewport().rect().center().x()
+        assert abs(window.empty_label.geometry().center().x() - center) <= 4
+        assert abs(window.empty_button.geometry().center().x() - center) <= 4
+    finally:
+        window.close()
+
+
+def test_empty_search_hides_the_import_cta(window):
+    src = window.lib.root.parent / "a.pdf"
+    src.write_bytes(b"a")
+    import_file(window.lib, src)
+    window.search_box.setText("چیزی-که-نیست")
+    window.refresh()
+    assert not window.empty_label.isHidden()
+    assert window.empty_button.isHidden()
+
+
+def test_window_title_is_the_product_name(window):
+    """The title bar used to expose the full library path."""
+    assert window.windowTitle() == "درس‌پک"
+
+
+def test_table_stretches_the_name_column_not_the_year(window):
+    """setStretchLastSection(True) stretched «سال» (the last
+    logical column in RTL), squeezing «درس» to «مطالعات ...» while the
+    name stayed fixed."""
+    from PySide6.QtWidgets import QHeaderView
+    header = window.table.horizontalHeader()
+    assert header.sectionResizeMode(0) == QHeaderView.Stretch
+    assert header.stretchLastSection() is False
+    assert window.table.columnWidth(1) >= 120     # «درس» no longer squeezed
+
+
+def test_selection_dependent_buttons_are_disabled_without_a_row(window):
+    """Edit/delete must be disabled until a row is selected, instead of
+    popping «چیزی انتخاب نشده» after the click."""
+    assert not window.edit_action.isEnabled()
+    assert not window.delete_action.isEnabled()
+    src = window.lib.root.parent / "b.pdf"
+    src.write_bytes(b"b")
+    import_file(window.lib, src)
+    window.refresh()
+    assert not window.edit_action.isEnabled()      # refresh clears selection
+    window.table.selectRow(0)
+    assert window.edit_action.isEnabled()
+    assert window.delete_action.isEnabled()
+    window.table.clearSelection()
+    assert not window.edit_action.isEnabled()
+    assert not window.delete_action.isEnabled()
+
+
+def test_status_bar_count_uses_persian_digits(window):
+    src = window.lib.root.parent / "c.pdf"
+    src.write_bytes(b"c")
+    import_file(window.lib, src)
+    window.refresh()
+    assert "۱ فایل در کتابخانه" in window.count_label.text()
+
+
+def test_action_hierarchy_replaces_the_flat_button_row(window):
+    """Wave 1: one primary action in the app bar, a compact secondary
+    toolbar, and everything else in an overflow menu."""
+    from darspack.i18n import tr
+    from darspack.ui.delegates import KindBadgeDelegate
+
+    assert window.import_button.objectName() == "Primary"
+    assert window.packages_button.menu() is not None
+    package_actions = [a.text() for a in window.packages_button.menu().actions()]
+    for text in (tr("btn_export"), tr("btn_verify"), tr("btn_import_pkg")):
+        assert text in package_actions
+    menu_texts = [a.text() for a in window.more_menu.actions() if a.text()]
+    for text in (tr("btn_edit_meta"), tr("btn_delete"), tr("btn_history"),
+                 tr("btn_stats"), tr("btn_feedback"), tr("btn_help"),
+                 tr("btn_about"), tr("btn_settings")):
+        assert text in menu_texts
+    assert window.table.verticalHeader().isHidden()
+    assert window.table.alternatingRowColors()
+    assert isinstance(window.table.itemDelegateForColumn(3),
+                      KindBadgeDelegate)
+
+
+def test_search_bar_has_a_leading_icon(window):
+    """The magnifier lives inside the rounded search shell on the leading
+    (right) side; QLineEdit actions sat on the physical left next to
+    right-aligned Persian text."""
+    from PySide6.QtWidgets import QFrame, QLabel
+
+    shell = window.findChild(QFrame, "SearchShell")
+    assert shell is not None
+    assert window.search_box.parent() is shell
+    assert any(not label.pixmap().isNull()
+               for label in shell.findChildren(QLabel))
+
+
+def test_search_clear_button_is_centered_and_clears(window, qapp):
+    """The native clear button sat low; a shell button is vertically
+    centered and only appears while there is text."""
+    window.resize(1000, 640)
+    window.show()
+    qapp.processEvents()
+    try:
+        assert window.clear_search_button.isHidden()
+        window.search_box.setText("ریاضی")
+        assert not window.clear_search_button.isHidden()
+        button_center = window.clear_search_button.mapTo(
+            window.search_shell,
+            window.clear_search_button.rect().center())
+        assert abs(button_center.y()
+                   - window.search_shell.rect().center().y()) <= 2
+        window.clear_search_button.click()
+        assert window.search_box.text() == ""
+        assert window.clear_search_button.isHidden()
+    finally:
+        window.close()
+
+
+def test_tooltips_are_reserved_for_elided_text_and_icon_buttons(window, qapp):
+    """Text buttons show their label already; only icon-only buttons and
+    genuinely truncated cells need a tooltip box."""
+    assert window.packages_button.toolTip() == ""
+    assert window.duplicates_button.toolTip() == ""
+    assert window.share_button.toolTip() == ""
+    assert window.more_button.toolTip() != ""
+    assert window.more_button.text() == ""
+    assert not window.more_button.icon().isNull()
+    assert window.more_menu.minimumWidth() >= 220
+
+    short = window.lib.root.parent / "a.pdf"
+    short.write_bytes(b"a")
+    long_name = "x" * 120 + ".pdf"
+    long_path = window.lib.root.parent / long_name
+    long_path.write_bytes(b"b")
+    import_file(window.lib, short)
+    import_file(window.lib, long_path)
+    window.refresh()
+    window.resize(1000, 640)
+    window.show()
+    qapp.processEvents()
+    try:
+        model = window.table.model()
+        indexes = {model.index(row, 0).data(): model.index(row, 0)
+                   for row in range(model.rowCount())}
+        assert window._cell_text_fits(indexes["a.pdf"])
+        assert not window._cell_text_fits(indexes[long_name])
+    finally:
+        window.close()
+
+
+def test_every_kind_has_a_badge_palette():
+    from darspack.ui.delegates import KIND_BADGES
+    from darspack.ui.main_window import KINDS
+    assert set(KINDS) <= set(KIND_BADGES)
+
+
+def test_chapter_and_lesson_are_both_shown(window):
+    """A file can carry both a chapter and a lesson; the merged cell must
+    show both («فصل ۳ / درس ۵»). The column is wide enough for the
+    longest pair at larger font sizes — the move to Vazirmatn made the
+    old 110 px column elide it."""
+    src = window.lib.root.parent / "both.pdf"
+    src.write_bytes(b"both")
+    import_file(window.lib, src)
+    with window.lib.conn:
+        window.lib.conn.execute(
+            "UPDATE files SET chapter=3, lesson=5")
+    window.refresh()
+    assert window.table.item(0, 2).text() == "فصل ۳ / درس ۵"
+    assert window.table.columnWidth(2) >= 140
 
 
 def test_search_no_result_shows_digit_hint(window):

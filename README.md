@@ -13,12 +13,12 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 - Duplicate detection (same content) and version-conflict detection (same name, different content) — **flagged, never auto-deleted**.
 - **Manual delete and bulk actions** — Delete key, «حذف» button or right-click anywhere on a row; select several files (Ctrl/Shift) to remove them together (moved to the library's `.trash` folder, never erased) or reclassify them in one form.
 - Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
-- Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, download, upload).
-- Dark RTL desktop UI, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
+- Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, download, multi-file upload) with a web-app manifest for «Add to Home screen».
+- Persian-first dark RTL UI with the bundled Vazirmatn typeface and one consistent icon set, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
 
 ## Key ideas
 
-- **Manual import into an app-managed library** — files are copied in, hashed (SHA-256) and cataloged by subject, chapter, teacher and school year (Jalali calendar).
+- **Manual import into an app-managed library** — files are copied in, hashed (SHA-256) and cataloged by subject, chapter, lesson, kind and school year (Jalali calendar).
 - **Duplicates and version conflicts are flagged, never auto-deleted** — the user always decides.
 - **Portable «درس‌پک» packages** — a ZIP with a JSON manifest, per-file SHA-256 hashes and an offline browsable index; anyone can verify a package's completeness and integrity, even without DarsPack installed.
 - **Fully offline by default** — the LAN share is opt-in per session and PIN-protected.

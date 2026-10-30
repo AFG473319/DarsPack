@@ -24,13 +24,14 @@ Honest list of what DarsPack v0.1 does **not** do. Stating flaws openly is delib
 12. **Hashing speed is CPU-bound.** Measured SHA-256 throughput on the target i5-2450M is **30–55 MB/s** in Python (a single core); a 500 MB video takes ~10–15 seconds — with a visible progress bar. An early draft of this document claimed 150–250 MB/s; the real number is lower and was corrected after a proper measurement (corrected after a proper measurement). Import reads each file twice (hash pass + copy pass); large media is the slow case.
 13. **The exe is unsigned.** Windows SmartScreen shows a warning on first run ("More info → Run anyway"). Code-signing certificates cost money; the demo script covers this in one sentence.
 14. **No *automatic* backups of the library.** The app has a one-click backup («پشتیبان‌گیری»): one ZIP holding the browsable package (manifest + files + index), the catalog snapshot (`catalog.db`) and a restore guide — but the user must press it; nothing schedules or runs on its own, and restoring is still the documented manual steps.
-15. **The phone client's JavaScript is only lightly guarded.** pytest covers the server and a static wiring check (ids exist, script parses), but there is no browser-level automated test of the phone UI — real-phone testing is manual. (A silent JS failure hid a broken PIN button until a real user tried it.)
+15. **The phone client's JavaScript is only lightly guarded.** pytest covers the server and a static wiring check (ids exist, script parses). Since 2026-10-29 a Node boot harness also runs the client against a stub DOM to guard which panel is visible after a reload; there is still no real-browser automated test, so real-phone testing remains manual. (A silent JS failure hid a broken PIN button until a real user tried it; a display bug later left returning visitors on a blank page.)
 16. **Subject classification quality depends on filenames.** Files with unhelpful names («IMG_2026.pdf») start unclassified and rely on the user completing them via the review dialog / «بدون درس» filter. The app makes this visible rather than guessing.
 17. **~~The second distinct phone upload in a share session fails~~ — FIXED (2026-10-26).** The server used to write the `web_upload` log row after the import transaction, on the request thread's own connection, and never commit it; the connection stayed alive in the server's registry, so the uncommitted write held SQLite's write lock for the whole session — the second upload with *new* content stalled ~5 s and failed. The server now commits the log row explicitly (regression tests: the row exists, and two distinct uploads in a row both land).
 18. **~~Stopping the share server races an in-flight request's log write~~ — FIXED (2026-10-26).** Handler threads used to run as daemons, which `ThreadingMixIn` never tracks or joins, so `stop()` closed each request thread's SQLite connection while a request could still be inside its log write (a native access violation). Handler threads are now joinable, so `server_close()` waits for them before any connection is closed. The test suite's own workaround (`daemon_threads = False`) became the product fix.
 19. **The test suite can exit non-zero even when every test passes (Qt offscreen teardown crash).** On this machine some Qt widget tests (notably `tests/test_classify.py`) occasionally crash the pytest process during interpreter shutdown — exit code 127 or 139 — after the summary line reports all tests passed. Reproduced on a pristine `HEAD` worktree, so it predates the 2026-10-29 icon work and is not caused by any app code; the tests themselves pass. On this machine treat the green summary line as the pass signal, and re-run any file that exits non-zero to confirm. Not yet fixed.
+20. **The phone web app is installable only as far as the browser allows over plain HTTP.** The client ships a manifest and 192/512 px icons, but Chrome requires a secure context (HTTPS or localhost) for a full PWA install and service-worker features. On the LAN address (`http://192.168.x.x`) Android may offer «افزودن به صفحهٔ خانه» as a shortcut rather than an installed PWA. Adding HTTPS with a local certificate would add browser warnings; not planned for v1.
 
-## Bugs found and fixed in real use (2026-10-24 dogfooding session)
+## Bugs found and fixed in real use
 
 Each was reported in real use via the in-app crash dialog, fixed, and covered by a regression test:
 
@@ -38,15 +39,17 @@ Each was reported in real use via the in-app crash dialog, fixed, and covered by
 2. The metadata dialog crashed on files without a subject (missing `subject_name` column in its query). Fixed: JOIN subjects.
 3. The phone PIN button did nothing (client JS referenced a non-existent implicit global). Fixed: explicit element lookups + inline errors + static wiring guards.
 4. The feedback button crashed (Qt passes `checked` to plain-function slots). Fixed: lambda wiring + a wiring-guard test.
+5. **The phone client showed a blank page on every reload with a saved PIN** (found during the 2026-10-29 UI audit). The library rows were rendered, but both panels stayed `display:none`; only the first PIN entry ever un-hid the list. Fixed: the list is shown whenever a stored PIN exists (a stale PIN falls back to the PIN screen); guarded by a Node boot test and verified in a real browser.
+6. **The welcome text sat left of center on first open** (reported in real use, 2026-10-29). It was centered against the table viewport before the first layout had final geometry. Fixed: the viewport's resize event re-centers the overlay; regression test pins the centered position on first show.
 
 ## Measured on the target laptop (i5-2450M, 8 GB RAM, Windows 11) — 2026-10-24; re-measured 2026-10-25 after the UI improvement round
 
 | Metric | Value | How |
 |---|---|---|
 | Whole dev environment | 270 MB (venv incl. PySide6-Essentials, PyInstaller, qrcode) | `du -sh .venv` |
-| Built app (onedir) | 104 MB folder; DarsPack.exe 2.5 MB (was 2.4 MB) | `du -sh dist/DarsPack` |
+| Built app (onedir) | 105 MB folder; DarsPack.exe 2.6 MB (2026-10-29) | `du -sh dist/DarsPack` |
 | Startup to app-ready | 700–1100 ms on an empty library (was 420 ms on 2026-10-24; the machine's background load differs between the two measurements — not directly comparable. The deferred-import work (F4) removed ~420–490 ms of module imports from source runs.) | process start → first settings write |
 | Idle RAM | ~81 MB on an empty library (was 76 MB) | `tasklist` after 8 s idle |
-| Test suite | 257/257 green, ~32 s | `pytest` |
+| Test suite | 317/317 green, ~30–50 s depending on machine load (2026-10-29) | `pytest` |
 
 Every number above is reproducible from this repository (`installer/build.bat`, `pytest`, `eval/`).

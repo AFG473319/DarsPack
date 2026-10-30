@@ -24,7 +24,19 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .. import asset_path
 from ..core.library import Library
+
+_ICON_TYPES = {
+    "icon-192.png": "image/png",
+    "icon-512.png": "image/png",
+}
+_FONT_FILES = {
+    "Vazirmatn-Regular.ttf",
+    "Vazirmatn-SemiBold.ttf",
+    "Vazirmatn-Bold.ttf",
+}
+
 
 def _open_server_library(root: str) -> Library:
     """Open a library for a server thread WITHOUT the maintenance passes (F1).
@@ -218,13 +230,17 @@ def _make_handler(server: ShareServer):
         # ---- helpers --------------------------------------------------
 
         def _send(self, code: int, body: bytes, ctype: str,
-                  no_store: bool = False) -> None:
+                  no_store: bool = False,
+                  cache_seconds: int | None = None) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             if no_store:
                 # D4 (server side): API answers are never cached — a phone
                 # must always see the library as it is right now
                 self.send_header("Cache-Control", "no-store")
+            elif cache_seconds is not None:
+                self.send_header(
+                    "Cache-Control", f"public, max-age={cache_seconds}")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -252,6 +268,12 @@ def _make_handler(server: ShareServer):
                 self._serve_client()
             elif route == "/favicon.ico":
                 self._serve_favicon()
+            elif route == "/manifest.webmanifest":
+                self._serve_manifest()
+            elif route.startswith("/icons/"):
+                self._serve_icon(route)
+            elif route.startswith("/fonts/"):
+                self._serve_font(route)
             elif route == "/api/manifest":
                 if self._pin_ok():
                     from ..web.sync import catalog_manifest
@@ -272,7 +294,8 @@ def _make_handler(server: ShareServer):
                     self._json({"files": [
                         {"id": r["id"], "name": r["original_name"],
                          "subject": r["subject_name"],
-                         "chapter": r["chapter"], "kind": r["kind"],
+                         "chapter": r["chapter"], "lesson": r["lesson"],
+                         "kind": r["kind"],
                          "size": r["size_bytes"]} for r in rows]})
             elif route == "/api/subjects":
                 if self._pin_ok():
@@ -380,6 +403,34 @@ def _make_handler(server: ShareServer):
                 self._send(200, icon.read_bytes(), "image/x-icon")
             else:
                 self._send(404, b"not found", "text/plain")
+
+        def _serve_static(self, path: Path, ctype: str,
+                          cache_seconds: int | None = 86400) -> None:
+            if path.is_file():
+                self._send(200, path.read_bytes(), ctype,
+                           cache_seconds=cache_seconds)
+            else:
+                self._send(404, b"not found", "text/plain")
+
+        def _serve_manifest(self) -> None:
+            # PWA metadata is public: the browser fetches it before the PIN
+            self._serve_static(CLIENT_DIR / "manifest.webmanifest",
+                               "application/manifest+json", 3600)
+
+        def _serve_icon(self, route: str) -> None:
+            name = route.removeprefix("/icons/")
+            ctype = _ICON_TYPES.get(name)
+            if ctype is None:
+                self._send(404, b"not found", "text/plain")
+                return
+            self._serve_static(CLIENT_DIR / "icons" / name, ctype)
+
+        def _serve_font(self, route: str) -> None:
+            name = route.removeprefix("/fonts/")
+            if name not in _FONT_FILES:
+                self._send(404, b"not found", "text/plain")
+                return
+            self._serve_static(asset_path(f"fonts/{name}"), "font/ttf")
 
         def _serve_file(self, file_id: str) -> None:
             from ..core.normalize import latin_digits

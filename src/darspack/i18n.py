@@ -12,7 +12,11 @@ _current = "fa"   # Persian-first; switchable at runtime
 STRINGS = {
     "fa": {
         "app_title": "درس‌پک",
-        "search_placeholder": "جست‌جو… (فارسی یا انگلیسی، با اعداد فارسی یا لاتین)",
+        "search_placeholder": "جست‌وجو در کتابخانه…",
+        "clear_search": "پاک کردن جست‌وجو",
+        "app_subtitle": "کتابخانهٔ درسی",
+        "btn_packages": "بسته‌ها",
+        "more_actions": "بیشتر",
         "all_subjects": "همه‌ی درس‌ها",
         "all_kinds": "همه‌ی انواع",
         "col_name": "نام فایل",
@@ -34,8 +38,14 @@ STRINGS = {
         "btn_feedback": "بازخورد",
         "btn_settings": "تنظیمات",
         "status_files": "{} فایل در کتابخانه",
+        "unit_b": "بایت",
+        "unit_kb": "کیلوبایت",
+        "unit_mb": "مگابایت",
+        "unit_gb": "گیگابایت",
         "share_title": "اشتراک‌گذاری در شبکه‌ی محلی",
         "share_pin": "رمز اتصال (PIN)",
+        "copy_pin": "کپی رمز",
+        "copy_url": "کپی نشانی",
         "share_urls": "این نشانی را روی گوشی (در همان Wi-Fi) باز کنید:",
         "share_hint": "سرور فقط تا وقتی این پنجره باز است روشن می‌ماند. رمز هر بار تصادفی است.",
         "share_off": "سرور خاموش است.",
@@ -73,6 +83,7 @@ STRINGS = {
         "settings_lang": "زبان / Language",
         "settings_font": "اندازه‌ی فونت",
         "settings_lib": "پوشه‌ی کتابخانه",
+        "settings_advanced": "تنظیمات پیشرفته",
         "settings_restart": "تغییر زبان و پوشه‌ی کتابخانه بعد از اجرای دوباره اعمال می‌شود.",
         "about_text": "درس‌پک {}\nسازنده: AFG473319\n\nسازمان‌دهنده‌ی آفلاین فایل‌های درسی — فارسی‌اول، بدون نیاز به اینترنت.",
         "help_text": "۱) فایل‌ها را با «وارد کردن» به کتابخانه اضافه کنید — پیشنهاد درس و فصل از روی نام فایل داده می‌شود و قابل ویرایش است.\n"
@@ -85,16 +96,16 @@ STRINGS = {
         "feedback_placeholder": "چه چیزی خوب بود؟ چه چیزی باید بهتر شود؟",
         "feedback_thanks": "ممنون! بازخورد شما ذخیره شد.",
         "err_no_selection": "اول یک فایل انتخاب کنید.",
-        "ok": "باشه",
+        "ok": "ذخیره",
         "cancel": "لغو",
+        "close": "بستن",
 
         # --- added for the bulk-classify and metadata features (append-only) ---
-        "empty_library": "هنوز فایلی نیست — با «وارد کردن…» شروع کنید",
+        "empty_library": "هنوز فایلی اینجا نیست.",
         "empty_search": "چیزی پیدا نشد؛ اعداد فارسی و لاتین یکسان‌اند (۳ و 3 یکی است)",
         "col_year": "سال",
         "all_years": "همه‌ی سال‌ها",
         "meta_lesson": "شماره‌ی درس",
-        "meta_teacher": "دبیر",
         "meta_year": "سال تحصیلی",
         "meta_tags_col": "برچسب‌ها",
         "bulk_subject": "این درس را برای همه بگذار",
@@ -153,7 +164,11 @@ STRINGS = {
     },
     "en": {
         "app_title": "DarsPack",
-        "search_placeholder": "Search… (Persian or English, Persian or Latin digits)",
+        "search_placeholder": "Search the library…",
+        "clear_search": "Clear search",
+        "app_subtitle": "School library",
+        "btn_packages": "Packages",
+        "more_actions": "More",
         "all_subjects": "All subjects",
         "all_kinds": "All kinds",
         "col_name": "File name",
@@ -175,8 +190,14 @@ STRINGS = {
         "btn_feedback": "Feedback",
         "btn_settings": "Settings",
         "status_files": "{} files in library",
+        "unit_b": "B",
+        "unit_kb": "KB",
+        "unit_mb": "MB",
+        "unit_gb": "GB",
         "share_title": "Local network sharing",
         "share_pin": "Pairing PIN",
+        "copy_pin": "Copy PIN",
+        "copy_url": "Copy address",
         "share_urls": "Open this address on a phone on the same Wi-Fi:",
         "share_hint": "The server runs only while this window is open. A fresh random PIN is generated each time.",
         "share_off": "Server is off.",
@@ -214,6 +235,7 @@ STRINGS = {
         "settings_lang": "Language / زبان",
         "settings_font": "Font size",
         "settings_lib": "Library folder",
+        "settings_advanced": "Advanced settings",
         "settings_restart": "Language and library folder changes apply after restart.",
         "about_text": "DarsPack {}\nAuthor: AFG473319\n\nOffline-first organizer for school materials — Persian-first, no internet required.",
         "help_text": "1) Use Import to copy files into the library — subject/chapter is suggested from the filename and editable.\n"
@@ -226,16 +248,16 @@ STRINGS = {
         "feedback_placeholder": "What worked? What should be better?",
         "feedback_thanks": "Thank you! Your feedback was saved.",
         "err_no_selection": "Select a file first.",
-        "ok": "OK",
+        "ok": "Save",
         "cancel": "Cancel",
+        "close": "Close",
 
         # --- added for the bulk-classify and metadata features (append-only) ---
-        "empty_library": "No files yet — start with «Import…»",
+        "empty_library": "Nothing here yet.",
         "empty_search": "Nothing found; Persian and Latin digits match (۳ and 3 are the same)",
         "col_year": "Year",
         "all_years": "All years",
         "meta_lesson": "Lesson no.",
-        "meta_teacher": "Teacher",
         "meta_year": "School year",
         "meta_tags_col": "Tags",
         "bulk_subject": "Apply this subject to all",
@@ -303,5 +325,16 @@ def language() -> str:
     return _current
 
 
-def tr(key: str) -> str:
-    return STRINGS[_current].get(key, STRINGS["fa"].get(key, key))
+def tr(key: str, lang: str | None = None) -> str:
+    active = lang or _current
+    return STRINGS[active].get(key, STRINGS["fa"].get(key, key))
+
+
+_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def num(value, lang: str | None = None) -> str:
+    """Format a number for a language: ۰-۹ in Persian, Latin in English.
+    The single helper for UI counts, years and sizes."""
+    text = str(value)
+    return text.translate(_PERSIAN_DIGITS) if (lang or _current) == "fa" else text

@@ -71,15 +71,70 @@ def test_metadata_dialog_opens_for_unclassified_file(tmp_path, qapp):
         assert dlg.subject.currentText() == ""
 
 
-def test_metadata_dialog_saves_teacher_year_lesson(lib_with_file, qapp):
-    """A3/A3b: the metadata dialog writes the new fields the same way the
-    classify dialog does — teacher via get_or_create, year as text."""
+def test_metadata_spinboxes_show_persian_digits(lib_with_file, qapp):
+    """Chapter/lesson spinboxes showed Latin 3/0 in the Persian
+    UI; a Persian QLocale makes the widget render ۰-۹."""
     from darspack.ui.dialogs import MetadataDialog
     lib, file_id, _ = lib_with_file
     dlg = MetadataDialog(None, lib, file_id)
+    dlg.chapter.setValue(3)
+    dlg.lesson.setValue(12)
+    assert dlg.chapter.text() == "۳"
+    assert dlg.lesson.text() == "۱۲"
+    assert dlg.chapter.value() == 3               # parsing stays numeric
+
+
+def test_metadata_dialog_shows_the_file_and_offers_cancel(lib_with_file, qapp):
+    """The dialog must say which file is being edited, and Cancel must be
+    available (it previously had only the save button)."""
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    from darspack.i18n import tr
+    from darspack.ui.dialogs import MetadataDialog
+    lib, file_id, _ = lib_with_file
+    dlg = MetadataDialog(None, lib, file_id)
+    assert any(dlg.row["original_name"] in label.text()
+               for label in dlg.findChildren(QLabel))
+    assert tr("cancel") in {b.text() for b in dlg.findChildren(QPushButton)}
+
+
+def test_settings_advanced_fields_are_collapsed(tmp_path, qapp):
+    """Feedback endpoints are developer-facing; they live under an
+    «پیشرفته» toggle instead of the first screen."""
+    from darspack.ui.dialogs import SettingsDialog
+    path = tmp_path / "settings.json"
+    dlg = SettingsDialog(None, {"language": "fa", "font_size": 10,
+                                "library": ""}, path)
+    assert dlg.advanced_fields.isHidden()
+    dlg.advanced.setChecked(True)
+    assert not dlg.advanced_fields.isHidden()
+
+
+def test_feedback_dialog_offers_cancel(qapp):
+    from PySide6.QtWidgets import QPushButton
+
+    from darspack.i18n import tr
+    from darspack.ui.dialogs import FeedbackDialog
+    dlg = FeedbackDialog(None, {})
+    assert tr("cancel") in {b.text() for b in dlg.findChildren(QPushButton)}
+
+
+def test_metadata_dialog_saves_year_and_lesson_without_a_teacher_field(
+        lib_with_file, qapp):
+    """A3/A3b: year and lesson persist; the teacher input was removed
+    (it confused the flow), and saving must preserve an existing teacher
+    rather than wiping it."""
+    from darspack.core import db
+    from darspack.ui.dialogs import MetadataDialog
+    lib, file_id, _ = lib_with_file
+    with lib.conn:
+        teacher_id = db.get_or_create(lib.conn, "teachers", "آقای رضایی")
+        lib.conn.execute("UPDATE files SET teacher_id=? WHERE id=?",
+                         (teacher_id, file_id))
+    dlg = MetadataDialog(None, lib, file_id)
+    assert not hasattr(dlg, "teacher")            # the confusing field is gone
     dlg.subject.setCurrentText("ریاضی")
     dlg.lesson.setValue(7)
-    dlg.teacher.setCurrentText("آقای رضایی")
     dlg.year.setCurrentText("1403-1404")
     dlg._save()
     row = lib.conn.execute(
@@ -89,10 +144,9 @@ def test_metadata_dialog_saves_teacher_year_lesson(lib_with_file, qapp):
            WHERE f.id=?""", (file_id,)).fetchone()
     assert row["lesson"] == 7
     assert row["school_year"] == "1403-1404"
-    assert row["teacher_name"] == "آقای رضایی"
+    assert row["teacher_name"] == "آقای رضایی"   # stored data preserved
     # reopening shows the stored values back
     dlg2 = MetadataDialog(None, lib, file_id)
-    assert dlg2.teacher.currentText() == "آقای رضایی"
     assert dlg2.year.currentText() == "1403-1404"
     assert dlg2.lesson.value() == 7
 
@@ -348,6 +402,47 @@ def test_share_dialog_renders_qr_for_lan_url(qapp):
     dlg.deleteLater()
 
 
+def test_share_dialog_puts_the_qr_on_a_white_card(qapp):
+    """A bare white square on the dark dialog looked unfinished;
+    the QR gets a padded white card, the PIN gets a caption line, and
+    both PIN and URL are copyable."""
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QFrame, QLabel, QPushButton
+
+    from darspack.i18n import tr
+    from darspack.ui.dialogs import ShareDialog
+
+    dlg = ShareDialog(None, SimpleNamespace(pin="123456"),
+                      ["http://192.168.1.5:8000/"], on_close=None)
+    card = dlg.findChild(QFrame, "QrCard")
+    assert card is not None
+    assert "ffffff" in card.styleSheet().lower()
+    assert any(label.text() == tr("share_pin")
+               for label in dlg.findChildren(QLabel))
+    texts = {button.text() for button in dlg.findChildren(QPushButton)}
+    assert tr("copy_pin") in texts and tr("copy_url") in texts
+    dlg.deleteLater()
+
+
+# --- feedback: a real star rating -----------------------------------------
+
+def test_feedback_stars_are_flat_toggles(qapp):
+    """The rating rendered as five blue buttons. Stars must be
+    flat toggles, and the first N must be checked (gold) after a click."""
+    from darspack.ui.dialogs import FeedbackDialog
+
+    dlg = FeedbackDialog(None, {})
+    assert len(dlg.star_buttons) == 5
+    assert all(button.objectName() == "Star" for button in dlg.star_buttons)
+    dlg.star_buttons[3].click()              # 4th star
+    assert dlg.rating == 4
+    assert [b.isChecked() for b in dlg.star_buttons] == \
+        [True, True, True, True, False]
+    assert [b.text() for b in dlg.star_buttons] == ["★"] * 4 + ["☆"]
+    dlg.deleteLater()
+
+
 # --- E1/E5/D4: history, stats, live share refresh ---------------------------
 
 def test_activity_dialog_renders_events(lib_with_file, qapp):
@@ -405,12 +500,9 @@ def test_activity_dialog_forgets_selected_rule(tmp_path, qapp):
         assert dlg.rule_table.rowCount() == 1
 
 
-def test_bar_and_library_stats(lib_with_file, qapp):
-    """E5: the text bar is proportional; the stats match a planted fixture."""
-    from darspack.ui.dialogs import bar, library_stats
-    assert bar(6, 6) == "▓" * 12
-    assert bar(0, 6) == "░" * 12
-    assert bar(3, 6) == "▓" * 6 + "░" * 6
+def test_library_stats_matches_a_planted_fixture(lib_with_file, qapp):
+    """E5: the stats match a planted fixture."""
+    from darspack.ui.dialogs import library_stats
 
     lib, fid, _ = lib_with_file
     from darspack.core import db
@@ -422,6 +514,26 @@ def test_bar_and_library_stats(lib_with_file, qapp):
     assert stats["per_subject"] == [("ریاضی", 1)]
     assert stats["dedup_bytes"] == 0
     assert stats["unclassified"] == 0
+
+
+def test_stats_dialog_draws_real_progress_bars(lib_with_file, qapp):
+    """The Unicode ▓/░ bars rendered as gray tiles in Segoe UI —
+    the dialog must use QProgressBar and Persian units instead."""
+    from PySide6.QtWidgets import QLabel, QProgressBar
+
+    from darspack.core import db
+    from darspack.ui.dialogs import StatsDialog, library_stats
+
+    lib, fid, _ = lib_with_file
+    with lib.conn:
+        sid = db.get_or_create(lib.conn, "subjects", "ریاضی")
+        lib.conn.execute("UPDATE files SET subject_id=? WHERE id=?", (sid, fid))
+    dlg = StatsDialog(None, library_stats(lib.conn))
+    bars = dlg.findChildren(QProgressBar)
+    assert bars and max(b.value() for b in bars) == 1
+    texts = " ".join(label.text() for label in dlg.findChildren(QLabel))
+    assert "بایت" in texts                    # Persian size unit, no «B»
+    dlg.deleteLater()
 
 
 def test_stats_dialog_dedup_bytes(tmp_path, qapp):

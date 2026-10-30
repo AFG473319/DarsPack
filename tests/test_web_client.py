@@ -6,6 +6,7 @@ silently do nothing. These checks keep the page wired correctly:
 every element the JS looks up must exist, the JS must parse, and the
 page must be served by the server.
 """
+import json
 import re
 import shutil
 import subprocess
@@ -70,3 +71,108 @@ def test_client_shows_persian_digits_and_sizes():
     assert "faNum" in html
     assert "'۰۱۲۳۴۵۶۷۸۹'" in html          # the digit table itself
     assert "humanSize" in html
+
+
+def test_client_renders_chapter_with_persian_digits():
+    """Chapter and lesson numbers arrive from the API as ints; both must
+    pass through faNum — «فصل ۳ / درس ۵», not Latin digits."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "faNum(f.chapter" in html
+    assert "faNum(f.lesson" in html
+
+
+def test_client_upload_is_styled_and_accepts_multiple():
+    """The native file input shows English «No file chosen / Choose File»
+    and takes one file; the client now hides it behind a Persian label
+    and accepts a multi-file selection."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert re.search(r'<input[^>]*id="up"[^>]*multiple', html)
+    assert 'class="upload-btn"' in html
+    assert 'for="up"' in html
+
+
+def test_client_declares_a_pwa_and_the_bundled_font():
+    """The phone page is installable (manifest + theme colour + icons)
+    and uses the same Vazirmatn font as the desktop app."""
+    html = CLIENT.read_text(encoding="utf-8")
+    for required in (
+            'rel="manifest"', "manifest.webmanifest", 'name="theme-color"',
+            "/icons/icon-192.png", "@font-face",
+            "/fonts/Vazirmatn-Regular.ttf"):
+        assert required in html
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — boot check skipped")
+def test_returning_user_with_a_saved_pin_sees_the_library(tmp_path):
+    """Bug (2026-10-29): on a reload with a stored PIN the client filled
+    the DOM but never un-hid #files — both containers stayed display:none,
+    so every returning visitor got a blank page."""
+    state = _boot_state(tmp_path, stored_pin="123456")
+    assert state["files"] == "block"
+    assert state["pinbox"] == "none"
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — boot check skipped")
+def test_first_visit_without_a_pin_sees_the_pin_screen(tmp_path):
+    state = _boot_state(tmp_path, stored_pin="")
+    assert state["files"] == "none"
+    assert state["pinbox"] == "block"
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — boot check skipped")
+def test_client_shows_chapter_and_lesson_together(tmp_path):
+    """A file with both book positions must render both, with Persian
+    digits — the old meta line had no lesson field at all."""
+    state = _boot_state(
+        tmp_path, stored_pin="123456",
+        files=[{"id": 1, "name": "x.pdf", "subject": "ریاضی",
+                "chapter": 3, "lesson": 5, "kind": "جزوه", "size": 1024}])
+    assert "فصل ۳" in state["list"]
+    assert "درس ۵" in state["list"]
+
+
+def _boot_state(tmp_path, stored_pin: str, files: list | None = None) -> dict:
+    """Run the page boot in Node with a stub DOM and report which panel
+    the boot path made visible plus the rendered list. Real behavior, no
+    browser dependency."""
+    harness = tmp_path / "boot_harness.js"
+    pin_line = (f'store["darspack-pin"] = {json.dumps(stored_pin)};'
+                if stored_pin else "")
+    payload = json.dumps(files or [], ensure_ascii=False)
+    harness.write_text(f"""
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const source = html.match(/<script>([\\s\\S]*)<\\/script>/)[1];
+const elements = {{}};
+const make = () => ({{ style: {{}}, textContent: '', innerHTML: '', value: '' }});
+const document = {{ getElementById: id => (elements[id] ||= make()) }};
+const store = {{}};
+{pin_line}
+const localStorage = {{
+  getItem: k => (k in store ? store[k] : null),
+  setItem: (k, v) => {{ store[k] = String(v); }},
+  removeItem: k => {{ delete store[k]; }},
+}};
+const fetch = async () => ({{ status: 200,
+  json: async () => ({{ files: {payload}, subjects: [], unclassified: 0 }}) }});
+const context = {{ document, localStorage, fetch, setTimeout, clearTimeout,
+                   console, encodeURIComponent, JSON }};
+vm.createContext(context);
+vm.runInContext(source, context);
+setTimeout(() => {{
+  const display = id => (elements[id] ? elements[id].style.display : '(missing)');
+  console.log(JSON.stringify({{ files: display('files'),
+                                pinbox: display('pinbox'),
+                                list: elements['list'] ? elements['list'].innerHTML : '' }}));
+  process.exit(0);
+}}, 50);
+""", encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(harness), str(CLIENT)],
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
