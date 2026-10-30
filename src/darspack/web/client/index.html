@@ -119,13 +119,14 @@
     font-size: 10px; font-weight: 700; vertical-align: middle;
   }
   .file .meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
-  .download {
-    display: inline-flex; align-items: center; gap: 6px; margin-top: 9px;
+  .actions { display: flex; gap: 8px; margin-top: 9px; flex-wrap: wrap; }
+  .download, .view-btn {
+    display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 12px; border-radius: 9px; border: 1px solid var(--border);
     background: var(--surface-2); color: #c7d3f5; font-size: 13px;
     text-decoration: none;
   }
-  .download:hover { border-color: #4a63a8; }
+  .download:hover, .view-btn:hover { border-color: #4a63a8; }
   .empty { color: var(--muted); text-align: center; padding: 26px 0; }
   #status { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
   .upload-card {
@@ -276,11 +277,17 @@ function render(rows) {
   $('status').textContent = faNum(rows.length) + ' فایل';
   $('list').innerHTML = rows.map(f => {
     const ext = ((f.name.split('.').pop() || 'file') + '').toUpperCase();
+    // Viewable inline types match _INLINE_TYPES in src/darspack/web/server.py
+    const isInline = ['PDF', 'PNG', 'JPG', 'JPEG', 'GIF', 'TXT'].includes(ext);
+    const pinParam = encodeURIComponent(currentPin());
     return `<article class="file">
       <div class="name"><span class="ext">${escapeHtml(ext)}</span>${escapeHtml(f.name)}</div>
       <div class="meta">${metaLine(f)}</div>
-      <a class="download" href="/api/file/${f.id}?pin=${encodeURIComponent(currentPin())}">
-        ${downloadIcon} دانلود</a>
+      <div class="actions">
+        ${isInline ? `<a class="view-btn" target="_blank" rel="noopener" href="/api/file/${f.id}?inline=1&pin=${pinParam}">مشاهده</a>` : ''}
+        <a class="download" href="/api/file/${f.id}?download=1&pin=${pinParam}">
+          ${downloadIcon} دریافت</a>
+      </div>
     </article>`;
   }).join('') || '<p class="empty">چیزی پیدا نشد.</p>';
 }

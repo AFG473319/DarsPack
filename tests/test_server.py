@@ -258,6 +258,30 @@ def test_inline_viewing_whitelist(server):
     assert disposition.startswith("attachment")
 
 
+def test_download_and_inline_query_params(server):
+    share, lib = server
+    # File 1 is PDF (normally inline)
+    # ?download=1 forces attachment
+    res = _exchange(f"http://127.0.0.1:{share.port}/api/file/1?download=1&pin={share.pin}")[2]
+    assert res.headers["Content-Disposition"].startswith("attachment")
+
+    # ?inline=1 forces inline
+    res2 = _exchange(f"http://127.0.0.1:{share.port}/api/file/1?inline=1&pin={share.pin}")[2]
+    assert res2.headers["Content-Disposition"].startswith("inline")
+
+    # ?download=1&inline=1: download takes precedence
+    res3 = _exchange(f"http://127.0.0.1:{share.port}/api/file/1?download=1&inline=1&pin={share.pin}")[2]
+    assert res3.headers["Content-Disposition"].startswith("attachment")
+
+    # Non-whitelisted binary file: ?inline=1 must NOT override D2 whitelist
+    p = lib.root.parent / "test_bin.exe"
+    p.write_bytes(b"MZfake")
+    import_file(lib, p)
+    bin_id = lib.conn.execute("SELECT id FROM files WHERE original_name='test_bin.exe'").fetchone()["id"]
+    res_bin = _exchange(f"http://127.0.0.1:{share.port}/api/file/{bin_id}?inline=1&pin={share.pin}")[2]
+    assert res_bin.headers["Content-Disposition"].startswith("attachment")
+
+
 def test_lockout_after_five_failures(server):
     share, _ = server
     base = f"http://127.0.0.1:{share.port}"

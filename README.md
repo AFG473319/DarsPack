@@ -4,16 +4,16 @@
 
 DarsPack (درس‌پک) helps Iranian middle-school students keep their class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) in one findable place. It is a Windows desktop app that also serves a phone-friendly web client over local Wi-Fi. Persian-first RTL interface with an English toggle.
 
-> Status: **working v0.1** — core engine, brand RTL desktop UI, LAN phone client, and the Windows build are implemented and covered by 300+ automated tests (317 at the 2026-10-29 UI round); see `docs/limitations.md` for known limitations.
+> Status: **working v0.1** — core engine, brand RTL desktop UI, LAN phone client, and the Windows build are implemented and covered by 332 automated tests; see `docs/limitations.md` for known limitations.
 
 ## What works
 
-- Import files/folders into an app-managed library (copy + SHA-256 + crash-safe), with a **classification review dialog** after every import — categorizing is the app's main job; the subject is never guessed behind your back.
+- Drag-and-drop or file/folder picker import into an app-managed library (copy + SHA-256 + crash-safe), with a **classification review dialog** after every import — categorizing is the app's main job; the subject is never guessed behind your back.
 - Normalized Persian search («فصل ۳» = «فصل 3», Arabic ي finds Persian ی), subject/chapter/kind filters, tags, notes.
 - Duplicate detection (same content) and version-conflict detection (same name, different content) — **flagged, never auto-deleted**.
-- **Manual delete and bulk actions** — Delete key, «حذف» button or right-click anywhere on a row; select several files (Ctrl/Shift) to remove them together (moved to the library's `.trash` folder, never erased) or reclassify them in one form.
+- **Manual delete, shortcuts and bulk actions** — Delete key, «حذف» button or right-click anywhere on a row; select several files (Ctrl/Shift) to remove them together (moved to the library's `.trash` folder, never erased) or reclassify them in one form. Keyboard shortcuts: Enter to open, Ctrl+E to edit metadata, Esc to clear search/selection, F5 to refresh; column header click-to-sort with visual indicators.
 - Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
-- Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, download, multi-file upload) with a web-app manifest for «Add to Home screen».
+- Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, inline viewing for PDFs/images/text, download, multi-file upload) with a web-app manifest for «Add to Home screen».
 - Persian-first dark RTL UI with the bundled Vazirmatn typeface, one consistent icon set, a compact app bar and toolbar, kind badges, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
 
 ## Key ideas
@@ -22,7 +22,7 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 - **Duplicates and version conflicts are flagged, never auto-deleted** — the user always decides.
 - **Portable «درس‌پک» packages** — a ZIP with a JSON manifest, per-file SHA-256 hashes and an offline browsable index; anyone can verify a package's completeness and integrity, even without DarsPack installed.
 - **Fully offline by default** — the LAN share is opt-in per session and PIN-protected.
-- Built for low-end hardware and Persian text: ی/ي and ك/ک normalization, Persian/Latin digits, half-space (ZWNJ) handling, Jalali dates.
+- Built for low-end hardware and Persian text: ی/ي and ک/ك normalization, Persian/Latin digits, half-space (ZWNJ) handling, Jalali dates.
 
 ## In this repository
 

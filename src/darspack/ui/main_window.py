@@ -320,10 +320,25 @@ class MainWindow(QMainWindow):
         # file is MOVED to files/.trash — never erased)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_row_menu)
-        # Del works on the focused table only — never hijacks a dialog's key
+        # Drag & Drop support on window and table
+        self.setAcceptDrops(True)
+        self.table.setAcceptDrops(True)
+        self.table.viewport().setAcceptDrops(True)
+        self.table.installEventFilter(self)
+
+        # Table shortcuts
         self.delete_shortcut = QShortcut(QKeySequence.Delete, self.table)
         self.delete_shortcut.setContext(Qt.WidgetShortcut)
         self.delete_shortcut.activated.connect(self.delete_selected_files)
+
+        self.enter_shortcut = QShortcut(QKeySequence(Qt.Key_Return), self.table)
+        self.enter_shortcut.setContext(Qt.WidgetShortcut)
+        self.enter_shortcut.activated.connect(self.open_selected_file)
+
+        self.enter_shortcut2 = QShortcut(QKeySequence(Qt.Key_Enter), self.table)
+        self.enter_shortcut2.setContext(Qt.WidgetShortcut)
+        self.enter_shortcut2.activated.connect(self.open_selected_file)
+
         self.table.itemSelectionChanged.connect(self._update_action_states)
 
         # E2: empty states — a fresh library and an empty search each get
@@ -380,9 +395,40 @@ class MainWindow(QMainWindow):
                   self).activated.connect(self.search_box.setFocus)
         QShortcut(QKeySequence(QKeySequence.StandardKey.Open),
                   self).activated.connect(self.open_import_dialog)
+        QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(self._on_shortcut_edit)
+        QShortcut(QKeySequence(Qt.Key_Escape), self).activated.connect(self._on_shortcut_esc)
+        QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh)
 
         self.reload_filters()
         self.refresh()
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        urls = event.mimeData().urls()
+        paths = [Path(u.toLocalFile()) for u in urls if u.isLocalFile()]
+        if paths:
+            event.acceptProposedAction()
+            self.run_import_worker(paths)
+        else:
+            event.ignore()
+
+    def _on_shortcut_edit(self) -> None:
+        rows = self._selected_rows()
+        if len(rows) == 1:
+            self.edit_metadata()
+        elif len(rows) > 1:
+            self.bulk_edit_selected()
+
+    def _on_shortcut_esc(self) -> None:
+        if self.search_box.text():
+            self.search_box.clear()
+        elif self.table.selectedItems():
+            self.table.clearSelection()
 
     def _tool_button(self, text: str, icon_name: str) -> QToolButton:
         button = QToolButton()
@@ -607,6 +653,15 @@ class MainWindow(QMainWindow):
             self.search_shell.setProperty("focused", focused)
             self.search_shell.style().unpolish(self.search_shell)
             self.search_shell.style().polish(self.search_shell)
+        elif (table is not None and (obj is table or obj is table.viewport())
+              and event.type() in (QEvent.DragEnter, QEvent.Drop)):
+            if event.type() == QEvent.DragEnter:
+                if event.mimeData().hasUrls():
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Drop:
+                self.dropEvent(event)
+                return True
         elif (table is not None and obj is table.viewport()
               and event.type() == QEvent.ToolTip):
             index = table.indexAt(event.pos())
@@ -629,7 +684,7 @@ class MainWindow(QMainWindow):
         item = self.table.item(row, 0) if row >= 0 else None
         file_id = item.data(Qt.UserRole) if item is not None else None
         if file_id is None:
-            QMessageBox.information(self, APP_NAME, tr("err_no_selection"))
+            self.statusBar().showMessage(tr("err_no_selection"), 3000)
             return None
         return file_id
 
@@ -835,7 +890,13 @@ class MainWindow(QMainWindow):
 
     def run_import_worker(self, paths: list, keep_duplicates: bool = False,
                           **kwargs) -> None:
-        # kwargs (A5): metas/meta_base/cleanup_dir for a درس‌پک import
+        # Prevent re-entrant imports while an import is running or being reviewed
+        if getattr(self, "_import_busy", False) or (
+                getattr(self, "_worker", None) is not None and self._worker.isRunning()):
+            self.statusBar().showMessage(tr("import_running_busy"), 3000)
+            return
+        self._import_busy = True
+        # kwargs (A5): metas/meta_base/cleanup_dir for a ?????? import
         self._worker = ImportWorker(
             str(self.lib.root), paths, keep_duplicates, **kwargs)
         self._worker.progress.connect(
@@ -846,21 +907,24 @@ class MainWindow(QMainWindow):
 
     def _import_finished(self, imported, duplicates, errors, messages,
                          new_ids) -> None:
-        self.reload_filters()
-        self.refresh()
-        # Categorizing is the app's main job — ask for the new files' info
-        # right away, pre-filled with the filename suggestions (and, for a
-        # درس‌پک import, the manifest's subject/tags as pre-fill — A5).
-        if new_ids:
-            prefills = getattr(self._worker, "result_prefills", {})
-            dialogs.ClassifyDialog(self, self.lib, new_ids,
-                                   prefills=prefills).exec()
+        try:
             self.reload_filters()
             self.refresh()
-        text = tr("import_done").format(imported, duplicates, errors)
-        if messages:
-            text += "\n" + "\n".join(messages[:5])
-        QMessageBox.information(self, APP_NAME, text)
+            # Categorizing is the app's main job ? ask for the new files' info
+            # right away, pre-filled with the filename suggestions (and, for a
+            # ?????? import, the manifest's subject/tags as pre-fill ? A5).
+            if new_ids:
+                prefills = getattr(self._worker, "result_prefills", {})
+                dialogs.ClassifyDialog(self, self.lib, new_ids,
+                                       prefills=prefills).exec()
+                self.reload_filters()
+                self.refresh()
+            text = tr("import_done").format(imported, duplicates, errors)
+            if messages:
+                text += "\n" + "\n".join(messages[:5])
+            QMessageBox.information(self, APP_NAME, text)
+        finally:
+            self._import_busy = False
 
     def export_package(self) -> None:
         selected_scope = [r["id"] for r in self._selected_rows()]

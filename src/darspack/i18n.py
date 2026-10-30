@@ -165,6 +165,7 @@ STRINGS = {
         "menu_reveal": "نمایش در پوشه",
         "menu_copy_name": "کپی نام فایل",
         "menu_copy_path": "کپی مسیر فایل",
+        "import_running_busy": "عملیات قبلی هنوز در حال اجراست.",
     },
     "en": {
         "app_title": "DarsPack",
@@ -320,6 +321,7 @@ STRINGS = {
         "menu_reveal": "Show in folder",
         "menu_copy_name": "Copy file name",
         "menu_copy_path": "Copy file path",
+        "import_running_busy": "An import is already running.",
     },
 }
 

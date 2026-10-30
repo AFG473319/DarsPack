@@ -247,6 +247,7 @@ def _make_handler(server: ShareServer):
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
             route = parsed.path
+            query = urllib.parse.parse_qs(parsed.query)
             if route == "/" or route == "/index.html":
                 self._serve_client()
             elif route == "/favicon.ico":
@@ -263,7 +264,6 @@ def _make_handler(server: ShareServer):
                     self._json(catalog_manifest(_library().conn))
             elif route == "/api/search":
                 if self._pin_ok():
-                    query = urllib.parse.parse_qs(parsed.query)
                     from ..core.search import search
                     # C6: the API honors the filters it documents —
                     # subject_id / kind / unclassified pass straight
@@ -297,7 +297,7 @@ def _make_handler(server: ShareServer):
                         "unclassified": unclassified_count(_library().conn)})
             elif route.startswith("/api/file/"):
                 if self._pin_ok():
-                    self._serve_file(route.rsplit("/", 1)[-1])
+                    self._serve_file(route.rsplit("/", 1)[-1], query)
             else:
                 self._send(404, "not found".encode(), "text/plain")
 
@@ -415,7 +415,7 @@ def _make_handler(server: ShareServer):
                 return
             self._serve_static(asset_path(f"fonts/{name}"), "font/ttf")
 
-        def _serve_file(self, file_id: str) -> None:
+        def _serve_file(self, file_id: str, query: dict | None = None) -> None:
             from ..core.normalize import latin_digits
             if not latin_digits(file_id).isdigit():
                 self._json({"error": "id"}, 400)
@@ -437,8 +437,16 @@ def _make_handler(server: ShareServer):
             ctype = _INLINE_TYPES.get(
                 Path(row["original_name"]).suffix.lower(),
                 "application/octet-stream")
-            disposition = ("attachment" if ctype == "application/octet-stream"
-                           else "inline")
+            is_whitelisted = ctype in _INLINE_TYPES.values()
+            q = query or {}
+            force_download = _flag_param(q, "download")
+            force_inline = _flag_param(q, "inline")
+            if force_download:
+                disposition = "attachment"
+            elif force_inline and is_whitelisted:
+                disposition = "inline"
+            else:
+                disposition = "inline" if is_whitelisted else "attachment"
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Disposition",
                              f"{disposition}; filename*=UTF-8''{name}")

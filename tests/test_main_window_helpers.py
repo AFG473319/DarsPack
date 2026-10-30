@@ -653,3 +653,135 @@ def test_header_click_sorts_table(tmp_path, qapp):
         assert row0_name == "large.pdf"
     finally:
         win.lib.close()
+
+
+def test_drag_and_drop_import(tmp_path, qapp, monkeypatch):
+    """Dragging and dropping local files onto MainWindow or table viewport triggers run_import_worker."""
+    from PySide6.QtCore import QMimeData, QUrl, QPointF, Qt, QEvent
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    win = mw_module.MainWindow(tmp_path / "lib",
+                               {"language": "fa", "font_size": 10,
+                                "library": str(tmp_path / "lib")},
+                               tmp_path / "settings.json")
+    try:
+        sample = tmp_path / "dragged.pdf"
+        sample.write_bytes(b"content")
+
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(sample))])
+        enter_ev = QDragEnterEvent(QPointF(10, 10), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+
+        # 1. DragEnter directly on MainWindow and through eventFilter
+        win.dragEnterEvent(enter_ev)
+        assert enter_ev.isAccepted()
+
+        enter_ev2 = QDragEnterEvent(QPointF(15, 15), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+        res_enter = win.eventFilter(win.table.viewport(), enter_ev2)
+        assert res_enter is True
+        assert enter_ev2.isAccepted()
+
+        imported = []
+        monkeypatch.setattr(win, "run_import_worker", lambda paths: imported.extend(paths))
+
+        # 2. Drop directly on MainWindow
+        event = QDropEvent(QPointF(10, 10), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+        win.dropEvent(event)
+        assert len(imported) == 1
+        assert imported[0] == sample
+
+        # 3. Drop on table viewport through eventFilter
+        imported.clear()
+        event2 = QDropEvent(QPointF(20, 20), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+        res = win.eventFilter(win.table.viewport(), event2)
+        assert res is True
+        assert len(imported) == 1
+        assert imported[0] == sample
+    finally:
+        win.lib.close()
+
+
+def test_import_worker_reentrancy_guard(tmp_path, qapp):
+    """Calling run_import_worker while busy or running is rejected."""
+    from darspack.i18n import tr
+    win = mw_module.MainWindow(tmp_path / "lib",
+                               {"language": "fa", "font_size": 10,
+                                "library": str(tmp_path / "lib")},
+                               tmp_path / "settings.json")
+    try:
+        class FakeRunningWorker:
+            def isRunning(self):
+                return True
+
+        # Case 1: _worker isRunning
+        win._worker = FakeRunningWorker()
+        win.run_import_worker([tmp_path / "foo.pdf"])
+        assert win._worker is not None and isinstance(win._worker, FakeRunningWorker)
+        assert tr("import_running_busy") in win.statusBar().currentMessage()
+
+        # Case 2: _import_busy flag (e.g. during modal ClassifyDialog review)
+        win._worker = None
+        win._import_busy = True
+        win.run_import_worker([tmp_path / "bar.pdf"])
+        assert win._worker is None
+        assert tr("import_running_busy") in win.statusBar().currentMessage()
+    finally:
+        win.lib.close()
+
+
+def test_open_selected_file_empty_selection_nudge(tmp_path, qapp):
+    """Enter / open_selected_file with empty selection shows status bar message, no modal."""
+    from darspack.i18n import tr
+    win = mw_module.MainWindow(tmp_path / "lib",
+                               {"language": "fa", "font_size": 10,
+                                "library": str(tmp_path / "lib")},
+                               tmp_path / "settings.json")
+    try:
+        win.table.clearSelection()
+        win.open_selected_file()
+        assert tr("err_no_selection") in win.statusBar().currentMessage()
+    finally:
+        win.lib.close()
+
+
+def test_keyboard_shortcuts_esc_and_edit(tmp_path, qapp, monkeypatch):
+    """Esc clears search box or table selection; Ctrl+E opens edit dialog."""
+    with Library(tmp_path / "lib") as lib:
+        f1 = tmp_path / "f1.pdf"
+        f1.write_bytes(b"1")
+        import_file(lib, f1)
+        f2 = tmp_path / "f2.pdf"
+        f2.write_bytes(b"2")
+        import_file(lib, f2)
+
+    win = mw_module.MainWindow(tmp_path / "lib",
+                               {"language": "fa", "font_size": 10,
+                                "library": str(tmp_path / "lib")},
+                               tmp_path / "settings.json")
+    try:
+        # 1. Esc clears search box text
+        win.search_box.setText("test query")
+        win._on_shortcut_esc()
+        assert win.search_box.text() == ""
+
+        # 2. Esc clears selection if search box is empty
+        win.table.selectAll()
+        assert len(win.table.selectedItems()) > 0
+        win._on_shortcut_esc()
+        assert len(win.table.selectedItems()) == 0
+
+        # 3. Ctrl+E on 1 item calls edit_metadata
+        actions = []
+        monkeypatch.setattr(win, "edit_metadata", lambda: actions.append("single"))
+        monkeypatch.setattr(win, "bulk_edit_selected", lambda: actions.append("bulk"))
+
+        win.table.selectRow(0)
+        win._on_shortcut_edit()
+        assert actions == ["single"]
+
+        # 4. Ctrl+E on 2 items calls bulk_edit_selected
+        win.table.selectAll()
+        win._on_shortcut_edit()
+        assert actions == ["single", "bulk"]
+    finally:
+        win.lib.close()
