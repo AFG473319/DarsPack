@@ -14,7 +14,7 @@ dist/
 library/
 
 # Classmates' survey data stays out of any public repo
-eval/survey-results.md
+eval/survey*
 eval/timed-test-results.md
 eval/_generated/
 
