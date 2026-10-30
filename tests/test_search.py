@@ -254,3 +254,45 @@ def test_search_exposes_available_flag(lib):
     lib.conn.execute("UPDATE files SET available=0 WHERE id=?", (fid,))
     lib.conn.commit()
     assert search(lib.conn, "ریاضی")[0]["available"] == 0
+
+def test_school_year_filter(lib):
+    rows = search(lib.conn, "")
+    fid = rows[0]["id"]
+    lib.conn.execute("UPDATE files SET school_year='1404-1405' WHERE id=?", (fid,))
+    lib.conn.commit()
+    matched = search(lib.conn, "", school_year="1404-1405")
+    assert len(matched) == 1
+    assert matched[0]["id"] == fid
+    assert matched[0]["school_year"] == "1404-1405"
+    assert search(lib.conn, "", school_year="1406-1407") == []
+
+
+def test_school_year_combined_with_query_and_note(lib):
+    rows = search(lib.conn, "ریاضی")
+    assert len(rows) > 0
+    fid = rows[0]["id"]
+    lib.conn.execute(
+        "UPDATE files SET school_year='1404-1405', note='یادداشت مهم' WHERE id=?",
+        (fid,))
+    lib.conn.commit()
+
+    matched = search(lib.conn, "ریاضی", school_year="1404-1405")
+    assert any(r["id"] == fid for r in matched)
+    target = next(r for r in matched if r["id"] == fid)
+    assert target["note"] == "یادداشت مهم"
+    assert target["school_year"] == "1404-1405"
+
+    unmatched = search(lib.conn, "ریاضی", school_year="1399-1400")
+    assert not any(r["id"] == fid for r in unmatched)
+
+
+def test_like_wildcard_escaping(lib):
+    name = "100%_sample.pdf"
+    fid = lib.conn.execute(
+        """INSERT INTO files(stored_name, original_name, name_norm,
+           size_bytes, sha256, imported_at)
+           VALUES ('', ?, ?, 3, 'sha-like', '2026-10-30T10:00:00')""",
+        (name, match_key(name))).lastrowid
+    lib.conn.commit()
+    res = search(lib.conn, "100%")
+    assert [r["id"] for r in res] == [fid]

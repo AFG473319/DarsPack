@@ -1,4 +1,5 @@
 """Tests for the Library object: subject seeding (A1) and the health check (B1)."""
+import sqlite3
 import pytest
 
 from darspack.core.importer import import_file
@@ -117,3 +118,11 @@ def test_search_still_lists_flagged_rows(tmp_path):
     with Library(root) as lib:
         rows = search(lib.conn, "گم")
         assert len(rows) == 1 and rows[0]["available"] == 0
+
+def test_library_maintain_false_skips_maintenance(tmp_path):
+    root = tmp_path / "lib"
+    root.mkdir()
+    with Library(root, maintain=False) as lib:
+        assert lib.conn is not None
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            lib.conn.execute("SELECT COUNT(*) FROM subjects")

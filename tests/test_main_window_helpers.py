@@ -547,3 +547,42 @@ def test_sweep_never_touches_the_trash(tmp_path):
     with Library(tmp_path / "lib") as lib2:      # reopen → sweep runs
         assert (trash / "000001.pdf").exists()   # trash untouched
         assert not (lib2.files_dir / "tmp_009.pdf").exists()  # tmp swept
+
+
+def test_delete_collision_preserves_extension(tmp_path, qapp, monkeypatch):
+    """Regression test for trash collision naming: existing trash files
+    must cause collision suffixes of the form stem~N.ext (preserving extension)."""
+    from pathlib import Path
+    from PySide6.QtWidgets import QMessageBox
+
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "document.pdf"
+        src.write_bytes(b"content to trash")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        stored_name = lib.conn.execute(
+            "SELECT stored_name FROM files WHERE id=?", (fid,)
+        ).fetchone()["stored_name"]
+
+        trash = lib.files_dir / ".trash"
+        trash.mkdir(exist_ok=True)
+        (trash / stored_name).write_bytes(b"existing trashed content")
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            monkeypatch.setattr(
+                QMessageBox, "question",
+                staticmethod(lambda *a, **k: QMessageBox.Yes))
+            win.delete_file(fid)
+
+            stored_p = Path(stored_name)
+            expected_name = f"{stored_p.stem}~1{stored_p.suffix}"
+            collided_file = trash / expected_name
+            assert collided_file.exists()
+            assert collided_file.read_bytes() == b"content to trash"
+            assert collided_file.suffix == ".pdf"
+        finally:
+            win.lib.close()

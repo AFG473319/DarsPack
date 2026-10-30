@@ -14,8 +14,9 @@ from .suggest import DEFAULT_SUBJECTS
 
 
 class Library:
-    def __init__(self, root):
+    def __init__(self, root, maintain: bool = True):
         self.root = Path(root)
+        self.maintain = maintain
         self.db_path = self.root / "catalog.db"
         self.files_dir = self.root / "files"
         self.conn = None
@@ -24,10 +25,11 @@ class Library:
         self.root.mkdir(parents=True, exist_ok=True)
         self.files_dir.mkdir(exist_ok=True)
         self.conn = db.connect(self.db_path)
-        db.init_schema(self.conn)      # creates tables + runs migrations
-        self.seed_subjects()
-        self.sweep_orphans()
-        self.health_check()
+        if self.maintain:
+            db.init_schema(self.conn)      # creates tables + runs migrations
+            self.seed_subjects()
+            self.sweep_orphans()
+            self.health_check()
         return self
 
     def seed_subjects(self) -> None:

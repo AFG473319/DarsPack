@@ -47,25 +47,8 @@ def _open_server_library(root: str) -> Library:
     thread was still importing). The desktop app always opened this
     library first, so the schema already exists and the server threads
     only need to read/query.
-
-    Contract with core (decision recorded 2026-10-26):
-        Library(root, maintain=False).open() skips init_schema and
-        sweep_orphans. When core lands that flag we use it; until then a
-        local subclass achieves the same and the try/except disappears.
     """
-    try:
-        return Library(root, maintain=False).open()
-    except TypeError:                      # core hasn't landed the flag yet
-        from ..core import db
-
-        class _ServerLibrary(Library):
-            def open(self) -> "Library":
-                self.root.mkdir(parents=True, exist_ok=True)
-                self.files_dir.mkdir(exist_ok=True)
-                self.conn = db.connect(self.db_path)
-                return self
-
-        return _ServerLibrary(root).open()
+    return Library(root, maintain=False).open()
 
 CLIENT_DIR: Path
 if getattr(sys, "frozen", False):

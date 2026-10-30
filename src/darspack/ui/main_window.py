@@ -415,17 +415,6 @@ class MainWindow(QMainWindow):
         self.kind_combo.blockSignals(False)
         self.year_combo.blockSignals(False)
 
-    def _year_map(self) -> dict:
-        """{file id: school_year} for the «سال» column and filter.
-
-        search() rows don't carry school_year yet (the core-side
-        `school_year=` filter parameter is pending — tracked for later), so
-        the year is read directly, the same way reload_filters reads the
-        subjects table.
-        """
-        return {r["id"]: r["school_year"] for r in self.lib.conn.execute(
-            "SELECT id, school_year FROM files")}
-
     def _search_changed(self) -> None:
         self._search_timer.start()      # restart the countdown per keystroke
 
@@ -440,17 +429,15 @@ class MainWindow(QMainWindow):
 
     def refresh(self) -> None:
         subject_data = self.subject_combo.currentData()
+        year = self.year_combo.currentData()
         rows = catalog_search(
             self.lib.conn,
             self.search_box.text(),
             subject_id=subject_data if isinstance(subject_data, int) and subject_data > 0 else None,
             kind=self.kind_combo.currentData(),
+            school_year=year,
             unclassified_only=(subject_data == -1),
             limit=2000)
-        year_map = self._year_map()
-        year = self.year_combo.currentData()
-        if year is not None:            # school-year filter (A3)
-            rows = [r for r in rows if year_map.get(r["id"]) == year]
         self.last_rows = rows
         # Perf audit F2.2–F2.3: this fill runs on every debounced keystroke,
         # so mid-fill repaints are off and only column 0 carries the file id
@@ -460,11 +447,11 @@ class MainWindow(QMainWindow):
         from ..core.normalize import persian_digits
         for i, row in enumerate(rows):
             date_str, size_str = self._display_strs_for(row)
-            year = year_map.get(row["id"]) or "—"
+            year_str = row["school_year"] or "—"
             values = [row["original_name"], row["subject_name"] or "—",
                       chapter_lesson_display(row["chapter"], row["lesson"]),
                       row["kind"] or "—", size_str,
-                      persian_digits(date_str), persian_digits(year)]
+                      persian_digits(date_str), persian_digits(year_str)]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col == 0:
@@ -673,11 +660,12 @@ class MainWindow(QMainWindow):
         trash_dir = self.lib.files_dir / ".trash"
         trash_dir.mkdir(exist_ok=True)
         for row in rows:
+            stored_p = Path(row["stored_name"])
             dest = trash_dir / row["stored_name"]
             n = 0
             while dest.exists():    # a same-named file may already be in the trash
                 n += 1
-                dest = trash_dir / f"{row['stored_name']}~{n}"
+                dest = trash_dir / f"{stored_p.stem}~{n}{stored_p.suffix}"
             try:
                 os.replace(self.lib.stored_path(row), dest)  # same volume → atomic
             except FileNotFoundError:

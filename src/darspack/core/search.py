@@ -1,4 +1,4 @@
-"""Search over the catalog (جست‌جو).
+"""Search over the catalog (جست‌وجو).
 
 Both the query and the stored names go through match_key(), so
 «فصل ۳» finds «فصل 3», and «رياضي» (Arabic ي) finds «ریاضی». Matching
@@ -25,7 +25,7 @@ from .suggest import WORD_NUMBERS
 
 _BASE_SQL = """
 SELECT f.id, f.original_name, f.size_bytes, f.imported_at,
-       f.chapter, f.lesson, f.kind, f.sha256, f.available,
+       f.chapter, f.lesson, f.kind, f.school_year, f.note, f.sha256, f.available,
        s.name AS subject_name,
        {rank} AS rank
 FROM files f
@@ -35,16 +35,22 @@ ORDER BY rank, f.imported_at DESC
 LIMIT :limit
 """
 
+
+def _escape_like(text: str) -> str:
+    """Escape %, _, and / in text for SQL LIKE queries with ESCAPE '/'."""
+    return text.replace("/", "//").replace("%", "/%").replace("_", "/_")
+
+
 # One token's match clause: every token must match somewhere (AND across
 # tokens). The EXISTS finds the token among the file's tags; it names its
 # aliases ftg/tgt so it can never collide with the outer aliases.
-_TOKEN_CLAUSE = """(f.name_norm LIKE :like{i}
-       OR s.normalized LIKE :like{i}
-       OR f.note LIKE :like{i}
-       OR f.kind LIKE :like{i}
+_TOKEN_CLAUSE = """(f.name_norm LIKE :like{i} ESCAPE '/'
+       OR s.normalized LIKE :like{i} ESCAPE '/'
+       OR f.note LIKE :like{i} ESCAPE '/'
+       OR f.kind LIKE :like{i} ESCAPE '/'
        OR EXISTS (SELECT 1 FROM file_tags ftg
                   JOIN tags tgt ON tgt.id = ftg.tag_id
-                  WHERE ftg.file_id = f.id AND tgt.normalized LIKE :like{i})"""
+                  WHERE ftg.file_id = f.id AND tgt.normalized LIKE :like{i} ESCAPE '/')"""
 
 # «فصل ۵» / «درس سه» become structured tokens: the number is matched
 # against the chapter/lesson columns in addition to the text surfaces.
@@ -86,8 +92,8 @@ def _tokens(key: str) -> list[dict]:
 
 
 def search(conn, query: str = "", subject_id: int | None = None,
-           kind: str | None = None, limit: int = 200,
-           unclassified_only: bool = False) -> list:
+           kind: str | None = None, school_year: str | None = None,
+           limit: int = 200, unclassified_only: bool = False) -> list:
     """Return catalog rows matching the query and optional filters.
 
     unclassified_only=True lists files still missing their subject —
@@ -97,12 +103,13 @@ def search(conn, query: str = "", subject_id: int | None = None,
     params = {
         "subject_id": subject_id,
         "kind": kind,
+        "school_year": school_year,
         "limit": limit,
     }
 
     where_parts = []
     for i, tok in enumerate(tokens):
-        params[f"like{i}"] = f"%{tok['text']}%"
+        params[f"like{i}"] = f"%{_escape_like(tok['text'])}%"
         clause = _TOKEN_CLAUSE.format(i=i)
         if tok["num"] is not None:
             params[f"num{i}"] = tok["num"]
@@ -115,12 +122,14 @@ def search(conn, query: str = "", subject_id: int | None = None,
         where_parts.append("f.subject_id IS NULL")
     if kind is not None:
         where_parts.append("f.kind = :kind")
+    if school_year is not None:
+        where_parts.append("f.school_year = :school_year")
 
     if tokens:
         # Prefix rank on the FIRST token only — later tokens are filters,
         # not ranking signals (same rule as before multi-token search).
-        params["prefix"] = f"{tokens[0]['text']}%"
-        rank = "CASE WHEN f.name_norm LIKE :prefix THEN 0 ELSE 1 END"
+        params["prefix"] = f"{_escape_like(tokens[0]['text'])}%"
+        rank = "CASE WHEN f.name_norm LIKE :prefix ESCAPE '/' THEN 0 ELSE 1 END"
     else:
         rank = "0"          # empty query lists everything, newest first
     if not where_parts:     # also covers the fresh-catalog case
