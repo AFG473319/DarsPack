@@ -210,11 +210,16 @@ QToolButton#IconGhost:hover { background: $surface_2; color: $text; }
 
 QMenu {
     background: $surface_2; border: 1px solid $border;
-    border-radius: $radius; padding: 4px; min-width: 220px;
+    border-radius: $radius; padding: 4px; min-width: 240px;
 }
-QMenu::item { padding: 8px 18px; border-radius: 6px; }
-QMenu::item:selected { background: $primary; }
+QMenu::item {
+    border: 1px solid transparent;
+    padding: 7px 30px 7px 18px;
+    border-radius: 6px;
+}
+QMenu::item:selected { background: $primary; border-color: transparent; }
 QMenu::item:disabled { color: $faint; }
+QMenu::icon { left: 14px; }
 QMenu::separator { height: 1px; background: $border; margin: 5px 8px; }
 
 QTableWidget {

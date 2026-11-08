@@ -785,3 +785,63 @@ def test_keyboard_shortcuts_esc_and_edit(tmp_path, qapp, monkeypatch):
         assert actions == ["single", "bulk"]
     finally:
         win.lib.close()
+
+
+def test_create_localized_line_edit_context_menu_fa(qapp):
+    from PySide6.QtWidgets import QLineEdit
+    from darspack.i18n import set_language, tr
+    from darspack.ui.main_window import create_localized_line_edit_context_menu
+
+    set_language("fa")
+    edit = QLineEdit("سلام دنیا")
+    menu = create_localized_line_edit_context_menu(edit, include_clear=True)
+    actions = menu.actions()
+
+    # Verify no submenus exist (e.g. Insert Unicode control character is removed)
+    assert not any(a.menu() is not None for a in actions)
+
+    # Verify standard actions are translated to Persian
+    texts = [a.text() for a in actions if not a.isSeparator()]
+    assert any("بازگردانی" in t for t in texts)
+    assert any("کپی" in t for t in texts)
+    assert any("چسباندن" in t for t in texts)
+    assert any("انتخاب همه" in t for t in texts)
+    assert any(tr("clear_search") in t for t in texts)
+
+    # Verify last action is clear_search and works
+    clear_act = [a for a in actions if tr("clear_search") in a.text()][0]
+    clear_act.trigger()
+    assert edit.text() == ""
+
+
+def test_create_localized_line_edit_context_menu_en(qapp):
+    from PySide6.QtWidgets import QLineEdit
+    from darspack.i18n import set_language, tr
+    from darspack.ui.main_window import create_localized_line_edit_context_menu
+
+    set_language("en")
+    try:
+        edit = QLineEdit("hello world")
+        menu = create_localized_line_edit_context_menu(edit, include_clear=True)
+        actions = menu.actions()
+
+        assert not any(a.menu() is not None for a in actions)
+        texts = [a.text() for a in actions if not a.isSeparator()]
+        assert any("Undo" in t for t in texts)
+        assert any("Copy" in t for t in texts)
+        assert any("Paste" in t for t in texts)
+        assert any("Select All" in t for t in texts)
+        assert any(tr("clear_search") in t for t in texts)
+    finally:
+        set_language("fa")
+
+
+def test_search_box_has_custom_context_menu(window, monkeypatch):
+    from PySide6.QtCore import QPoint
+
+    calls = []
+    monkeypatch.setattr(window, "_show_search_context_menu", lambda pos: calls.append(pos))
+    window.search_box.customContextMenuRequested.emit(QPoint(10, 10))
+    assert calls == [QPoint(10, 10)]
+
+

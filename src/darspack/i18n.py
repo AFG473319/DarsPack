@@ -238,6 +238,13 @@ STRINGS = {
         "empty_fresh_desc": "برای شروع، فایل‌های جزوه، کتاب یا سوالات خود را به این صفحه بکشید یا دکمه‌ی زیر را بزنید:",
         "empty_btn_help": "راهنمای شروع",
         "empty_search_clear": "پاک کردن جست‌وجو",
+        "menu_undo": "بازگردانی",
+        "menu_redo": "تکرار",
+        "menu_cut": "بریدن",
+        "menu_copy": "کپی",
+        "menu_paste": "چسباندن",
+        "menu_delete": "حذف",
+        "menu_select_all": "انتخاب همه",
     },
     "en": {
         "app_title": "DarsPack",
@@ -467,6 +474,13 @@ STRINGS = {
         "empty_fresh_desc": "To get started, drag & drop your study files here or click below:",
         "empty_btn_help": "Quick Start Guide",
         "empty_search_clear": "Clear Search",
+        "menu_undo": "Undo",
+        "menu_redo": "Redo",
+        "menu_cut": "Cut",
+        "menu_copy": "Copy",
+        "menu_paste": "Paste",
+        "menu_delete": "Delete",
+        "menu_select_all": "Select All",
     },
 }
 

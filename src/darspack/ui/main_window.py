@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
@@ -107,6 +107,73 @@ class TableSortItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+_STD_ACTION_KEYS: dict[str, tuple[str, str]] = {
+    "undo": ("menu_undo", "Ctrl+Z"),
+    "redo": ("menu_redo", "Ctrl+Y"),
+    "cut": ("menu_cut", "Ctrl+X"),
+    "copy": ("menu_copy", "Ctrl+C"),
+    "paste": ("menu_paste", "Ctrl+V"),
+    "delete": ("menu_delete", "Del"),
+    "select all": ("menu_select_all", "Ctrl+A"),
+}
+
+
+def create_localized_line_edit_context_menu(
+    edit: QLineEdit,
+    parent: QWidget | None = None,
+    include_clear: bool = False,
+) -> QMenu:
+    """Create a localized, clutter-free context menu for a QLineEdit.
+
+    Translates standard action labels into the active language, formats
+    shortcuts cleanly, removes unwanted platform submenus (like 'Insert Unicode
+    control character'), strips redundant separators, and optionally adds a
+    'Clear search' action if the field contains text.
+    """
+    menu = edit.createStandardContextMenu()
+    if parent is not None:
+        menu.setParent(parent)
+
+    for action in list(menu.actions()):
+        if action.menu():
+            # Remove platform submenus such as "Insert Unicode control character"
+            menu.removeAction(action)
+            continue
+        if action.isSeparator():
+            continue
+        raw_text = action.text().replace("&", "")
+        parts = raw_text.split("\t")
+        keyword = parts[0].strip().lower()
+        if keyword in _STD_ACTION_KEYS:
+            trans_key, default_shortcut = _STD_ACTION_KEYS[keyword]
+            shortcut = parts[1].strip() if len(parts) > 1 else default_shortcut
+            localized = tr(trans_key)
+            action.setText(f"{localized}\t{shortcut}" if shortcut else localized)
+
+    # Clean up consecutive separators
+    prev_sep = False
+    for action in list(menu.actions()):
+        if action.isSeparator():
+            if prev_sep:
+                menu.removeAction(action)
+            else:
+                prev_sep = True
+        else:
+            prev_sep = False
+
+    # Strip trailing separators
+    while menu.actions() and menu.actions()[-1].isSeparator():
+        menu.removeAction(menu.actions()[-1])
+
+    if include_clear and bool(edit.text()):
+        menu.addSeparator()
+        clear_act = menu.addAction(tr("clear_search"))
+        clear_act.setIcon(icons.icon("x", theme.PALETTE["muted"], 16))
+        clear_act.triggered.connect(edit.clear)
+
+    return menu
+
+
 class MainWindow(QMainWindow):
     def __init__(self, library_root: Path, settings: dict, settings_path: Path):
         super().__init__()
@@ -149,6 +216,9 @@ class MainWindow(QMainWindow):
         self.search_box = QLineEdit()
         self.search_box.setObjectName("SearchField")
         self.search_box.setPlaceholderText(tr("search_placeholder"))
+        self.search_box.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.search_box.customContextMenuRequested.connect(
+            self._show_search_context_menu)
         shell.addWidget(self.search_box, 1)
         self.clear_search_button = QToolButton()
         self.clear_search_button.setObjectName("SearchClear")
@@ -770,6 +840,13 @@ class MainWindow(QMainWindow):
             if rec and rec["stored_name"]:
                 paths.append(str(self.lib.files_dir / rec["stored_name"]))
         QApplication.clipboard().setText("\n".join(paths))
+
+    def _show_search_context_menu(self, pos: QPoint) -> None:
+        """Right-click on the search input box shows a localized, clean context menu."""
+        menu = create_localized_line_edit_context_menu(
+            self.search_box, parent=self, include_clear=True
+        )
+        menu.exec(self.search_box.mapToGlobal(pos))
 
     def _show_row_menu(self, pos) -> None:
         """Right-click anywhere on a row acts on the selection.

@@ -60,3 +60,13 @@ def test_table_has_no_single_cell_hover_patch():
     which looked like a stray coloured box in screenshots and in real
     use. Row selection is the meaningful state; no cell-level hover."""
     assert "QTableWidget::item:hover" not in theme.build_qss()
+
+
+def test_menu_icon_spacing_and_border_in_qss():
+    """QMenu items need explicit border styling and icon offset so icons don't
+    collide with the curved hover highlight pill border."""
+    qss = theme.build_qss()
+    assert "QMenu::icon { left: 14px; }" in qss
+    assert "border: 1px solid transparent;" in qss
+    assert "min-width: 240px;" in qss
+
