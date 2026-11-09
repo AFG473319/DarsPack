@@ -8,5 +8,5 @@ Users can override both in settings.json without rebuilding. Empty
 endpoint = feedback is only saved locally. See docs/feedback-setup.md.
 """
 
-FEEDBACK_ENDPOINT = ""
+FEEDBACK_ENDPOINT = "https://formspree.io/f/mvkknjga"
 FEEDBACK_FORM_URL = ""

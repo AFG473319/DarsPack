@@ -1175,11 +1175,11 @@ class SettingsDialog(QDialog):
 
         from .. import feedback_config
         self.fb_endpoint = QLineEdit(
-            str(settings.get("feedback_endpoint",
-                             feedback_config.FEEDBACK_ENDPOINT)))
+            str(settings.get("feedback_endpoint") or
+                feedback_config.FEEDBACK_ENDPOINT))
         self.fb_form_url = QLineEdit(
-            str(settings.get("feedback_form_url",
-                             feedback_config.FEEDBACK_FORM_URL)))
+            str(settings.get("feedback_form_url") or
+                feedback_config.FEEDBACK_FORM_URL))
 
         save = QPushButton(tr("ok"))
         save.setObjectName("Primary")
