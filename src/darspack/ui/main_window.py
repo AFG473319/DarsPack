@@ -179,6 +179,7 @@ class MainWindow(QMainWindow):
                              (self.year_combo, 120)):
             combo.setFixedWidth(width)
             combo.setFixedHeight(36)
+            theme.setup_combobox(combo)
         self.subject_combo.currentIndexChanged.connect(self.refresh)
         self.kind_combo.currentIndexChanged.connect(self.refresh)
         self.year_combo.currentIndexChanged.connect(self.refresh)
