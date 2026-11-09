@@ -22,17 +22,17 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
     QMessageBox,
-    QPushButton, QSpinBox, QTableWidget, QTabWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
+    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from .. import __version__, i18n
+from .. import __version__, asset_path, i18n
 from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
 from .workers import ImportWorker
 from .smooth_scroll import enable_smooth_scroll
-from . import theme
+from . import icons, theme
 
 
 def text_dialog(parent, title: str, text: str) -> None:
@@ -1645,3 +1645,334 @@ class ExamPackDialog(QDialog):
             self, tr("exam_pack_title"),
             tr("exam_pack_done").format(i18n.num(info["count"])))
         self.accept()
+
+
+class WelcomeDialog(QDialog):
+    """Interactive first-run welcome tour with 3 visual slides."""
+
+    def __init__(self, parent=None, settings: dict | None = None, settings_path: Path | None = None):
+        super().__init__(parent)
+        self.settings = settings if settings is not None else {}
+        self.settings_path = settings_path
+        self.setWindowTitle(tr("welcome_title"))
+        self.setModal(True)
+        self.resize(600, 480)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+        try:
+            from PySide6.QtSvgWidgets import QSvgWidget
+            logo = QSvgWidget(str(asset_path("icon/darspack.svg")))
+            logo.setFixedSize(40, 40)
+            header_layout.addWidget(logo)
+        except Exception:
+            pass
+
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(2)
+        title_lbl = QLabel(tr("welcome_title"))
+        title_lbl.setObjectName("DialogTitle")
+        sub_lbl = QLabel(tr("welcome_subtitle"))
+        sub_lbl.setObjectName("DialogHint")
+        title_layout.addWidget(title_lbl)
+        title_layout.addWidget(sub_lbl)
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        self.stack = QStackedWidget()
+        slides_data = [
+            ("folder-open", tr("welcome_slide1_title"), tr("welcome_slide1_desc")),
+            ("search", tr("welcome_slide2_title"), tr("welcome_slide2_desc")),
+            ("share-2", tr("welcome_slide3_title"), tr("welcome_slide3_desc")),
+        ]
+        for icon_name, heading, desc in slides_data:
+            slide_widget = QFrame()
+            slide_widget.setObjectName("BannerCard")
+            slide_widget.setStyleSheet(
+                f"background: {theme.PALETTE['surface']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+                f"border-radius: {theme.METRICS['radius_card']}px; padding: 20px;"
+            )
+            s_layout = QVBoxLayout(slide_widget)
+            s_layout.setSpacing(14)
+            s_layout.setAlignment(Qt.AlignCenter)
+
+            icon_lbl = QLabel()
+            icon_lbl.setAlignment(Qt.AlignCenter)
+            icon_lbl.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 48))
+            s_layout.addWidget(icon_lbl)
+
+            h_lbl = QLabel(heading)
+            h_lbl.setAlignment(Qt.AlignCenter)
+            h_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme.PALETTE['text']};")
+            s_layout.addWidget(h_lbl)
+
+            d_lbl = QLabel(desc)
+            d_lbl.setAlignment(Qt.AlignCenter)
+            d_lbl.setWordWrap(True)
+            d_lbl.setStyleSheet(f"font-size: 13px; line-height: 1.6; color: {theme.PALETTE['muted']}; padding: 0 10px;")
+            s_layout.addWidget(d_lbl)
+            s_layout.addStretch()
+
+            self.stack.addWidget(slide_widget)
+
+        layout.addWidget(self.stack, 1)
+
+        self.indicator_lbl = QLabel()
+        self.indicator_lbl.setAlignment(Qt.AlignCenter)
+        self.indicator_lbl.setStyleSheet(f"color: {theme.PALETTE['muted']}; font-size: 12px;")
+        layout.addWidget(self.indicator_lbl)
+
+        self.dont_show_check = QCheckBox(tr("welcome_dont_show"))
+        self.dont_show_check.setChecked(True)
+        layout.addWidget(self.dont_show_check)
+
+        btn_bar = QHBoxLayout()
+        self.btn_prev = QPushButton(tr("welcome_prev"))
+        self.btn_prev.setObjectName("Secondary")
+        self.btn_prev.clicked.connect(self._prev_slide)
+        btn_bar.addWidget(self.btn_prev)
+
+        btn_bar.addStretch()
+
+        self.btn_next = QPushButton(tr("welcome_next"))
+        self.btn_next.setObjectName("Primary")
+        self.btn_next.clicked.connect(self._next_slide)
+        btn_bar.addWidget(self.btn_next)
+
+        layout.addLayout(btn_bar)
+
+        self._update_slide_view()
+        polish_dialog(self, 560)
+
+    def _update_slide_view(self) -> None:
+        idx = self.stack.currentIndex()
+        count = self.stack.count()
+        self.indicator_lbl.setText(
+            tr("welcome_step").format(i18n.num(idx + 1), i18n.num(count)))
+        self.btn_prev.setEnabled(idx > 0)
+        if idx == count - 1:
+            self.btn_next.setText(tr("welcome_start"))
+        else:
+            self.btn_next.setText(tr("welcome_next"))
+
+    def _prev_slide(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx > 0:
+            self.stack.setCurrentIndex(idx - 1)
+            self._update_slide_view()
+
+    def _next_slide(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx < self.stack.count() - 1:
+            self.stack.setCurrentIndex(idx + 1)
+            self._update_slide_view()
+        else:
+            self._finish()
+
+    def _finish(self) -> None:
+        if self.dont_show_check.isChecked():
+            self.settings["show_welcome"] = False
+            if self.settings_path:
+                try:
+                    self.settings_path.write_text(
+                        json.dumps(self.settings, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+        self.accept()
+
+
+class HelpDialog(QDialog):
+    """Comprehensive offline in-app help center with tabs for quick guide, shortcuts, Wi-Fi phone sharing, and FAQ."""
+
+    def __init__(self, parent=None, settings: dict | None = None, settings_path: Path | None = None):
+        super().__init__(parent)
+        self.settings = settings or {}
+        self.settings_path = settings_path
+        self.setWindowTitle(tr("help_dialog_title"))
+        self.resize(720, 540)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        top_bar = QHBoxLayout()
+        title_lbl = QLabel(tr("help_dialog_title"))
+        title_lbl.setObjectName("DialogTitle")
+        top_bar.addWidget(title_lbl)
+        top_bar.addStretch()
+
+        btn_tour = QPushButton(tr("btn_tour"))
+        btn_tour.setObjectName("Secondary")
+        btn_tour.setIcon(icons.icon("history", theme.PALETTE["text"], 16))
+        btn_tour.clicked.connect(self._launch_tour)
+        top_bar.addWidget(btn_tour)
+        layout.addLayout(top_bar)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_quick_tab(), tr("help_tab_quick"))
+        self.tabs.addTab(self._build_shortcuts_tab(), tr("help_tab_shortcuts"))
+        self.tabs.addTab(self._build_phone_tab(), tr("help_tab_phone"))
+        self.tabs.addTab(self._build_faq_tab(), tr("help_tab_faq"))
+        layout.addWidget(self.tabs, 1)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        btn_close = QPushButton(tr("close"))
+        btn_close.setObjectName("Primary")
+        btn_close.clicked.connect(self.accept)
+        btn_box.addWidget(btn_close)
+        layout.addLayout(btn_box)
+
+        polish_dialog(self, 700)
+
+    def _launch_tour(self) -> None:
+        dlg = WelcomeDialog(self, self.settings, self.settings_path)
+        dlg.exec()
+
+    def _build_quick_tab(self) -> QWidget:
+        widget = QWidget()
+        vbox = QVBoxLayout(widget)
+        vbox.setContentsMargins(14, 14, 14, 14)
+        vbox.setSpacing(12)
+
+        intro = QLabel(f"<b>{tr('help_quick_title')}</b>")
+        intro.setStyleSheet(f"font-size: 14px; color: {theme.PALETTE['accent_text']};")
+        vbox.addWidget(intro)
+
+        steps = [
+            ("plus", tr("help_quick_step1")),
+            ("file-text", tr("help_quick_step2")),
+            ("search", tr("help_quick_step3")),
+            ("share-2", tr("help_quick_step4")),
+        ]
+        for icon_name, text in steps:
+            card = QFrame()
+            card.setObjectName("BannerCard")
+            card.setStyleSheet(
+                f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+                f"border-radius: {theme.METRICS['radius']}px; padding: 10px 14px;"
+            )
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(8, 6, 8, 6)
+            c_lay.setSpacing(12)
+
+            ic = QLabel()
+            ic.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 22))
+            c_lay.addWidget(ic)
+
+            lbl = QLabel(text)
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']};")
+            c_lay.addWidget(lbl, 1)
+
+            vbox.addWidget(card)
+
+        vbox.addStretch()
+        return widget
+
+    def _build_shortcuts_tab(self) -> QWidget:
+        widget = QWidget()
+        vbox = QVBoxLayout(widget)
+        vbox.setContentsMargins(14, 14, 14, 14)
+        vbox.setSpacing(8)
+
+        shortcuts = [
+            ("Enter", tr("help_sc_open")),
+            ("Ctrl + E", tr("help_sc_edit")),
+            ("Delete", tr("help_sc_delete")),
+            ("Ctrl + F", tr("help_sc_find")),
+            ("Ctrl + O", tr("help_sc_import")),
+            ("Esc", tr("help_sc_esc")),
+            ("F1", tr("help_sc_f1")),
+            ("F5", tr("help_sc_f5")),
+        ]
+
+        table = QTableWidget(len(shortcuts), 2)
+        table.setHorizontalHeaderLabels([tr("help_col_key"), tr("help_col_action")])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.NoSelection)
+
+        for i, (k, action) in enumerate(shortcuts):
+            k_item = QTableWidgetItem(k)
+            k_item.setTextAlignment(Qt.AlignCenter)
+            k_item.setFlags(Qt.ItemIsEnabled)
+            table.setItem(i, 0, k_item)
+
+            a_item = QTableWidgetItem(action)
+            a_item.setFlags(Qt.ItemIsEnabled)
+            table.setItem(i, 1, a_item)
+
+        vbox.addWidget(table)
+        return widget
+
+    def _build_phone_tab(self) -> QWidget:
+        widget = QWidget()
+        vbox = QVBoxLayout(widget)
+        vbox.setContentsMargins(16, 16, 16, 16)
+        vbox.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("BannerCard")
+        card.setStyleSheet(
+            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+            f"border-radius: {theme.METRICS['radius']}px; padding: 14px;"
+        )
+        c_lay = QVBoxLayout(card)
+        c_lay.setSpacing(10)
+
+        lbl = QLabel(tr("help_phone_guide"))
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"font-size: 13px; line-height: 1.7; color: {theme.PALETTE['text']};")
+        c_lay.addWidget(lbl)
+        vbox.addWidget(card)
+        vbox.addStretch()
+        return widget
+
+    def _build_faq_tab(self) -> QWidget:
+        widget = QWidget()
+        vbox = QVBoxLayout(widget)
+        vbox.setContentsMargins(14, 14, 14, 14)
+        vbox.setSpacing(10)
+
+        faqs = [
+            (tr("help_faq_q1"), tr("help_faq_a1")),
+            (tr("help_faq_q2"), tr("help_faq_a2")),
+            (tr("help_faq_q3"), tr("help_faq_a3")),
+            (tr("help_faq_q4"), tr("help_faq_a4")),
+        ]
+
+        for q, a in faqs:
+            card = QFrame()
+            card.setObjectName("BannerCard")
+            card.setStyleSheet(
+                f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+                f"border-radius: {theme.METRICS['radius']}px; padding: 10px 14px;"
+            )
+            c_lay = QVBoxLayout(card)
+            c_lay.setSpacing(6)
+
+            q_lbl = QLabel(f"<b>❓ {q}</b>")
+            q_lbl.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['accent_text']};")
+            q_lbl.setWordWrap(True)
+            c_lay.addWidget(q_lbl)
+
+            a_lbl = QLabel(a)
+            a_lbl.setStyleSheet(f"font-size: 12.5px; color: {theme.PALETTE['text']}; line-height: 1.5;")
+            a_lbl.setWordWrap(True)
+            c_lay.addWidget(a_lbl)
+
+            vbox.addWidget(card)
+
+        vbox.addStretch()
+        return widget
+

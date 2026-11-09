@@ -244,6 +244,10 @@ class MainWindow(QMainWindow):
         self.share_button.clicked.connect(self.toggle_share)
         toolbar.addWidget(self.share_button)
 
+        self.help_button = self._tool_button(tr("btn_help"), "circle-help")
+        self.help_button.clicked.connect(self.open_help_dialog)
+        toolbar.addWidget(self.help_button)
+
         self.more_menu = QMenu(self)
         self.more_menu.setMinimumWidth(220)
         self.edit_action = self._menu_action(
@@ -264,9 +268,10 @@ class MainWindow(QMainWindow):
         self._menu_action(
             self.more_menu, tr("btn_feedback"), "message-square",
             lambda: dialogs.FeedbackDialog(self, self.settings).exec())
+        self._menu_action(self.more_menu, tr("btn_tour"), "history",
+                          self.open_welcome_tour)
         self._menu_action(self.more_menu, tr("btn_help"), "circle-help",
-                          lambda: dialogs.text_dialog(
-                              self, tr("btn_help"), tr("help_text")))
+                          self.open_help_dialog)
         self._menu_action(
             self.more_menu, tr("btn_about"), "info",
             lambda: dialogs.text_dialog(
@@ -365,6 +370,14 @@ class MainWindow(QMainWindow):
         self.empty_button.setFixedSize(170, 38)
         self.empty_button.clicked.connect(self.open_import_dialog)
         self.empty_button.hide()
+        self.empty_guide_button = QPushButton(tr("empty_btn_help"),
+                                              self.table.viewport())
+        self.empty_guide_button.setObjectName("Secondary")
+        self.empty_guide_button.setIcon(
+            icons.icon("circle-help", theme.PALETTE["text"], 16))
+        self.empty_guide_button.setFixedSize(170, 36)
+        self.empty_guide_button.clicked.connect(self.open_help_dialog)
+        self.empty_guide_button.hide()
         # The viewport's final geometry arrives after the first layout, so
         # centering at refresh() time is stale — re-center on every
         # viewport resize (first show, scrollbars, window resizes).
@@ -405,6 +418,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(self._on_shortcut_edit)
         QShortcut(QKeySequence(Qt.Key_Escape), self).activated.connect(self._on_shortcut_esc)
         QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh)
+        QShortcut(QKeySequence(Qt.Key_F1), self).activated.connect(self.open_help_dialog)
 
         self.reload_filters()
         self.refresh()
@@ -589,10 +603,11 @@ class MainWindow(QMainWindow):
     def _update_empty_state(self, shown: int) -> None:
         """E2: hide the hint when rows exist; otherwise pick the right
         message — a fresh library vs a search that found nothing. A fresh
-        library also gets the «وارد کردن» CTA."""
+        library also gets the «وارد کردن» CTA and the Guide CTA."""
         if shown:
             self.empty_label.hide()
             self.empty_button.hide()
+            self.empty_guide_button.hide()
             return
         total = self.lib.conn.execute(
             "SELECT COUNT(*) c FROM files").fetchone()["c"]
@@ -600,6 +615,7 @@ class MainWindow(QMainWindow):
         self.empty_label.setText(
             tr("empty_library") if fresh else tr("empty_search"))
         self.empty_button.setVisible(fresh)
+        self.empty_guide_button.setVisible(fresh)
         self._center_empty_label()
         self.empty_label.show()
 
@@ -607,16 +623,24 @@ class MainWindow(QMainWindow):
         vp = self.table.viewport()
         self.empty_label.adjustSize()
         show_button = not self.empty_button.isHidden()
+        show_guide = not self.empty_guide_button.isHidden()
         gap = 12 if show_button else 0
+        guide_gap = 8 if show_guide else 0
         button_h = self.empty_button.sizeHint().height() if show_button else 0
-        block_h = self.empty_label.height() + gap + button_h
+        guide_h = self.empty_guide_button.sizeHint().height() if show_guide else 0
+        block_h = self.empty_label.height() + gap + button_h + (guide_gap + guide_h if show_guide else 0)
         top = max(8, (vp.height() - block_h) // 2)
-        self.empty_label.move(
-            max(8, (vp.width() - self.empty_label.width()) // 2), top)
+        center_x = (vp.width() - self.empty_label.width()) // 2
+        self.empty_label.move(max(8, center_x), top)
         if show_button:
-            self.empty_button.move(
-                max(8, (vp.width() - self.empty_button.width()) // 2),
-                top + self.empty_label.height() + gap)
+            btn_top = top + self.empty_label.height() + gap
+            btn_x = (vp.width() - self.empty_button.width()) // 2
+            self.empty_button.move(max(8, btn_x), btn_top)
+            if show_guide:
+                guide_x = (vp.width() - self.empty_guide_button.width()) // 2
+                self.empty_guide_button.move(
+                    max(8, guide_x),
+                    btn_top + button_h + guide_gap)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -626,6 +650,11 @@ class MainWindow(QMainWindow):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._apply_dark_titlebar()
+        if not getattr(self, "_welcome_checked", False):
+            self._welcome_checked = True
+            if (self.settings.get("show_welcome", True) and
+                os.environ.get("QT_QPA_PLATFORM") != "offscreen"):
+                QTimer.singleShot(200, self.open_welcome_tour)
 
     def _apply_dark_titlebar(self) -> None:
         """The app is dark-only; a light Windows title bar would clash on
@@ -1049,6 +1078,12 @@ class MainWindow(QMainWindow):
                                   self.settings_path).exec():
             from .app import apply_font_size
             apply_font_size(self.settings)
+
+    def open_help_dialog(self) -> None:
+        dialogs.HelpDialog(self, self.settings, self.settings_path).exec()
+
+    def open_welcome_tour(self) -> None:
+        dialogs.WelcomeDialog(self, self.settings, self.settings_path).exec()
 
     # ---- LAN sharing ----------------------------------------------------
 
