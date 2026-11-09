@@ -164,10 +164,11 @@ class FeedbackPoster(QThread):
 
     done = Signal(bool)
 
-    def __init__(self, endpoint: str, payload: dict, parent=None):
+    def __init__(self, endpoint: str, payload: dict, parent=None, timeout: float = 5.0):
         super().__init__(parent)
         self.endpoint = endpoint
         self.payload = payload
+        self.timeout = timeout
 
     def run(self) -> None:
         import json as _json
@@ -178,7 +179,7 @@ class FeedbackPoster(QThread):
                 data=_json.dumps(self.payload, ensure_ascii=False).encode("utf-8"),
                 headers={"Content-Type": "application/json; charset=utf-8"},
                 method="POST")
-            with urllib.request.urlopen(req, timeout=5) as res:
+            with urllib.request.urlopen(req, timeout=self.timeout) as res:
                 ok = 200 <= res.status < 300
         except Exception:
             ok = False

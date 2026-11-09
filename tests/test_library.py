@@ -126,3 +126,24 @@ def test_library_maintain_false_skips_maintenance(tmp_path):
         assert lib.conn is not None
         with pytest.raises(sqlite3.OperationalError, match="no such table"):
             lib.conn.execute("SELECT COUNT(*) FROM subjects")
+
+
+def test_list_trash_with_corrupted_metadata_json(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        # Create trash and trash_meta directories
+        lib.trash_dir.mkdir(parents=True, exist_ok=True)
+        lib.trash_meta_dir.mkdir(parents=True, exist_ok=True)
+        # Put a file in trash
+        (lib.trash_dir / "sample.pdf").write_bytes(b"trash-content")
+        # Write corrupted JSON in trash_meta
+        (lib.trash_meta_dir / "sample.pdf.json").write_text("{corrupt-json", encoding="utf-8")
+        items = lib.list_trash()
+        assert len(items) == 1
+        assert items[0]["original_name"] == "sample.pdf"
+        assert items[0]["subject_name"] == "?"
+
+
+def test_restore_nonexistent_trash_file_raises_not_found(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        with pytest.raises(FileNotFoundError):
+            lib.restore_trash_file("ghost.pdf")

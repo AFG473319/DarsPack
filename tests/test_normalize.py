@@ -71,3 +71,16 @@ def test_persian_digits_only_touches_latin_digits():
     # Arabic-Indic digit passes through unchanged — pinned so a future
     # widening of the mapping is a deliberate decision
     assert persian_digits("٤") == "٤"
+
+
+def test_normalize_all_arabic_diacritics():
+    # Fatha, Kasra, Damma, Tanwin (Fath/Damm/Kasr), Shadda, Sukun
+    raw = "دَرْسٌ مُهِمٌّ وَمُفِيدٌ"
+    assert normalize(raw) == "درس مهم ومفید"
+
+
+def test_match_key_none_and_whitespace():
+    assert match_key(None) == ""
+    assert match_key("   \t\n  ") == ""
+    assert latin_digits("") == ""
+    assert persian_digits("") == ""

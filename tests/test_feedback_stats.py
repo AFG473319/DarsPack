@@ -89,10 +89,10 @@ def test_poster_reports_failure_without_raising(qapp):
     from darspack.ui.workers import FeedbackPoster
 
     results = []
-    poster = FeedbackPoster("http://127.0.0.1:9/", {"x": 1})   # nothing listens
+    poster = FeedbackPoster("http://127.0.0.1:9/", {"x": 1}, timeout=0.2)   # nothing listens
     poster.done.connect(results.append)
     poster.start()
-    deadline = time.time() + 15
+    deadline = time.time() + 5
     while not results and time.time() < deadline:
         qapp.processEvents()
         time.sleep(0.05)

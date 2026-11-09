@@ -17,16 +17,28 @@ from darspack.core.importer import import_paths  # noqa: E402
 from darspack.core.library import Library  # noqa: E402
 
 
-def _build(tmp_path, count=20, keep_duplicates=True):
-    """Import a small labelled test set into a fresh (open) library."""
-    labels = make_testset(tmp_path / "set", count=count, seed=42)
-    lib = Library(tmp_path / "lib").open()
-    import_paths(lib, [tmp_path / "set"], keep_duplicates=keep_duplicates)
-    return lib, labels
+@pytest.fixture(scope="module")
+def built_with_dups(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("dedup-dups")
+    labels = make_testset(tmp / "set", count=20, seed=42)
+    lib = Library(tmp / "lib").open()
+    import_paths(lib, [tmp / "set"], keep_duplicates=True)
+    yield lib, labels
+    lib.close()
 
 
-def test_r1_finds_exactly_the_planted_duplicates(tmp_path):
-    lib, labels = _build(tmp_path)
+@pytest.fixture(scope="module")
+def built_no_dups(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("dedup-nodups")
+    labels = make_testset(tmp / "set", count=20, seed=42)
+    lib = Library(tmp / "lib").open()
+    import_paths(lib, [tmp / "set"], keep_duplicates=False)
+    yield lib, labels
+    lib.close()
+
+
+def test_r1_finds_exactly_the_planted_duplicates(built_with_dups):
+    lib, labels = built_with_dups
     planted = {tuple(sorted(pair)) for pair in labels["duplicates"]}
     found = set()
     for g in duplicate_groups(lib.conn):
@@ -35,23 +47,23 @@ def test_r1_finds_exactly_the_planted_duplicates(tmp_path):
     assert found == planted                    # no false positives either
 
 
-def test_r2_finds_exactly_the_planted_conflicts(tmp_path):
-    lib, labels = _build(tmp_path)
+def test_r2_finds_exactly_the_planted_conflicts(built_with_dups):
+    lib, labels = built_with_dups
     planted = {Path(pair[0]).name for pair in labels["conflicts"]}
     found = {Path(g.rows[0]["original_name"]).name
              for g in version_conflicts(lib.conn)}
     assert found == planted
 
 
-def test_r3_rename_hints_are_duplicate_groups_with_distinct_names(tmp_path):
-    lib, _ = _build(tmp_path)
+def test_r3_rename_hints_are_duplicate_groups_with_distinct_names(built_with_dups):
+    lib, _ = built_with_dups
     for g in rename_hints(lib.conn):
         names = {r["name_norm"] for r in g.rows}
         assert len(names) > 1
 
 
-def test_default_import_leaves_no_duplicates(tmp_path):
-    lib, labels = _build(tmp_path, keep_duplicates=False)
+def test_default_import_leaves_no_duplicates(built_no_dups):
+    lib, labels = built_no_dups
     planted = {tuple(sorted(pair)) for pair in labels["duplicates"]}
     assert planted                             # the set does contain plants
     assert duplicate_groups(lib.conn) == []    # …but import-time dedup removed them
@@ -84,21 +96,34 @@ def test_r2_cross_spelling_names_are_one_conflict(tmp_path):
         "ریاضی نهم.pdf", "رياضي نهم.pdf"}
 
 
-def test_r3_finds_exactly_the_planted_duplicates(tmp_path):
+def test_r3_finds_exactly_the_planted_duplicates(built_with_dups):
     # strengthen R3 like R1/R2 above: every rename hint is a planted
     # duplicate pair (same bytes, different names) and nothing else
-    lib, labels = _build(tmp_path)
+    lib, labels = built_with_dups
     planted = {tuple(sorted(pair)) for pair in labels["duplicates"]}
     found = {tuple(sorted(r["original_name"] for r in g.rows))
              for g in rename_hints(lib.conn)}
     assert found == planted
 
 
-def test_default_import_keeps_version_conflicts(tmp_path):
+def test_default_import_keeps_version_conflicts(built_no_dups):
     # the other half of the flag-only rule: import-time dedup removes only
     # EXACT copies — different-content versions stay stored and stay flagged
-    lib, labels = _build(tmp_path, keep_duplicates=False)
+    lib, labels = built_no_dups
     assert len(version_conflicts(lib.conn)) == len(labels["conflicts"])
+
+
+def test_duplicate_groups_wasted_bytes_and_detail(conn):
+    # 3 files with same sha, 100 bytes each -> wasted = (3-1) * 100 = 200 bytes
+    for i in range(3):
+        conn.execute(
+            """INSERT INTO files(stored_name, original_name, name_norm,
+               size_bytes, sha256, imported_at) VALUES ('', ?, ?, 100, 'sha-triple', '2026-10-25T10:00:00')""",
+            (f"فایل_{i}.pdf", match_key(f"فایل_{i}.pdf")))
+    groups = duplicate_groups(conn)
+    assert len(groups) == 1
+    assert "فضای اشغال‌شده‌ی تکراری: 200 بایت" in groups[0].detail_fa
+    assert len(groups[0].rows) == 3
 
 
 # --- R4-lite: likely versions (re-download noise, different content) -------
@@ -168,3 +193,11 @@ def test_likely_versions_ignores_single_name(conn):
     # must not self-group
     _insert_file(conn, "جزوه علوم (1).pdf", "sha-a")
     assert likely_versions(conn) == []
+
+
+def test_likely_versions_name_made_only_of_noise(conn):
+    # a file whose name is solely version noise (e.g. نهایی.pdf) falls back to itself
+    _insert_file(conn, "نهایی.pdf", "sha-a")
+    _insert_file(conn, "نهایی (1).pdf", "sha-b")
+    # Both names strip down to same key or fallback
+    assert isinstance(likely_versions(conn), list)

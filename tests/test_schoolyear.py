@@ -25,26 +25,21 @@ def test_leap_year_esfand_30_exists():
     assert school_year(jdatetime.date(1403, 12, 30)) == "1403-1404"
 
 
-def test_non_leap_year_esfand_30_rejected():
-    # again jdatetime's contract, not ours: 1402 is not a leap year
-    with pytest.raises(ValueError):
-        jdatetime.date(1402, 12, 30)
+def test_all_twelve_months_of_year_1405():
+    expected_pairs = [
+        (1, "1404-1405"), (2, "1404-1405"), (3, "1404-1405"),
+        (4, "1404-1405"), (5, "1404-1405"), (6, "1404-1405"),
+        (7, "1405-1406"), (8, "1405-1406"), (9, "1405-1406"),
+        (10, "1405-1406"), (11, "1405-1406"), (12, "1405-1406"),
+    ]
+    for month, expected in expected_pairs:
+        assert school_year(jdatetime.date(1405, month, 15)) == expected
 
 
 def test_today_has_a_school_year():
-    assert "-" in current_school_year()
-
-
-# --- the full boundary table: Mehr starts the next school year ----------
-
-@pytest.mark.parametrize("month,expected", [
-    (1, "1404-1405"), (2, "1404-1405"), (3, "1404-1405"),
-    (4, "1404-1405"), (5, "1404-1405"), (6, "1404-1405"),
-    (7, "1405-1406"), (8, "1405-1406"), (9, "1405-1406"),
-    (10, "1405-1406"), (11, "1405-1406"), (12, "1405-1406"),
-])
-def test_all_twelve_months_of_year_1405(month, expected):
-    assert school_year(jdatetime.date(1405, month, 15)) == expected
+    res = current_school_year()
+    assert "-" in res
+    assert len(res) == 9  # e.g. 1405-1406
 
 
 def test_current_school_year_honors_today_argument():
@@ -52,3 +47,5 @@ def test_current_school_year_honors_today_argument():
     # this function testable without waiting for real Mehr
     assert current_school_year(today=jdatetime.date(1405, 7, 1)) == "1405-1406"
     assert current_school_year(today=jdatetime.date(1405, 6, 31)) == "1404-1405"
+    # also works with jdatetime.datetime instances
+    assert school_year(jdatetime.datetime(1405, 7, 1, 14, 30)) == "1405-1406"

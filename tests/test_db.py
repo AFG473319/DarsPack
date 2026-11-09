@@ -150,3 +150,43 @@ def test_migrated_library_reopens_through_init_schema(tmp_path):
 def test_get_or_create_rejects_unknown_tables(conn):
     with pytest.raises(AssertionError):
         db.get_or_create(conn, "files", "bogus")
+
+
+def test_cascade_delete_removes_file_tags(conn):
+    # Foreign key ON DELETE CASCADE verification
+    cur = conn.execute(
+        """INSERT INTO files(original_name, name_norm, size_bytes, sha256, imported_at)
+           VALUES ('test.pdf', 'test.pdf', 10, 'sha-test', '2026-10-25T10:00:00')""")
+    file_id = cur.lastrowid
+    tag_id = db.get_or_create(conn, "tags", "مهم")
+    conn.execute("INSERT INTO file_tags(file_id, tag_id) VALUES (?, ?)", (file_id, tag_id))
+    conn.commit()
+
+    assert conn.execute("SELECT COUNT(*) c FROM file_tags WHERE file_id=?", (file_id,)).fetchone()["c"] == 1
+    # Delete file
+    conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+    conn.commit()
+    # file_tags row must be automatically removed by CASCADE
+    assert conn.execute("SELECT COUNT(*) c FROM file_tags WHERE file_id=?", (file_id,)).fetchone()["c"] == 0
+    # But the tag itself is preserved
+    assert conn.execute("SELECT COUNT(*) c FROM tags WHERE id=?", (tag_id,)).fetchone()["c"] == 1
+
+
+def test_hint_rules_token_upsert(conn):
+    sid = db.get_or_create(conn, "subjects", "فیزیک")
+    conn.execute(
+        """INSERT INTO hint_rules(token, subject_id, hits, last_used)
+           VALUES ('فیزیک', ?, 1, '2026-10-25')
+           ON CONFLICT(token) DO UPDATE SET hits = hits + 1""", (sid,))
+    conn.commit()
+    row = conn.execute("SELECT hits FROM hint_rules WHERE token='فیزیک'").fetchone()
+    assert row["hits"] == 1
+
+    # Second insert updates hits
+    conn.execute(
+        """INSERT INTO hint_rules(token, subject_id, hits, last_used)
+           VALUES ('فیزیک', ?, 1, '2026-10-26')
+           ON CONFLICT(token) DO UPDATE SET hits = hits + 1""", (sid,))
+    conn.commit()
+    row2 = conn.execute("SELECT hits FROM hint_rules WHERE token='فیزیک'").fetchone()
+    assert row2["hits"] == 2

@@ -103,7 +103,8 @@ class TableSortItem(QTableWidgetItem):
                     return my_key < other_key
                 except TypeError:
                     pass
-        return super().__lt__(other)
+            return self.text() < other.text()
+        return False
 
 
 class MainWindow(QMainWindow):

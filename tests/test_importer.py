@@ -256,3 +256,33 @@ def test_duplicate_of_package_file_still_carries_prefill(lib, sample):
                         meta={"subject": "فیزیک", "tags": ["امتحانی"]})
     assert again.status == "duplicate"
     assert again.prefill == {"subject": "فیزیک", "tags": ["امتحانی"]}
+
+
+def test_import_zero_byte_file(lib, sample):
+    r = import_file(lib, sample("خالی.pdf", data=b""))
+    assert r.status == "imported"
+    row = lib.conn.execute("SELECT size_bytes, sha256 FROM files WHERE id=?", (r.file_id,)).fetchone()
+    assert row["size_bytes"] == 0
+    assert row["sha256"] == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_import_file_without_extension(lib, sample):
+    r = import_file(lib, sample("جزوه_بدون_پسوند", data=b"content"))
+    assert r.status == "imported"
+    row = lib.conn.execute("SELECT stored_name, original_name FROM files WHERE id=?", (r.file_id,)).fetchone()
+    assert row["original_name"] == "جزوه_بدون_پسوند"
+    assert row["stored_name"] == f"{r.file_id:06d}"
+    assert (lib.files_dir / row["stored_name"]).exists()
+
+
+def test_import_nonexistent_file_returns_error_result(lib, tmp_path):
+    r = import_file(lib, tmp_path / "nonexistent.pdf")
+    assert r.status == "error"
+    assert "پیدا نشد" in r.message_fa
+
+
+def test_import_paths_empty(lib, tmp_path):
+    empty_dir = tmp_path / "empty_folder"
+    empty_dir.mkdir()
+    assert import_paths(lib, []) == []
+    assert import_paths(lib, [empty_dir]) == []
