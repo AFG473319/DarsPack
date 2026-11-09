@@ -44,6 +44,9 @@ src/darspack/
 │   ├── server.py         # stdlib ThreadingHTTPServer, PIN gate, endpoints           
 │   ├── sync.py           # manifest/diff logic shared with packaging                 
 │   └── client/           # static RTL HTML/CSS/JS + PWA manifest/icons — no build step
+├── mcp/                  # Model Context Protocol stdio server for AI agents
+│   ├── server.py         # JSON-RPC 2.0 / MCP tool dispatch & handlers
+│   └── extractor.py      # zero-dependency text & PDF stream preview extractor
 └── i18n.py               # fa/en string dictionaries (plain dicts, no Qt Linguist)
 tests/                    # one test file per core module
 eval/make_testset.py      # generates the labelled synthetic set from eval/benchmark-plan.md

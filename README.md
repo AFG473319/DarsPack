@@ -32,6 +32,7 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 | `docs/dependencies.md` | Dependency register (what / why / licence / size) |
 | `docs/limitations.md` | Known limitations and measured performance on the target laptop |
 | `docs/feedback-setup.md` | Optional online feedback endpoint setup |
+| `docs/mcp.md` | Model Context Protocol (MCP) server configuration for AI agents |
 ***REMOVED***
 | `eval/benchmark-plan.md` | Controlled benchmark: find-time, duplicate/conflict detection accuracy, package verification |
 | `installer/` | PyInstaller spec + one-command build script (`build.bat`) |
