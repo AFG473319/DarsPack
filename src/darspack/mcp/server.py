@@ -12,8 +12,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core import db
+from ..core.backup import backup_library, backup_filename
+from ..core.dedup import duplicate_groups, version_conflicts
 from ..core.importer import import_file
 from ..core.library import Library
+from ..core.manifest import export_package, verify_package
 from ..core.normalize import match_key
 from ..core.search import search
 from ..core.suggest import suggest, learn_hint, DEFAULT_SUBJECTS
@@ -195,6 +198,98 @@ class DarsPackMcpServer:
                 },
                 "handler": self.tool_import_file,
             },
+            "darspack_trash_file": {
+                "description": "Move a file from active catalog to .trash (safe delete, preserves original and sidecar metadata).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "integer", "description": "The file ID in DarsPack"}
+                    },
+                    "required": ["file_id"],
+                },
+                "handler": self.tool_trash_file,
+            },
+            "darspack_list_trash": {
+                "description": "List all files currently in the .trash folder with their preserved metadata.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+                "handler": self.tool_list_trash,
+            },
+            "darspack_restore_trash_file": {
+                "description": "Restore a deleted file from .trash back into the active catalog with its tags and metadata.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "trash_name": {"type": "string", "description": "The trash filename (from darspack_list_trash)"}
+                    },
+                    "required": ["trash_name"],
+                },
+                "handler": self.tool_restore_trash_file,
+            },
+            "darspack_check_duplicates": {
+                "description": "Detect exact duplicate groups (R1) and version conflicts (R2: same name, different content).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+                "handler": self.tool_check_duplicates,
+            },
+            "darspack_export_package": {
+                "description": "Export selected files as a portable, standalone .zip درس‌پک package with manifest.json and offline index.html.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file_ids": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "List of file IDs to include in the package",
+                        },
+                        "output_path": {
+                            "type": "string",
+                            "description": "Absolute output path for the .zip file",
+                        },
+                    },
+                    "required": ["file_ids", "output_path"],
+                },
+                "handler": self.tool_export_package,
+            },
+            "darspack_verify_package": {
+                "description": "Verify integrity and completeness of a .zip درس‌پک package against its manifest.json.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "package_path": {
+                            "type": "string",
+                            "description": "Absolute path to the .zip package",
+                        }
+                    },
+                    "required": ["package_path"],
+                },
+                "handler": self.tool_verify_package,
+            },
+            "darspack_backup_library": {
+                "description": "Create a full library backup ZIP containing the database snapshot (catalog.db) and all stored files.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "output_dir": {
+                            "type": "string",
+                            "description": "Directory to save the backup ZIP. If omitted, uses Desktop/user home.",
+                        }
+                    },
+                },
+                "handler": self.tool_backup_library,
+            },
+            "darspack_get_stats": {
+                "description": "Get overall library statistics: file counts, total size, dedup bytes saved, breakdown by subject and kind.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+                "handler": self.tool_get_stats,
+            },
         }
 
     # --- Tool handlers ---
@@ -353,6 +448,130 @@ class DarsPackMcpServer:
             "message": res.message_fa,
             "file_id": res.file_id,
             "existing_id": res.existing_id,
+        }
+
+    def tool_trash_file(self, args: dict) -> dict:
+        file_id = int(args["file_id"])
+        res = self.lib.move_to_trash(file_id)
+        return {
+            "status": "success",
+            "message": f"File {res['original_name']} moved to trash",
+            "trash_name": res["trash_name"],
+        }
+
+    def tool_list_trash(self, args: dict) -> dict:
+        items = self.lib.list_trash()
+        return {"count": len(items), "items": items}
+
+    def tool_restore_trash_file(self, args: dict) -> dict:
+        trash_name = args["trash_name"].strip()
+        res = self.lib.restore_trash_file(trash_name)
+        return {
+            "status": "success",
+            "message": f"File {res['original_name']} restored to catalog",
+            "file_id": res["id"],
+        }
+
+    def tool_check_duplicates(self, args: dict) -> dict:
+        conn = self.lib.conn
+        r1_groups = duplicate_groups(conn)
+        r2_groups = version_conflicts(conn)
+
+        def serialize_group(g):
+            return {
+                "label": g.label_fa,
+                "detail": g.detail_fa,
+                "files": [
+                    {
+                        "id": r["id"],
+                        "original_name": r["original_name"],
+                        "size_bytes": r["size_bytes"],
+                        "sha256": r["sha256"],
+                        "imported_at": r["imported_at"],
+                    }
+                    for r in g.rows
+                ],
+            }
+
+        return {
+            "exact_duplicates": [serialize_group(g) for g in r1_groups],
+            "version_conflicts": [serialize_group(g) for g in r2_groups],
+        }
+
+    def tool_export_package(self, args: dict) -> dict:
+        file_ids = [int(fid) for fid in args.get("file_ids", [])]
+        out_path = Path(args["output_path"])
+        if not file_ids:
+            return {"error": "file_ids cannot be empty"}
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        info = export_package(self.lib.conn, self.lib.files_dir, file_ids, out_path)
+        with self.lib.conn:
+            db.log(self.lib.conn, "mcp_export", f"{info['count']} files -> {out_path.name}")
+        return {
+            "status": "success",
+            "path": info["path"],
+            "count": info["count"],
+            "manifest_sha256": info["manifest_sha256"],
+        }
+
+    def tool_verify_package(self, args: dict) -> dict:
+        pkg_path = Path(args["package_path"])
+        if not pkg_path.is_file():
+            return {"error": f"Package file not found: {pkg_path}"}
+        report = verify_package(pkg_path)
+        return {
+            "ok": report.ok,
+            "problems": report.problems,
+        }
+
+    def tool_backup_library(self, args: dict) -> dict:
+        out_dir = Path(args.get("output_dir") or (Path.home() / "Documents"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / backup_filename()
+        info = backup_library(self.lib, out_file)
+        with self.lib.conn:
+            db.log(self.lib.conn, "mcp_backup", f"snapshot saved to {out_file.name}")
+        return {
+            "status": "success",
+            "path": str(out_file),
+            "file_count": info["count"],
+        }
+
+    def tool_get_stats(self, args: dict) -> dict:
+        conn = self.lib.conn
+        total = conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(size_bytes),0) s FROM files"
+        ).fetchone()
+        dedup = conn.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) saved FROM import_skips"
+        ).fetchone()["saved"]
+        unclassified = conn.execute(
+            "SELECT COUNT(*) c FROM files WHERE subject_id IS NULL"
+        ).fetchone()["c"]
+
+        per_subject = [
+            {"subject": r["name"], "count": r["c"]}
+            for r in conn.execute(
+                """SELECT s.name, COUNT(*) c FROM files f
+                   JOIN subjects s ON s.id=f.subject_id
+                   GROUP BY s.name ORDER BY c DESC"""
+            )
+        ]
+        per_kind = [
+            {"kind": r["kind"], "count": r["c"]}
+            for r in conn.execute(
+                """SELECT kind, COUNT(*) c FROM files WHERE kind IS NOT NULL
+                   GROUP BY kind ORDER BY c DESC"""
+            )
+        ]
+        return {
+            "file_count": total["c"],
+            "total_bytes": total["s"],
+            "dedup_bytes_saved": dedup,
+            "unclassified_count": unclassified,
+            "per_subject": per_subject,
+            "per_kind": per_kind,
         }
 
     # --- Dispatch JSON-RPC methods ---

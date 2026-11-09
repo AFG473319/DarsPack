@@ -74,6 +74,16 @@ If you are using a virtual environment:
 | `darspack_batch_classify` | Classify multiple files in a single call |
 | `darspack_search_files` | Search catalog with Persian-normalized queries and filters |
 | `darspack_import_file` | Copy a new file from disk into the library and catalog it |
+| `darspack_trash_file` | Move a file from the catalog into `.trash` (safe delete preserving metadata) |
+| `darspack_list_trash` | List deleted files currently preserved in `.trash` with sidecar metadata |
+| `darspack_restore_trash_file` | Restore a file from `.trash` back into active catalog with its tags and attributes |
+| `darspack_check_duplicates` | Detect exact duplicate groups (R1) and version conflicts (R2) |
+| `darspack_export_package` | Export selected files into a portable `.zip` درس‌پک package with manifest & offline HTML |
+| `darspack_verify_package` | Verify integrity and SHA-256 hashes of a `.zip` درس‌پک package |
+| `darspack_backup_library` | Full-library backup ZIP with point-in-time `catalog.db` snapshot |
+| `darspack_get_stats` | Retrieve overall catalog stats, size, deduplication savings, and subject counts |
+
+> **Note on Safety:** In line with DarsPack's core philosophy ("Flag, never touch"), permanent deletion from `.trash` (`empty_trash`) is intentionally restricted to the human user in the GUI to prevent accidental loss of student files.
 
 ---
 

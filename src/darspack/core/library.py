@@ -165,6 +165,65 @@ class Library:
         items.sort(key=lambda x: x["deleted_at"], reverse=True)
         return items
 
+    def move_to_trash(self, file_id: int) -> dict:
+        """Safely move a file from files/ to files/.trash/ and remove its catalog row."""
+        row = self.conn.execute(
+            """SELECT f.*, s.name AS subject_name FROM files f
+               LEFT JOIN subjects s ON s.id=f.subject_id WHERE f.id=?""",
+            (file_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"File id {file_id} not found in catalog")
+
+        self.trash_dir.mkdir(exist_ok=True)
+        self.trash_meta_dir.mkdir(exist_ok=True)
+
+        stored_p = Path(row["stored_name"])
+        dest = self.trash_dir / row["stored_name"]
+        n = 0
+        while dest.exists():
+            n += 1
+            dest = self.trash_dir / f"{stored_p.stem}~{n}{stored_p.suffix}"
+
+        src_file = self.stored_path(row)
+        try:
+            os.replace(src_file, dest)
+            tag_rows = self.conn.execute(
+                "SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id WHERE ft.file_id=?",
+                (file_id,)
+            ).fetchall()
+            file_tags = [r[0] for r in tag_rows]
+            meta = {
+                "original_name": row["original_name"],
+                "stored_name": row["stored_name"],
+                "subject_id": row["subject_id"],
+                "subject_name": row["subject_name"],
+                "chapter": row["chapter"],
+                "lesson": row["lesson"] if "lesson" in row.keys() else None,
+                "kind": row["kind"],
+                "school_year": row["school_year"],
+                "sha256": row["sha256"],
+                "size": row["size_bytes"],
+                "imported_at": row["imported_at"] if "imported_at" in row.keys() else None,
+                "deleted_at": datetime.now().isoformat(),
+                "note": row["note"] if "note" in row.keys() else "",
+                "tags": file_tags,
+            }
+            meta_dest = self.trash_meta_dir / f"{dest.name}.json"
+            meta_dest.write_text(
+                json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        except FileNotFoundError:
+            pass
+
+        with self.conn:
+            self.conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+            db.log(self.conn, "delete", row["original_name"])
+
+        return {
+            "id": file_id,
+            "original_name": row["original_name"],
+            "trash_name": dest.name,
+        }
+
     def restore_trash_file(self, trash_filename: str) -> dict:
         """Restore a single file from .trash back into files/ and catalog."""
         clean_name = Path(trash_filename).name
