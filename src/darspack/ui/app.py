@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTranslator
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -19,6 +19,38 @@ from ..core.library import Library
 from . import theme
 
 DEFAULT_LIBRARY = Path.home() / "Documents" / "DarsPackLibrary"
+
+
+class PersianTranslator(QTranslator):
+    """Translate Qt's built-in dialog and button strings to Persian (Yes/No/OK/Cancel/Close)."""
+
+    _MAPPING = {
+        "&Yes": "بله",
+        "Yes": "بله",
+        "&No": "خیر",
+        "No": "خیر",
+        "&OK": "تأیید",
+        "OK": "تأیید",
+        "&Cancel": "لغو",
+        "Cancel": "لغو",
+        "&Close": "بستن",
+        "Close": "بستن",
+        "&Save": "ذخیره",
+        "Save": "ذخیره",
+        "&Open": "باز کردن",
+        "Open": "باز کردن",
+        "&Discard": "رد کردن",
+        "Discard": "رد کردن",
+        "&Apply": "اعمال",
+        "Apply": "اعمال",
+        "&Help": "راهنما",
+        "Help": "راهنما",
+    }
+
+    def translate(self, context, sourceText, disambiguation=None, n=-1):
+        if sourceText in self._MAPPING:
+            return self._MAPPING[sourceText]
+        return super().translate(context, sourceText, disambiguation, n)
 
 
 def load_settings() -> tuple[dict, Path]:
@@ -76,6 +108,9 @@ def run() -> None:
     i18n.set_language(settings.get("language", "fa"))
 
     app = QApplication(sys.argv)
+    if i18n.language() == "fa":
+        app._fa_translator = PersianTranslator(app)
+        app.installTranslator(app._fa_translator)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(QIcon(str(asset_path("icon/darspack.ico"))))
     app.setLayoutDirection(

@@ -36,7 +36,9 @@ from . import icons, theme
 
 
 def text_dialog(parent, title: str, text: str) -> None:
-    QMessageBox.information(parent, title, text)
+    msg = QMessageBox(QMessageBox.Information, title, text, QMessageBox.Ok, parent)
+    msg.setButtonText(QMessageBox.Ok, tr("btn_confirm"))
+    msg.exec()
 
 
 def polish_dialog(dialog, min_width: int | None = None) -> None:
@@ -1729,10 +1731,13 @@ class TrashDialog(QDialog):
                 tr("trash_restore_failed").format(i18n.num(len(failed_names))) + f"\n({', '.join(failed_names[:3])})")
 
     def _empty_trash(self) -> None:
-        ans = QMessageBox.question(
-            self, tr("trash_empty_btn"), tr("trash_empty_confirm"),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if ans == QMessageBox.Yes:
+        if QMessageBox.question(
+            self,
+            tr("trash_empty_btn"),
+            tr("trash_empty_confirm"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        ) == QMessageBox.Yes:
             count = self.lib.empty_trash()
             QMessageBox.information(
                 self, tr("trash_empty_btn"),
@@ -1939,8 +1944,6 @@ class ExamPackDialog(QDialog):
             self, tr("exam_pack_title"),
             tr("exam_pack_done").format(i18n.num(info["count"])))
         self.accept()
-
-
 class WelcomeDialog(QDialog):
     """Interactive first-run welcome tour with 3 visual slides."""
 

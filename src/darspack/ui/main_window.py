@@ -20,9 +20,9 @@ from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
+    QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
-    QStatusBar, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
+    QScrollArea, QStatusBar, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
     QVBoxLayout, QWidget,
 )
 
@@ -284,11 +284,10 @@ class MainWindow(QMainWindow):
         self.import_button.clicked.connect(self.open_import_dialog)
         bar.addWidget(self.import_button)
 
-        # --- secondary bar: grouped actions + filters -----------------
         filter_bar = QWidget()
         filter_bar.setObjectName("FilterBar")
         toolbar = QHBoxLayout(filter_bar)
-        toolbar.setContentsMargins(16, 8, 16, 8)
+        toolbar.setContentsMargins(20, 8, 20, 8)
         toolbar.setSpacing(8)
 
         self.packages_menu = QMenu(self)
@@ -301,7 +300,7 @@ class MainWindow(QMainWindow):
         self._menu_action(self.packages_menu, tr("btn_import_pkg"),
                           "folder-open", self.import_package)
         self.packages_button = self._tool_button(tr("btn_packages"),
-                                                 "package")
+                          "package")
         self.packages_button.setPopupMode(QToolButton.InstantPopup)
         self.packages_button.setMenu(self.packages_menu)
         toolbar.addWidget(self.packages_button)
@@ -326,7 +325,7 @@ class MainWindow(QMainWindow):
             self.more_menu, tr("btn_delete"), "trash-2",
             self.delete_selected_files)
         self.edit_action.setEnabled(False)
-        self._menu_action(self.more_menu, tr("btn_trash_bin"), "trash-2",
+        self._menu_action(self.more_menu, tr("btn_trash_bin"), "archive",
                           self.open_trash_dialog)
         self.delete_action.setEnabled(False)
         self.more_menu.addSeparator()
@@ -390,8 +389,8 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(80)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, width in ((1, 150), (2, 150), (3, 110),
-                           (4, 100), (5, 120), (6, 100)):
+        for col, width in ((1, 130), (2, 140), (3, 100),
+                           (4, 90), (5, 110), (6, 90)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
         self._sort_orders: dict[int, Qt.SortOrder] = {}
@@ -453,19 +452,190 @@ class MainWindow(QMainWindow):
         # viewport resize (first show, scrollbars, window resizes).
         self.table.viewport().installEventFilter(self)
 
-        # --- assembly -------------------------------------------------
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(16, 12, 16, 12)
-        content_layout.addWidget(self.table)
-
+        # --- assembly: Windows 11 Fluent Layout ----------------------
+        # Top-level container: Horizontal layout with NavRail on side and Canvas on main
         central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(app_bar)
-        layout.addWidget(filter_bar)
-        layout.addWidget(content, 1)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # 1. Navigation Rail (سایدبار ناوبری روان)
+        self.nav_rail = QWidget()
+        self.nav_rail.setObjectName("NavRail")
+        self.nav_rail.setFixedWidth(180)
+        nav_vbox = QVBoxLayout(self.nav_rail)
+        nav_vbox.setContentsMargins(8, 12, 8, 12)
+        nav_vbox.setSpacing(4)
+
+        # Brand header in rail
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(6, 4, 6, 12)
+        brand_row.setSpacing(8)
+        brand = QSvgWidget(str(asset_path("icon/darspack.svg")))
+        brand.setFixedSize(28, 28)
+        brand_row.addWidget(brand)
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        title = QLabel(tr("app_title"))
+        title.setObjectName("BrandTitle")
+        subtitle = QLabel(tr("app_subtitle"))
+        subtitle.setObjectName("BrandSub")
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        brand_row.addLayout(titles)
+        brand_row.addStretch(1)
+        nav_vbox.addLayout(brand_row)
+
+        self._nav_items = {}
+
+        def _add_nav_item(key: str, label: str, icon_name: str, slot, count_badge=None) -> QToolButton:
+            btn = QToolButton()
+            btn.setObjectName("NavItem")
+            btn.setText(label)
+            btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            btn.setIcon(icons.icon(icon_name, theme.PALETTE["muted"], 16))
+            btn.setIconSize(QSize(16, 16))
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(34)
+            btn.setSizePolicy(btn.sizePolicy().horizontalPolicy(), btn.sizePolicy().verticalPolicy())
+            btn.clicked.connect(slot)
+
+            btn._base_label = label
+            btn._badge_count = 0
+            btn._badge = True if count_badge else None
+
+            nav_vbox.addWidget(btn)
+            self._nav_items[key] = btn
+            return btn
+
+        # Section 1: Library (کتابخانه)
+        sec_lib = QLabel(tr("nav_sec_library"))
+        sec_lib.setObjectName("NavSectionHeader")
+        nav_vbox.addWidget(sec_lib)
+
+        self.nav_all = _add_nav_item("all", tr("nav_all_files"), "folder-open",
+                                     lambda: self._select_nav_filter(None, None))
+        self.nav_all.setProperty("active", True)
+
+        self.nav_unclassified = _add_nav_item(
+            "unclass", tr("nav_unclassified"), "triangle-alert",
+            lambda: self._select_nav_filter(-1, None), count_badge=True)
+
+        self.nav_trash = _add_nav_item(
+            "trash", tr("nav_trash"), "archive", self.open_trash_dialog)
+
+        div1 = QFrame()
+        div1.setObjectName("NavDivider")
+        div1.setFrameShape(QFrame.HLine)
+        nav_vbox.addWidget(div1)
+
+        nav_vbox.addStretch(1)
+
+        div2 = QFrame()
+        div2.setObjectName("NavDivider")
+        div2.setFrameShape(QFrame.HLine)
+        nav_vbox.addWidget(div2)
+
+        # Bottom section: Stats & Settings
+        _add_nav_item("stats", tr("nav_stats"), "chart-column", self.show_stats)
+        _add_nav_item("history", tr("nav_history"), "history", self.show_history)
+        _add_nav_item("settings", tr("nav_settings"), "settings", self.open_settings)
+
+        root_layout.addWidget(self.nav_rail)
+
+        # 2. Main Content Canvas
+        canvas = QWidget()
+        canvas_layout = QVBoxLayout(canvas)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+
+        # Fluent CommandBar (Top Header with Search + Primary CTA + View Switcher)
+        command_bar = QWidget()
+        command_bar.setObjectName("CommandBar")
+        cmd_layout = QHBoxLayout(command_bar)
+        cmd_layout.setContentsMargins(20, 10, 20, 10)
+        cmd_layout.setSpacing(12)
+
+        # Search Bar
+        cmd_layout.addWidget(self.search_shell)
+        cmd_layout.addStretch(1)
+
+        # View Switcher (Table View vs Card Grid View)
+        self.btn_view_table = QToolButton()
+        self.btn_view_table.setObjectName("SegmentBtn")
+        self.btn_view_table.setIcon(icons.icon("list", theme.PALETTE["text"], 16))
+        self.btn_view_table.setToolTip(tr("view_table"))
+        self.btn_view_table.setProperty("active", True)
+        self.btn_view_table.clicked.connect(lambda: self._set_view_mode("table"))
+        cmd_layout.addWidget(self.btn_view_table)
+
+        self.btn_view_cards = QToolButton()
+        self.btn_view_cards.setObjectName("SegmentBtn")
+        self.btn_view_cards.setIcon(icons.icon("grid", theme.PALETTE["muted"], 16))
+        self.btn_view_cards.setToolTip(tr("view_cards"))
+        self.btn_view_cards.setProperty("active", False)
+        self.btn_view_cards.clicked.connect(lambda: self._set_view_mode("cards"))
+        cmd_layout.addWidget(self.btn_view_cards)
+
+        # Primary Import Action
+        cmd_layout.addWidget(self.import_button)
+
+        canvas_layout.addWidget(command_bar)
+
+        # Sub-header / FilterBar (Quick Subject, Kind & Year dropdowns + More menu)
+        canvas_layout.addWidget(filter_bar)
+
+        # Fluent InfoBar (Status notification banner for active Wi-Fi sharing or notices)
+        self.info_bar = QFrame()
+        self.info_bar.setObjectName("InfoBar")
+        info_layout = QHBoxLayout(self.info_bar)
+        info_layout.setContentsMargins(14, 6, 14, 6)
+        info_layout.setSpacing(10)
+        self.info_bar_icon = QLabel()
+        self.info_bar_icon.setFixedSize(18, 18)
+        info_layout.addWidget(self.info_bar_icon)
+        self.info_bar_label = QLabel()
+        self.info_bar_label.setObjectName("InfoBarText")
+        info_layout.addWidget(self.info_bar_label, 1)
+        self.info_bar_action = QPushButton(tr("infobar_share_view"))
+        self.info_bar_action.setObjectName("InfoBarAction")
+        self.info_bar_action.setCursor(Qt.PointingHandCursor)
+        self.info_bar_action.clicked.connect(self.toggle_share)
+        info_layout.addWidget(self.info_bar_action)
+        self.info_bar_close = QToolButton()
+        self.info_bar_close.setObjectName("InfoBarClose")
+        self.info_bar_close.setIcon(icons.icon("x", theme.PALETTE["muted"], 14))
+        self.info_bar_close.setCursor(Qt.PointingHandCursor)
+        self.info_bar_close.clicked.connect(self.info_bar.hide)
+        info_layout.addWidget(self.info_bar_close)
+        self.info_bar.hide()
+
+        # Content area with Stacked Views: Table and Card Grid
+        self.content_stack = QWidget()
+        content_vbox = QVBoxLayout(self.content_stack)
+        content_vbox.setContentsMargins(20, 12, 20, 12)
+        content_vbox.setSpacing(10)
+        content_vbox.addWidget(self.info_bar)
+
+        # Table View
+        content_vbox.addWidget(self.table, 1)
+
+        # Card Grid View
+        self.card_scroll = QScrollArea()
+        self.card_scroll.setObjectName("CardGridScroll")
+        self.card_scroll.setWidgetResizable(True)
+        self.card_container = QWidget()
+        self.card_container.setObjectName("CardGridContainer")
+        self.card_grid = QGridLayout(self.card_container)
+        self.card_grid.setContentsMargins(4, 4, 4, 4)
+        self.card_grid.setSpacing(12)
+        self.card_scroll.setWidget(self.card_container)
+        self.card_scroll.hide()
+        enable_smooth_scroll(self.card_scroll)
+        content_vbox.addWidget(self.card_scroll, 1)
+
+        canvas_layout.addWidget(self.content_stack, 1)
+        root_layout.addWidget(canvas, 1)
         self.setCentralWidget(central)
 
         status = QStatusBar()
@@ -538,13 +708,123 @@ class MainWindow(QMainWindow):
         action.triggered.connect(slot)
         return action
 
+    def _select_nav_filter(self, subject_id, kind) -> None:
+        """Handle clicks on the Fluent Navigation Rail."""
+        for key, btn in getattr(self, "_nav_items", {}).items():
+            btn.setProperty("active", False)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+        if subject_id == -1:
+            if hasattr(self, "nav_unclassified"):
+                self.nav_unclassified.setProperty("active", True)
+                self.nav_unclassified.style().unpolish(self.nav_unclassified)
+                self.nav_unclassified.style().polish(self.nav_unclassified)
+            idx = self.subject_combo.findData(-1)
+            if idx >= 0:
+                self.subject_combo.setCurrentIndex(idx)
+        else:
+            if hasattr(self, "nav_all"):
+                self.nav_all.setProperty("active", True)
+                self.nav_all.style().unpolish(self.nav_all)
+                self.nav_all.style().polish(self.nav_all)
+            self.subject_combo.setCurrentIndex(0)
+            self.kind_combo.setCurrentIndex(0)
+
+    def _set_view_mode(self, mode: str) -> None:
+        """Switch between detailed Windows table view and modern Fluent card grid."""
+        is_cards = (mode == "cards")
+        self.btn_view_table.setProperty("active", not is_cards)
+        self.btn_view_cards.setProperty("active", is_cards)
+        self.btn_view_table.style().unpolish(self.btn_view_table)
+        self.btn_view_table.style().polish(self.btn_view_table)
+        self.btn_view_cards.style().unpolish(self.btn_view_cards)
+        self.btn_view_cards.style().polish(self.btn_view_cards)
+
+        if is_cards:
+            self.table.hide()
+            self._populate_card_grid()
+            self.card_scroll.show()
+        else:
+            self.card_scroll.hide()
+            self.table.show()
+
+    def _populate_card_grid(self) -> None:
+        """Fill the Fluent card grid with visual tiles of the current result rows."""
+        # Clear existing card widgets
+        while self.card_grid.count():
+            item = self.card_grid.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        from .delegates import KIND_BADGES
+        from ..core.normalize import persian_digits
+
+        cols = 3  # 3 responsive columns
+        for idx, row in enumerate(self.last_rows):
+            card = QFrame()
+            card.setObjectName("FileCard")
+            card.setCursor(Qt.PointingHandCursor)
+            c_layout = QVBoxLayout(card)
+            c_layout.setContentsMargins(12, 10, 12, 10)
+            c_layout.setSpacing(6)
+
+            # Top row: File Icon + File Name
+            header_row = QHBoxLayout()
+            header_row.setSpacing(8)
+            f_icon = QLabel()
+            f_icon.setPixmap(self._file_icon_for(row["original_name"]).pixmap(24, 24))
+            header_row.addWidget(f_icon)
+
+            lbl_name = QLabel(row["original_name"])
+            lbl_name.setObjectName("CardTitle")
+            lbl_name.setWordWrap(True)
+            header_row.addWidget(lbl_name, 1)
+            c_layout.addLayout(header_row)
+
+            # Meta row: Subject badge + Kind badge
+            chips_row = QHBoxLayout()
+            chips_row.setSpacing(6)
+            if row["subject_name"]:
+                s_chip = QLabel(row["subject_name"])
+                s_chip.setObjectName("CardSubjChip")
+                chips_row.addWidget(s_chip)
+
+            kind_text = row["kind"] or "سایر"
+            k_chip = QLabel(kind_text)
+            k_chip.setObjectName("CardKindChip")
+            bg, fg = KIND_BADGES.get(kind_text, KIND_BADGES["سایر"])
+            k_chip.setStyleSheet(f"background: {bg}; color: {fg};")
+            chips_row.addWidget(k_chip)
+            chips_row.addStretch(1)
+            c_layout.addLayout(chips_row)
+
+            # Footer row: Chapter/Lesson & Size
+            foot_row = QHBoxLayout()
+            ch_les = chapter_lesson_display(row["chapter"], row["lesson"])
+            foot_lbl = QLabel(f"{ch_les}  ·  {human_size(row['size_bytes'])}")
+            foot_lbl.setObjectName("CardMeta")
+            foot_row.addWidget(foot_lbl)
+            foot_row.addStretch(1)
+            c_layout.addLayout(foot_row)
+
+            # Double-click to open
+            card.mouseDoubleClickEvent = lambda e, r=row: self._open_card_file(r)
+
+            r_idx = idx // cols
+            c_idx = idx % cols
+            self.card_grid.addWidget(card, r_idx, c_idx)
+
+    def _open_card_file(self, row) -> None:
+        p = self.lib.stored_path(row)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+
     def _update_clear_button(self, text: str) -> None:
         self.clear_search_button.setVisible(bool(text))
 
     def _show_unclassified(self) -> None:
-        index = self.subject_combo.findData(-1)
-        if index >= 0:
-            self.subject_combo.setCurrentIndex(index)
+        self._select_nav_filter(-1, None)
 
     # ---- catalog view -------------------------------------------------
 
@@ -664,6 +944,18 @@ class MainWindow(QMainWindow):
             tr("status_unclassified").format(i18n.num(unclassified)))
         self.unclassified_button.setVisible(bool(unclassified))
 
+        # Update Navigation Rail unclassified count badge
+        if hasattr(self, "nav_unclassified"):
+            base = getattr(self.nav_unclassified, "_base_label", tr("nav_unclassified"))
+            if unclassified > 0:
+                self.nav_unclassified.setText(f"{base} ({i18n.num(unclassified)})")
+            else:
+                self.nav_unclassified.setText(base)
+
+        # If card view is currently active, re-populate cards
+        if hasattr(self, "card_scroll") and self.card_scroll.isVisible():
+            self._populate_card_grid()
+
     def _update_action_states(self) -> None:
         """Edit/delete follow the table selection."""
         has_selection = bool(self.table.selectedItems())
@@ -727,24 +1019,12 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(200, self.open_welcome_tour)
 
     def _apply_dark_titlebar(self) -> None:
-        """The app is dark-only; a light Windows title bar would clash on
-        a machine whose system theme is light. DwmSetWindowAttribute is
-        the documented way to ask for the dark frame (attribute 20, with
-        19 as the older Windows 10 fallback)."""
-        if sys.platform != "win32" or getattr(self, "_dark_titlebar", False):
+        """Apply native Windows 11 Immersive Dark Mode and Mica backdrop."""
+        if getattr(self, "_dark_titlebar", False):
             return
-        try:
-            import ctypes
-            value = ctypes.c_int(1)
-            for attribute in (20, 19):
-                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    int(self.winId()), attribute, ctypes.byref(value),
-                    ctypes.sizeof(value))
-                if result == 0:
-                    self._dark_titlebar = True
-                    break
-        except Exception:
-            pass                    # cosmetic only; never block startup
+        from . import fluent_win32
+        if fluent_win32.apply_fluent_window_effects(self):
+            self._dark_titlebar = True
 
     def eventFilter(self, obj, event) -> bool:
         table = getattr(self, "table", None)
@@ -817,7 +1097,28 @@ class MainWindow(QMainWindow):
         if not path.exists():
             return
         if sys.platform == "win32":
-            subprocess.Popen(["explorer", f'/select,"{path}"'])
+            try:
+                import ctypes
+                from ctypes import wintypes
+                ole32 = ctypes.windll.ole32
+                ole32.CoInitialize(None)
+                shell32 = ctypes.windll.shell32
+                shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+                shell32.ILCreateFromPathW.argtypes = [wintypes.LPCWSTR]
+                shell32.ILFree.argtypes = [ctypes.c_void_p]
+                shell32.SHOpenFolderAndSelectItems.argtypes = [
+                    ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p, wintypes.DWORD]
+                abs_str = os.path.abspath(str(path))
+                pidl = shell32.ILCreateFromPathW(abs_str)
+                if pidl:
+                    hr = shell32.SHOpenFolderAndSelectItems(pidl, 0, None, 0)
+                    shell32.ILFree(pidl)
+                    if hr == 0:
+                        return
+            except Exception:
+                pass
+            norm_path = os.path.normpath(str(path))
+            subprocess.Popen(f'explorer.exe /select,"{norm_path}"')
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 
@@ -885,7 +1186,7 @@ class MainWindow(QMainWindow):
             reveal_act = add_item(tr("menu_reveal"), "folder-open")
             edit_act = add_item(tr("btn_edit_meta"), "file-text")
             copy_name_act = add_item(tr("menu_copy_name"), "copy")
-            copy_path_act = add_item(tr("menu_copy_path"), "copy")
+            copy_path_act = add_item(tr("menu_copy_path"), "link")
         else:
             bulk_act = add_item(tr("bulk_edit_menu"), "file-text")
             copy_name_act = add_item(tr("menu_copy_name"), "copy")
@@ -1179,6 +1480,13 @@ class MainWindow(QMainWindow):
             from ..core import db
             db.log(self.lib.conn, "share_start",
                    f"port={self.share_server.port}")
+            # Update Fluent InfoBar banner
+            if hasattr(self, "info_bar"):
+                self.info_bar_icon.setPixmap(
+                    icons.tinted_pixmap("share-2", theme.PALETTE["accent"], 18))
+                self.info_bar_label.setText(
+                    tr("infobar_share_active").format(pin=i18n.num(self.share_server.pin)))
+                self.info_bar.show()
             # The dialog stays open while sharing; whatever closes it
             # (stop button, X) ends the server right after.
             dialogs.ShareDialog(self, self.share_server, urls,
@@ -1193,6 +1501,8 @@ class MainWindow(QMainWindow):
             db.log(self.lib.conn, "share_stop", "")
             self.share_server.stop()
             self.share_server = None
+            if hasattr(self, "info_bar"):
+                self.info_bar.hide()
             self.refresh()
 
     def closeEvent(self, event) -> None:

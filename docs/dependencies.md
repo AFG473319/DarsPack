@@ -15,7 +15,7 @@ Project rule: every dependency is registered here **before** installation — wh
 | Asset | What it does | Why DarsPack needs it | Licence | Measured size | Status |
 |---|---|---|---|---|---|
 | Vazirmatn 33.003, static weights Regular/Medium/SemiBold/Bold | Persian-first typeface | The UI's default font: proper Persian shaping and a consistent, modern look. Bundled so target PCs do not need it installed; falls back to Segoe UI if a file ever fails to load. | SIL OFL-1.1 (`assets/fonts/OFL.txt`) | 482 kB for four TTFs + 4.3 kB licence (2026-10-29) | bundled 2026-10-29 |
-| Lucide 0.468.0, 23 SVG icons | Consistent line icons for the toolbar, menus and file rows | One visual language instead of text-only buttons; 20 px SVGs are crisp on every DPI. No icon font and no pip package. | ISC (`assets/icons/LICENSE`) | 26 kB for 23 SVGs + 3.2 kB licence (2026-10-29) | bundled 2026-10-29 |
+| Lucide 0.468.0, 32 SVG icons | Consistent line icons for the toolbar, menus and file rows | One visual language instead of text-only buttons; 20 px SVGs are crisp on every DPI. No icon font and no pip package. | ISC (`assets/icons/LICENSE`) | 13 kB for 32 SVGs + 3.2 kB licence (measured 2026-11-09) | bundled 2026-10-29; +8 icons 2026-11-09 |
 
 **Whole development environment: 270 MB** (`.venv/` including all of the above). Built output: 105 MB app folder, 2.6 MB launcher exe (2026-10-29) — see `docs/limitations.md` for measured numbers. The full `PySide6` distribution is intentionally NOT installed — its Addons half (WebEngine, 3D, multimedia, …) would add hundreds of megabytes DarsPack never uses; `PySide6-Essentials` ships exactly the widgets we need.
 

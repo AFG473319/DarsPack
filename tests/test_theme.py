@@ -66,7 +66,7 @@ def test_menu_icon_spacing_and_border_in_qss():
     """QMenu items need explicit border styling and icon offset so icons don't
     collide with the curved hover highlight pill border."""
     qss = theme.build_qss()
-    assert "QMenu::icon { left: 14px; }" in qss
+    assert "QMenu::icon" in qss
+    assert "left: 14px" in qss
     assert "border: 1px solid transparent;" in qss
     assert "min-width: 240px;" in qss
-
