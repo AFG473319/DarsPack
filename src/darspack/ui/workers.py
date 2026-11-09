@@ -19,6 +19,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
+from .. import __version__          # for the FeedbackPoster User-Agent
 from ..core.importer import import_file, iter_files
 from ..core.library import Library
 
@@ -158,16 +159,25 @@ class FeedbackPoster(QThread):
     """POST one feedback payload to the configured endpoint (background).
 
     Network must never run on the UI thread. done(ok: bool) — True only
-    on a 2xx answer within the timeout. The payload is saved locally
-    BEFORE this thread starts, so a failure never loses feedback.
+    on a 2xx answer within the timeout; anything else (dead Wi-Fi, a
+    captive portal, a 4xx/5xx answer, a too-large body) is the same
+    False the dialog turns into a «ارسال دوباره» prompt on the UI
+    thread. The payload is queued on the device BEFORE this thread
+    starts, so a failure never loses feedback — the dialog (not this
+    class) drives re-sending. A firmer timeout than a desktop would
+    need, because students often are on phone hotspots. The dialog
+    parents this thread to the main window, so closing the form never
+    deletes a running thread.
     """
 
     done = Signal(bool)
 
-    def __init__(self, endpoint: str, payload: dict, parent=None):
+    def __init__(self, endpoint: str, payload: dict, parent=None,
+                 timeout: float = 8):
         super().__init__(parent)
         self.endpoint = endpoint
         self.payload = payload
+        self.timeout = timeout
 
     def run(self) -> None:
         import json as _json
@@ -176,9 +186,12 @@ class FeedbackPoster(QThread):
             req = urllib.request.Request(
                 self.endpoint,
                 data=_json.dumps(self.payload, ensure_ascii=False).encode("utf-8"),
-                headers={"Content-Type": "application/json; charset=utf-8"},
+                headers={
+                    "Content-Type": "application/json; charset=utf-8",
+                    "User-Agent": "DarsPack/" + __version__,
+                },
                 method="POST")
-            with urllib.request.urlopen(req, timeout=5) as res:
+            with urllib.request.urlopen(req, timeout=self.timeout) as res:
                 ok = 200 <= res.status < 300
         except Exception:
             ok = False

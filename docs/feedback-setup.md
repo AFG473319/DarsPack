@@ -4,14 +4,18 @@ The in-app «بازخورد» dialog always saves every entry to `feedback.jsonl
 
 ## How the dialog works
 
-1. The user fills in: star rating (optional), topic (bug / suggestion / question / praise), a message, and an optional contact.
-2. On submit, the entry is **saved locally first** (nothing is ever lost if the network fails), then POSTed as one JSON object to the configured endpoint:
+1. The user fills in: star rating (optional), topic (bug / suggestion / question / praise), a message (capped at 2000 characters, with a live counter — free-hosted forms reject oversized bodies), and an optional contact.
+2. On submit, the entry is **saved locally first** (nothing is ever lost if the network fails), then queued in `feedback_pending.json` and POSTed as one JSON object to the configured endpoint:
    ```json
    {"app": "DarsPack", "version": "0.1.0", "rating": 4,
     "category": "fb_cat_bug", "message": "...", "contact": "...",
     "sent_at": "2026-10-26T20:00:00"}
    ```
-3. If no endpoint is configured, the user sees «بازخورد شما در این دستگاه ذخیره شد» and, if you set a web-form URL, a button to open that form in the browser.
+3. While the entry is in flight the form stays open with «در حال ارسال…»; a double click cannot queue the same entry twice.
+4. A network failure (or a 4xx/5xx answer) leaves the entry queued and offers «ارسال دوباره» immediately; otherwise the app asks «اکنون ارسال شود؟» the next time the Feedback window opens and walks the queue.
+5. A successful send removes the entry from the queue — `feedback.jsonl` keeps exactly one line per entry ever written locally.
+6. If no endpoint is configured, the user sees «بازخورد شما در این دستگاه ذخیره شد» and, if you set a web-form URL, a button to open that form in the browser.
+7. Everything the user typed is also auto-saved as a draft (`feedback_draft.json`) while typing; an accidental close or Cancel never loses a half-written report, and the draft is cleared once it was submitted.
 
 ## Configuring a receiver (two keys)
 
@@ -30,5 +34,5 @@ Both keys live in `settings.json` next to the catalog (users can edit them in Se
 
 ## Reading the feedback
 
-- Local entries: `feedback.jsonl` in the library folder (one JSON object per line).
+- Local entries: `feedback.jsonl` in the library folder (one JSON object per line; `feedback_draft.json` and `feedback_pending.json` are the in-progress form state and the unsent queue — safe to ignore, never send them anywhere).
 - Online entries: whatever your receiver's dashboard shows (Formaloo shows charts per field; a Worker you query yourself).

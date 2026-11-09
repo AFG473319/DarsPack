@@ -14,7 +14,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, Qt, QUrl
+from PySide6.QtCore import QLocale, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QProgressBar,
@@ -30,7 +30,7 @@ from .. import __version__, asset_path, i18n
 from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
-from .workers import ImportWorker
+from .workers import FeedbackPoster, ImportWorker
 from .smooth_scroll import enable_smooth_scroll
 from . import icons, theme
 
@@ -119,11 +119,116 @@ def save_feedback(parent, payload: dict) -> None:
 
     `payload` is the full dict from build_feedback_payload — the same
     shape the online endpoint receives, so the local file is a complete
-    mirror of what was (or could not be) sent.
+    mirror of what was (or could not be) sent. Raises OSError on a
+    failing disk; the caller (the dialog) decides how to tell the user.
     """
     target = Path(parent.lib.root) / "feedback.jsonl"
     with open(target, "a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+MAX_MESSAGE_CHARS = 2000
+MAX_CONTACT_CHARS = 120
+
+
+def _lib_root(parent):
+    """The folder where a dialog's sidecar files live, or None when the
+    caller is a bare test double with no library."""
+    try:
+        return Path(parent.lib.root)
+    except (AttributeError, TypeError):
+        return None
+
+
+def _json_read(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None                      # missing or corrupt == absent
+
+
+# --- the unsent queue (feedback_pending.json) -----------------------------
+
+def load_pending(parent) -> list:
+    """Feedback entries queued for sending: [{"payload": …, "mirrored":
+    …}]. An entry goes in when the user submits and only leaves when a
+    POST really got a 2xx — so detached Wi-Fi retries cleanly later,
+    from the same dialog, without writing the entry to feedback.jsonl
+    twice."""
+    root = _lib_root(parent)
+    if root is None:
+        return []
+    data = _json_read(root / "feedback_pending.json")
+    return data if isinstance(data, list) else []
+
+
+def save_pending(parent, entries: list) -> bool:
+    root = _lib_root(parent)
+    if root is None:
+        return False
+    try:
+        (root / "feedback_pending.json").write_text(
+            json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def queue_pending(parent, payload: dict, mirrored: bool = True) -> bool:
+    """Append one submitted entry to the unsent queue. `mirrored`
+    records whether the feedback.jsonl append actually worked, so a
+    later successful send can re-do that mirror."""
+    entries = load_pending(parent)
+    entries.append({"payload": payload, "mirrored": bool(mirrored)})
+    return save_pending(parent, entries)
+
+
+def drop_pending(parent, payload: dict) -> list:
+    """Remove every queued entry whose payload equals `payload`; returns
+    what was removed (the caller re-mirrors any non-mirrored one)."""
+    entries = load_pending(parent)
+    if not entries:
+        return []
+    removed = [e for e in entries if e.get("payload") == payload]
+    if removed and not save_pending(parent, [e for e in entries
+                                             if e.get("payload") != payload]):
+        return []                        # disk still failing: try next time
+    return removed
+
+
+# --- the draft (feedback_draft.json) --------------------------------------
+
+def load_draft(parent) -> dict:
+    """What the user typed in the form before closing it; {} when none.
+    Accidental close (or Cancel, or the X button) must never throw a
+    partially written report away."""
+    root = _lib_root(parent)
+    if root is None:
+        return {}
+    data = _json_read(root / "feedback_draft.json")
+    return data if isinstance(data, dict) else {}
+
+
+def save_draft(parent, state: dict) -> bool:
+    root = _lib_root(parent)
+    if root is None:
+        return False
+    try:
+        (root / "feedback_draft.json").write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def clear_draft(parent) -> None:
+    root = _lib_root(parent)
+    if root is None:
+        return
+    try:
+        (root / "feedback_draft.json").unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def build_feedback_payload(rating: int, category: str, message: str,
@@ -146,10 +251,22 @@ def build_feedback_payload(rating: int, category: str, message: str,
 
 class FeedbackDialog(QDialog):
     """The «بازخورد» dialog the way apps actually do it: star rating,
-    topic, message, optional contact. Submit saves the entry locally
-    FIRST (a failure never loses feedback), then tries the configured
-    endpoint in a background thread; with no endpoint the user is told
-    it was saved locally (and can open the web form if one is set)."""
+    topic, message, optional contact.
+
+    Nothing typed here can be lost:
+    - the whole form is auto-saved as a draft (feedback_draft.json) as
+      the user types and restored the next time the dialog opens;
+    - the message has a visible character limit (free-hosted forms cap
+      the body — the user finds out while typing, not in an error);
+    - submit saves locally FIRST (a failure never loses feedback),
+      queues the entry in feedback_pending.json, then posts in a
+      background thread with the form kept open and «در حال ارسال…» on
+      the button — so a double click cannot queue one entry twice;
+    - a network failure (or a dead/absent endpoint) keeps the entry
+      queued and offers «ارسال دوباره»; the same prompt fires next time
+      the dialog opens for whatever was left unsent;
+    - Cancel during a send is safe: the post continues in the main
+      window, the queued entry retries on the next open."""
 
     def __init__(self, parent, settings: dict):
         super().__init__(parent)
@@ -157,8 +274,17 @@ class FeedbackDialog(QDialog):
         self.settings = settings
         self.setWindowTitle(tr("btn_feedback"))
         self.rating = 0
+        self._submitted = False          # a later hide must NOT re-draft
+        self._posting = False
+        self._chain_active = False       # sending older queued entries
+        self._pending_prompted = False   # one «ارسال نشده؟» per dialog
+        self._active_payload = None
+        self._posting_from_chain = False
+        self._poster = None
 
         layout = QVBoxLayout(self)
+        self.notice = QLabel("")          # «پیش‌نویسِ قبلی بازگردانده شد»
+        layout.addWidget(self.notice)
         layout.addWidget(QLabel(tr("fb_rating")))
         stars = QHBoxLayout()
         self.star_buttons = []
@@ -184,8 +310,13 @@ class FeedbackDialog(QDialog):
         self.message.setPlaceholderText(tr("feedback_placeholder"))
         layout.addWidget(self.message)
 
+        self.counter = QLabel("")
+        self.counter.setObjectName("Counter")
+        layout.addWidget(self.counter)
+
         self.contact = QLineEdit()
         self.contact.setPlaceholderText(tr("fb_contact"))
+        self.contact.setMaxLength(MAX_CONTACT_CHARS)
         layout.addWidget(self.contact)
 
         self.submit = QPushButton(tr("fb_submit"))
@@ -200,13 +331,81 @@ class FeedbackDialog(QDialog):
         self.buttons.addWidget(cancel)
         self.buttons.addStretch(1)
         layout.addLayout(self.buttons)
+
+        # the debounced draft writer lives before the restore below, so
+        # widget signal handlers can already call it
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.setInterval(600)
+        self._draft_timer.timeout.connect(self._flush_draft)
+
+        draft = load_draft(parent)
+        if draft:
+            self._set_stars(int(draft.get("rating") or 0))
+            key = draft.get("category")
+            if key:
+                idx = self.category.findData(key)
+                if idx >= 0:
+                    self.category.setCurrentIndex(idx)
+            self.message.setPlainText(str(draft.get("message") or ""))
+            self.contact.setText(str(draft.get("contact") or ""))
+            self.notice.setText(tr("fb_draft_restored"))
+
+        self.message.textChanged.connect(self._on_message_changed)
+        self.contact.textChanged.connect(self._schedule_draft)
+        self.category.currentIndexChanged.connect(self._schedule_draft)
+        self._on_message_changed()
+
         polish_dialog(self, 460)
+
+    def showEvent(self, event) -> None:
+        """Queue the «ارسال نشده؟» prompt ONLY once the dialog is really
+        shown — queued, not inline, so exec()'s event loop picks it up
+        after the dialog is on screen. A test that never shows the
+        dialog can therefore never accidentally open the modal."""
+        if not self._pending_prompted:
+            self._pending_prompted = True
+            QTimer.singleShot(0, self._maybe_prompt_pending)
+        super().showEvent(event)
 
     def _set_stars(self, n: int) -> None:
         self.rating = n
         for i, star in enumerate(self.star_buttons, start=1):
             star.setChecked(i <= n)             # QSS paints checked stars gold
             star.setText("★" if i <= n else "☆")
+        self._schedule_draft()
+
+    def _draft_state(self) -> dict:
+        return {"rating": self.rating,
+                "category": self.category.currentData(),
+                "message": self.message.toPlainText(),
+                "contact": self.contact.text()}
+
+    def _schedule_draft(self, *_) -> None:
+        self._draft_timer.start()
+
+    def _flush_draft(self) -> None:
+        if self._submitted:
+            clear_draft(self.parent_window)     # sent: the draft is done
+            return
+        save_draft(self.parent_window, self._draft_state())
+
+    def hideEvent(self, event) -> None:
+        """Dialogs hide on accept, reject AND the window X — flush the
+        draft on all three paths (or clear it after a submission)."""
+        self._flush_draft()
+        super().hideEvent(event)
+
+    def _on_message_changed(self) -> None:
+        """Live length counter: the online receiver caps the body, so
+        the bubble must burst while typing, not at a server 413."""
+        n = len(self.message.toPlainText())
+        over = n > MAX_MESSAGE_CHARS
+        self.counter.setText(tr("fb_limit").format(
+            num(n), num(MAX_MESSAGE_CHARS)))
+        self.counter.setStyleSheet("color:#e5484d;" if over else "")
+        if not self._posting:
+            self.submit.setEnabled(not over)
 
     def _endpoint(self) -> str:
         from .. import feedback_config
@@ -219,24 +418,45 @@ class FeedbackDialog(QDialog):
                 or feedback_config.FEEDBACK_FORM_URL)
 
     def _submit(self) -> None:
+        if self._posting:
+            return                        # double click → one entry, not two
         text = self.message.toPlainText().strip()
         if not text:
             QMessageBox.information(self, tr("btn_feedback"),
                                     tr("fb_need_message"))
             return
+        if len(text) > MAX_MESSAGE_CHARS:
+            QMessageBox.warning(
+                self, tr("btn_feedback"),
+                tr("fb_too_long").format(num(MAX_MESSAGE_CHARS)))
+            return
         payload = build_feedback_payload(
             self.rating, self.category.currentData(), text,
             self.contact.text().strip())
-        save_feedback(self.parent_window, payload)   # local first: never lost
-        db.log(self.parent_window.lib.conn, "feedback", payload["category"])
-        endpoint = self._endpoint()
-        if endpoint:
-            from .workers import FeedbackPoster
-            self._poster = FeedbackPoster(endpoint, payload)
-            self._poster.done.connect(self._posted)
-            self._poster.start()
-            self.accept()                     # dialog closes; poster continues
+
+        try:
+            save_feedback(self.parent_window, payload)  # local first
+            mirrored = True
+        except OSError:
+            mirrored = False
+        queued = queue_pending(self.parent_window, payload,
+                               mirrored=mirrored)
+        if not (mirrored or queued):
+            # both writes failed: the entry would live nowhere, so keep
+            # the dialog open with the text intact and explain
+            QMessageBox.critical(self, tr("btn_feedback"),
+                                 tr("fb_buffer_failed"))
             return
+        self._submitted = True
+        try:
+            db.log(self.parent_window.lib.conn, "feedback",
+                   payload["category"])
+        except Exception:
+            pass                          # the log must not sink feedback
+
+        if self._endpoint():
+            self._start_post(payload)
+            return                        # dialog stays open while sending
         form_url = self._form_url()
         if form_url:
             button = QPushButton(tr("fb_open_form"))
@@ -251,12 +471,86 @@ class FeedbackDialog(QDialog):
         QMessageBox.information(self, tr("btn_feedback"), tr("fb_saved_local"))
         self.accept()
 
-    def _posted(self, ok: bool) -> None:
-        parent = self.parent()
-        if parent is not None:
-            QMessageBox.information(
-                parent, tr("btn_feedback"),
-                tr("fb_thanks_sent") if ok else tr("fb_saved_local"))
+    # --- sending ------------------------------------------------------------
+
+    def _start_post(self, payload: dict, from_chain: bool = False) -> None:
+        endpoint = self._endpoint()
+        if not endpoint:
+            return
+        self._posting = True
+        self._active_payload = payload
+        self._posting_from_chain = from_chain
+        self.submit.setEnabled(False)
+        self.submit.setText(tr("fb_sending"))
+        # parented to the MAIN WINDOW: closing this dialog must never
+        # delete a running thread (the failed-send contract: the queued
+        # entry just retries on the next open)
+        poster = FeedbackPoster(endpoint, payload,
+                                parent=self.parent_window)
+        self._poster = poster
+        poster.done.connect(self._post_done)
+        poster.start()
+
+    def _post_done(self, ok: bool) -> None:
+        payload = self._active_payload
+        from_chain = self._posting_from_chain
+        self._posting = False
+        self._active_payload = None
+        self.submit.setText(tr("fb_submit"))
+        self._on_message_changed()        # recompute counter + submit state
+        if not ok:
+            if from_chain:
+                self._chain_active = False
+                QMessageBox.warning(self, tr("btn_feedback"),
+                                    tr("fb_unsent_failed"))
+            else:
+                answer = QMessageBox.question(
+                    self, tr("btn_feedback"), tr("fb_retry_failed"),
+                    QMessageBox.Retry | QMessageBox.Close,
+                    QMessageBox.Retry)
+                if answer == QMessageBox.Retry:
+                    self._start_post(payload)
+            return
+        removed = drop_pending(self.parent_window, payload)
+        for entry in removed:
+            if not entry.get("mirrored"):
+                try:                       # the jsonl mirror missed earlier
+                    save_feedback(self.parent_window,
+                                  entry["payload"])
+                except OSError:
+                    pass
+        if from_chain:
+            self._send_next_pending()
+        else:
+            QMessageBox.information(self, tr("btn_feedback"),
+                                    tr("fb_thanks_sent"))
+            self.accept()
+
+    def _maybe_prompt_pending(self) -> None:
+        """Entries left queued from earlier (failing Wi-Fi…) get one
+        «اکنون ارسال شود؟» as the dialog opens."""
+        entries = load_pending(self.parent_window)
+        if not entries or not self._endpoint():
+            return
+        text = (tr("fb_unsent_one_prompt") if len(entries) == 1 else
+                tr("fb_unsent_prompt").format(num(len(entries))))
+        answer = QMessageBox.question(
+            self, tr("btn_feedback"), text,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            self._chain_active = True
+            self._send_next_pending()
+
+    def _send_next_pending(self) -> None:
+        if not self._chain_active or self._posting:
+            return
+        entries = load_pending(self.parent_window)
+        if not entries:
+            self._chain_active = False
+            QMessageBox.information(self, tr("btn_feedback"),
+                                    tr("fb_all_sent"))
+            return
+        self._start_post(entries[0]["payload"], from_chain=True)
 
 
 class ImportDialog(QDialog):
