@@ -34,6 +34,7 @@ from ..core import manifest as manifest_core
 from ..i18n import tr
 from . import dialogs, icons, theme
 from .delegates import KindBadgeDelegate
+from .smooth_scroll import enable_smooth_scroll
 from .workers import ImportWorker
 
 if TYPE_CHECKING:      # F4 (perf audit): ShareServer pulls http/ssl/email —
@@ -330,6 +331,7 @@ class MainWindow(QMainWindow):
         self.table.setAcceptDrops(True)
         self.table.viewport().setAcceptDrops(True)
         self.table.installEventFilter(self)
+        self._scroller = enable_smooth_scroll(self.table)
 
         # Table shortcuts
         self.delete_shortcut = QShortcut(QKeySequence.Delete, self.table)

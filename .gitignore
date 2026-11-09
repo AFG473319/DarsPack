@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+*.egg-info/
 
 # Build outputs (root only — installer/darspack.spec is a tracked, hand-written spec)
 build/

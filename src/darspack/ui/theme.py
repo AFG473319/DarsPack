@@ -44,6 +44,7 @@ PALETTE = {
     "danger_soft": "#3a2020",
     "success": "#8fd08f",
     "scroll": "#3a4150",
+    "scroll_hover": "#4e576d",
 }
 
 METRICS = {
@@ -257,11 +258,17 @@ QScrollBar:vertical {
 QScrollBar::handle:vertical {
     background: $scroll; border-radius: 5px; min-height: 28px;
 }
+QScrollBar::handle:vertical:hover {
+    background: $scroll_hover;
+}
 QScrollBar:horizontal {
     background: transparent; height: 10px; margin: 2px;
 }
 QScrollBar::handle:horizontal {
     background: $scroll; border-radius: 5px; min-width: 28px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: $scroll_hover;
 }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }

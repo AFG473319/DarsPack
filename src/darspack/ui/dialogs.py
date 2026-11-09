@@ -31,6 +31,7 @@ from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
 from .workers import ImportWorker
+from .smooth_scroll import enable_smooth_scroll
 from . import theme
 
 
@@ -369,6 +370,7 @@ class ClassifyDialog(QDialog):
                            (4, 85), (5, 130), (6, 140)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
+        self._scroller = enable_smooth_scroll(self.table)
 
         subjects = [r["name"] for r in lib.conn.execute(
             "SELECT name FROM subjects ORDER BY name")]
@@ -621,6 +623,7 @@ class DuplicatesDialog(QDialog):
         tabs = QTabWidget()
         for title, groups in groups_by_tab.items():
             listing = QListWidget()
+            enable_smooth_scroll(listing)
             for group in groups:
                 names = " ، ".join(r["original_name"] for r in group.rows)
                 listing.addItem(f"[{group.label_fa}] {names}\n    {group.detail_fa}")
@@ -1099,6 +1102,7 @@ class ActivityDialog(QDialog):
             self.event_table.setAlternatingRowColors(True)
             self.event_table.setSelectionBehavior(QTableWidget.SelectRows)
             self.event_table.horizontalHeader().setStretchLastSection(True)
+            enable_smooth_scroll(self.event_table)
             from .main_window import jalali_date
             for i, ev in enumerate(events):
                 values = (persian_digits(jalali_date(ev["ts"])),
@@ -1136,6 +1140,7 @@ class ActivityDialog(QDialog):
             self.rule_table.setSelectionBehavior(QTableWidget.SelectRows)
             self.rule_table.horizontalHeader().setSectionResizeMode(
                 0, QHeaderView.Stretch)
+            enable_smooth_scroll(self.rule_table)
             for i, rule in enumerate(rules):
                 self.rule_table.setItem(i, 0, QTableWidgetItem(rule["token"]))
                 self.rule_table.setItem(i, 1, QTableWidgetItem(rule["subject"]))
@@ -1330,6 +1335,7 @@ class TrashDialog(QDialog):
         self.table.setColumnWidth(2, 90)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
         self.table.setColumnWidth(3, 130)
+        self._scroller = enable_smooth_scroll(self.table)
 
         layout.addWidget(self.table)
 
@@ -1498,6 +1504,7 @@ class ExamPackDialog(QDialog):
         for col, width in ((2, 120), (3, 110), (4, 90), (5, 90)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
+        self._scroller = enable_smooth_scroll(self.table)
         self.table.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self.table)
 
