@@ -9,6 +9,7 @@ Project rule: every dependency is registered here **before** installation — wh
 | qrcode 8.2 | Generates QR codes as pure-Python SVG (no Pillow needed) | The share dialog shows a QR of the phone URL — scanning it beats typing `http://192.168.x.y:port/` on a phone keyboard, especially on demo day | BSD (verified on PyPI and `pip show`) | 455 kB installed + 208 kB for its one dependency `colorama` (measured on the dev laptop, 2026-10-25) | installed 2026-10-25 |
 | pytest 9.1.1 | Test runner | Automated tests for every critical algorithm | MIT | part of the 250 MB venv below | installed (dev only) |
 | PyInstaller 6.22.3 | Bundles Python + app into a Windows executable (onedir) | End users must not need Python installed | GPLv2 with bootloader exception (built app unrestricted) | part of the 270 MB venv below | installed (dev only) |
+| Inno Setup 6.7.3 (dev/machine tool) | Builds `dist\DarsPack-Setup.exe` from `installer\DarsPack.iss` | Official per-user setup.exe for classmates (Start Menu, optional desktop icon, Add/Remove entry) wrapping the onedir folder; no admin needed | Inno Setup License (free for commercial use, `license.txt` in the installed folder) | 34 MB installed, 122 files (measured 2026-11-09) | installed 2026-11-09 (dev only) |
 
 ### Bundled UI assets (not Python packages)
 
