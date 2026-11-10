@@ -143,8 +143,8 @@ def test_pwa_assets_are_public(ro_server):
     assert _get(f"{base}/fonts/nope.ttf")[0] == 404
 
 
-def test_api_requires_pin(server):
-    share, _ = server
+def test_api_requires_pin(ro_server):
+    share, _ = ro_server
     base = f"http://127.0.0.1:{share.port}"
     status, body = _get(f"{base}/api/search?q=x")
     assert status == 403
@@ -154,13 +154,13 @@ def test_api_requires_pin(server):
 
 # --- F1: keep-alive + no per-request maintenance --------------------------
 
-def test_protocol_is_http11(server):
-    share, _ = server
+def test_protocol_is_http11(ro_server):
+    share, _ = ro_server
     from darspack.web.server import _make_handler
     assert _make_handler(share).protocol_version == "HTTP/1.1"
 
 
-def test_keepalive_reuses_one_connection(server):
+def test_keepalive_reuses_one_connection(ro_server):
     """HTTP/1.1 keep-alive, end to end: TWO requests over ONE connection.
 
     With HTTP/1.0 the second request would be refused (the server closes
@@ -168,7 +168,7 @@ def test_keepalive_reuses_one_connection(server):
     reused connection would desync — that invariant is what this pins.
     """
     import http.client
-    share, _ = server
+    share, _ = ro_server
     conn = http.client.HTTPConnection("127.0.0.1", share.port, timeout=5)
     try:
         conn.request("GET", "/")
@@ -181,7 +181,7 @@ def test_keepalive_reuses_one_connection(server):
         conn.close()
 
 
-def test_no_sweep_in_server_threads(server, monkeypatch):
+def test_no_sweep_in_server_threads(ro_server, monkeypatch):
     """Request threads never run maintenance (F1): no orphan sweep.
 
     The sweep used to run per library open on each new connection thread
@@ -189,7 +189,7 @@ def test_no_sweep_in_server_threads(server, monkeypatch):
     PermissionError race). The desktop app owns maintenance; the server
     threads only read.
     """
-    share, _ = server
+    share, _ = ro_server
     calls = []
     monkeypatch.setattr(Library, "sweep_orphans", lambda self: calls.append(1))
     _get(f"http://127.0.0.1:{share.port}/")
@@ -197,8 +197,8 @@ def test_no_sweep_in_server_threads(server, monkeypatch):
     assert calls == []
 
 
-def test_search_endpoint_normalizes_digits(server):
-    share, _ = server
+def test_search_endpoint_normalizes_digits(ro_server):
+    share, _ = ro_server
     base = f"http://127.0.0.1:{share.port}"
     _, body = _get(f"{base}/api/search?q=" + urllib.parse.quote("فصل ۳")
                    + f"&pin={share.pin}")
@@ -222,8 +222,8 @@ def test_search_returns_chapter_and_lesson(server):
     assert target["lesson"] == 7
 
 
-def test_download_endpoint(server):
-    share, _ = server
+def test_download_endpoint(ro_server):
+    share, _ = ro_server
     base = f"http://127.0.0.1:{share.port}"
     _, body = _get(f"{base}/api/search?q=" + urllib.parse.quote("جزوه")
                    + f"&pin={share.pin}")
@@ -396,9 +396,9 @@ def test_api_subjects_lists_counts(server):
     assert data["unclassified"] == 1        # the «بدون درس» chip count
 
 
-def test_api_responses_carry_no_store(server):
+def test_api_responses_carry_no_store(ro_server):
     # the phone must never serve a stale catalog from a cache (D4)
-    share, _ = server
+    share, _ = ro_server
     _, _, res = _exchange(
         f"http://127.0.0.1:{share.port}/api/search?pin={share.pin}")
     assert res.headers["Cache-Control"] == "no-store"
@@ -622,3 +622,29 @@ def test_start_stop_start_serves_again(tmp_path):
             assert len(json.loads(data)["files"]) == 1
         finally:
             share.stop()
+
+
+def test_download_nonexistent_file_returns_404(ro_server):
+    share, _ = ro_server
+    base = f"http://127.0.0.1:{share.port}"
+    status, _ = _get(f"{base}/api/file/999999?pin={share.pin}")
+    assert status == 404
+    status_bad_id, _ = _get(f"{base}/api/file/not-a-number?pin={share.pin}")
+    assert status_bad_id == 400
+
+
+def test_search_empty_query_lists_all(ro_server):
+    share, _ = ro_server
+    base = f"http://127.0.0.1:{share.port}"
+    status, body = _get(f"{base}/api/search?q=&pin={share.pin}")
+    assert status == 200
+    files = json.loads(body)["files"]
+    assert len(files) == 2
+
+
+def test_check_pin_whitespace_and_invalid(tmp_path):
+    share = ShareServer(str(tmp_path / "lib"))
+    # Pin with spaces should be stripped or fail cleanly
+    assert not share.check_pin("10.0.0.3", " ")
+    assert not share.check_pin("10.0.0.3", "")
+    assert not share.check_pin("10.0.0.3", "abcdef")

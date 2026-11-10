@@ -10,15 +10,24 @@ from darspack.core.search import search
 
 @pytest.fixture()
 def lib(tmp_path):
-    with Library(tmp_path / "lib") as library:
-        for name in ("نمونه سوال ریاضی فصل 3.pdf",
-                     "کاربرگ ریاضی فصل دو.pdf",
-                     "جزوه علوم تجربی.pdf",
-                     "summary.PDF"):
-            p = tmp_path / name
-            p.write_bytes(f"data-{name}".encode("utf-8"))
-            import_file(library, p)
-        yield library
+    library = Library(tmp_path / "lib", maintain=False).open()
+    db.init_schema(library.conn)
+    library.seed_subjects()
+    seed_files = [
+        ("نمونه سوال ریاضی فصل 3.pdf", 3, None, "نمونه‌سوال", "sha-1"),
+        ("کاربرگ ریاضی فصل دو.pdf", 2, None, "کاربرگ", "sha-2"),
+        ("جزوه علوم تجربی.pdf", None, None, "جزوه", "sha-3"),
+        ("summary.PDF", None, None, None, "sha-4"),
+    ]
+    with library.conn:
+        for name, ch, les, kind, sha in seed_files:
+            library.conn.execute(
+                """INSERT INTO files(stored_name, original_name, name_norm,
+                   size_bytes, sha256, imported_at, chapter, lesson, kind, available)
+                   VALUES (?, ?, ?, 100, ?, '2026-10-24T12:00:00', ?, ?, ?, 1)""",
+                (name, name, match_key(name), sha, ch, les, kind))
+    yield library
+    library.close()
 
 
 def names(rows):
@@ -296,3 +305,46 @@ def test_like_wildcard_escaping(lib):
     lib.conn.commit()
     res = search(lib.conn, "100%")
     assert [r["id"] for r in res] == [fid]
+
+
+def test_search_simultaneous_chapter_and_lesson(lib):
+    # Insert a file with both chapter 3 and lesson 5
+    name = "آزمون دوره ای.pdf"
+    fid = lib.conn.execute(
+        """INSERT INTO files(stored_name, original_name, name_norm,
+           size_bytes, sha256, imported_at, chapter, lesson)
+           VALUES ('', ?, ?, 10, 'sha-dual', '2026-10-30T10:00:00', 3, 5)""",
+        (name, match_key(name))).lastrowid
+    lib.conn.commit()
+    res = search(lib.conn, "فصل 3 درس 5")
+    assert any(r["id"] == fid for r in res)
+    # Searching with Persian numerals also matches
+    res_fa = search(lib.conn, "فصل ۳ درس ۵")
+    assert any(r["id"] == fid for r in res_fa)
+
+
+def test_search_unclassified_only_filter(lib):
+    # All 4 default seed files in lib have subject_id=None
+    assert len(search(lib.conn, "", unclassified_only=True)) == 4
+    # Classify one file
+    fid = lib.conn.execute("SELECT id FROM files LIMIT 1").fetchone()["id"]
+    _classify(lib, fid, "ریاضی")
+    # Now unclassified_only should return exactly 3
+    assert len(search(lib.conn, "", unclassified_only=True)) == 3
+    # Normal search still returns all 4
+    assert len(search(lib.conn, "")) == 4
+
+
+def test_search_with_brackets_and_punctuation(lib):
+    # Files with parens and brackets in their names are found when searched
+    name = "جزوه ریاضی (نهم) [ویژه].pdf"
+    fid = lib.conn.execute(
+        """INSERT INTO files(stored_name, original_name, name_norm,
+           size_bytes, sha256, imported_at)
+           VALUES ('', ?, ?, 10, 'sha-paren', '2026-10-30T10:00:00')""",
+        (name, match_key(name))).lastrowid
+    lib.conn.commit()
+    res = search(lib.conn, "ریاضی (نهم)")
+    assert any(r["id"] == fid for r in res)
+    res_bracket = search(lib.conn, "[ویژه]")
+    assert any(r["id"] == fid for r in res_bracket)

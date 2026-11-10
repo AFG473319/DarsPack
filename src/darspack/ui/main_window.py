@@ -104,7 +104,8 @@ class TableSortItem(QTableWidgetItem):
                     return my_key < other_key
                 except TypeError:
                     pass
-        return super().__lt__(other)
+            return self.text() < other.text()
+        return False
 
 
 _STD_ACTION_KEYS: dict[str, tuple[str, str]] = {

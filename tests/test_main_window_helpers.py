@@ -8,7 +8,7 @@ date). These cases pin the correct conversion, the Nowruz year boundary
 and the never-crash fallback. No Qt objects needed — but importing the
 module pulls in PySide6, so conftest's offscreen env applies.
 """
-from darspack.ui.main_window import human_size, jalali_date
+from darspack.ui.main_window import chapter_lesson_display, human_size, jalali_date, TableSortItem
 
 
 def test_jalali_date_converts_gregorian_import_dates():
@@ -40,6 +40,29 @@ def test_human_size_table():
     assert human_size(1536, "fa") == "۱٫۵ کیلوبایت"
     assert human_size(660 * 1024, "fa") == "۶۶۰ کیلوبایت"
     assert human_size(5 * 1024 ** 3, "fa") == "۵ گیگابایت"
+
+
+def test_chapter_lesson_display_cases():
+    assert chapter_lesson_display(3, None) == "فصل ۳"
+    assert chapter_lesson_display(None, 5) == "درس ۵"
+    assert chapter_lesson_display(3, 5) == "فصل ۳ / درس ۵"
+    assert chapter_lesson_display(None, None) == "—"
+
+
+def test_table_sort_item_order(qapp):
+    item1 = TableSortItem("۱۰۲۴ بایت")
+    item1.setData(TableSortItem.SORT_KEY_ROLE, 1024)
+    item2 = TableSortItem("۵۱۲ بایت")
+    item2.setData(TableSortItem.SORT_KEY_ROLE, 512)
+
+    # item2 (512) < item1 (1024)
+    assert item2 < item1
+    assert not (item1 < item2)
+
+    # fallback when SORT_KEY_ROLE is not set
+    item3 = TableSortItem("apple")
+    item4 = TableSortItem("banana")
+    assert item3 < item4
 
 
 # --- MainWindow-level behavior (offscreen) ---------------------------------

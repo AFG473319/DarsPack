@@ -149,6 +149,8 @@ def verify_package(zip_path, progress=None) -> VerifyReport:
             manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         except KeyError:
             return VerifyReport(False, ["manifest.json در بسته نیست — بسته معتبر نیست"])
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return VerifyReport(False, ["manifest.json مخدوش است — بسته معتبر نیست"])
 
         listed = set()
         for entry in manifest.get("files", []):

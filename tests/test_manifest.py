@@ -13,15 +13,16 @@ from darspack.core.manifest import (
 )
 
 
-@pytest.fixture()
-def package(tmp_path):
-    with Library(tmp_path / "lib") as lib:
+@pytest.fixture(scope="module")
+def package(tmp_path_factory):
+    root = tmp_path_factory.mktemp("manifest-pkg")
+    with Library(root / "lib") as lib:
         for name in ("نمونه سوال ریاضی فصل 3.pdf", "جزوه علوم.pdf"):
-            p = tmp_path / name
+            p = root / name
             p.write_bytes(f"content of {name}".encode("utf-8"))
             import_file(lib, p)
         ids = [r["id"] for r in lib.conn.execute("SELECT id FROM files")]
-        out = tmp_path / "ch3.darspack.zip"
+        out = root / "ch3.darspack.zip"
         info = export_package(lib.conn, lib.files_dir, ids, out)
         yield out, info, lib
 
@@ -305,3 +306,19 @@ def test_read_manifest_rejects_non_darspack_manifest(tmp_path):
         zf.writestr("manifest.json", json.dumps({"format": "other"}))
     with pytest.raises(KeyError):
         read_manifest(z)
+
+
+def test_verify_detects_corrupted_manifest_json(tmp_path):
+    # A damaged or truncated manifest.json must not crash verify_package
+    bad_zip = tmp_path / "corrupt_manifest.zip"
+    with zipfile.ZipFile(bad_zip, "w") as zf:
+        zf.writestr("manifest.json", "{not-valid-json")
+    report = verify_package(bad_zip)
+    assert not report.ok
+    assert any("مخدوش است" in p for p in report.problems)
+
+
+def test_safe_name_path_traversal():
+    assert safe_name("../../secret/file.pdf") == ".._.._secret_file.pdf"
+    assert safe_name("..\\..\\secret\\file.pdf") == ".._.._secret_file.pdf"
+    assert safe_name("   //::*   ") == "_"
