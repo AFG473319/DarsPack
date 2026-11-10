@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from string import Template
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import QComboBox, QMenu
 
 from .. import asset_path
 
@@ -314,6 +316,12 @@ QToolButton#SearchClear:hover {
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {
     color: $faint; background: $surface; border-color: $border_soft;
 }
+QComboBox {
+    combobox-popup: 0;
+}
+QComboBoxPrivateContainer {
+    background: transparent;
+}
 QComboBox::drop-down { border: 0; width: 24px; }
 QComboBox QAbstractItemView {
     background: $surface_2; border: 1px solid $border;
@@ -588,3 +596,48 @@ def build_qss(palette: dict | None = None) -> str:
     check_icon = asset_path("icons/check.svg")
     values["check_icon"] = str(check_icon).replace("\\", "/")
     return _QSS.substitute(values)
+
+
+def setup_combobox(combo: QComboBox) -> None:
+    """Ensure the combobox popup container is translucent and frameless,
+    preventing any un-rounded rectangular background artifact from showing
+    behind the rounded dropdown menu."""
+    container = combo.view().parentWidget()
+    if container is not None:
+        container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        container.setWindowFlags(
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+
+
+_orig_combo_init = QComboBox.__init__
+
+
+def _patched_combo_init(self, *args, **kwargs):
+    _orig_combo_init(self, *args, **kwargs)
+    setup_combobox(self)
+
+
+QComboBox.__init__ = _patched_combo_init
+
+_orig_combo_set_view = QComboBox.setView
+
+
+def _patched_combo_set_view(self, view):
+    _orig_combo_set_view(self, view)
+    setup_combobox(self)
+
+
+QComboBox.setView = _patched_combo_set_view
+
+_orig_menu_init = QMenu.__init__
+
+
+def _patched_menu_init(self, *args, **kwargs):
+    _orig_menu_init(self, *args, **kwargs)
+    self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+
+QMenu.__init__ = _patched_menu_init

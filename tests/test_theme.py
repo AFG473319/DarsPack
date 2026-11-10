@@ -70,3 +70,29 @@ def test_menu_icon_spacing_and_border_in_qss():
     assert "left: 14px" in qss
     assert "border: 1px solid transparent;" in qss
     assert "min-width: 240px;" in qss
+
+
+def test_combobox_popup_drop_down_in_qss():
+    """`combobox-popup: 0` prevents Fusion style from injecting top/bottom
+    spacers into the popup container."""
+    qss = theme.build_qss()
+    assert "combobox-popup: 0" in qss
+
+
+def test_combobox_and_menu_popup_translucent(qapp):
+    """Combobox popup containers and menus must have translucent backgrounds
+    and frameless window flags so no square opaque box shows behind the
+    rounded corners."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QComboBox, QMenu
+
+    combo = QComboBox()
+    container = combo.view().parentWidget()
+    assert container is not None
+    assert container.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    flags = container.windowFlags()
+    assert bool(flags & Qt.WindowType.FramelessWindowHint)
+    assert bool(flags & Qt.WindowType.Popup)
+
+    menu = QMenu()
+    assert menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
