@@ -19,13 +19,13 @@
 ; AppId is a stable GUID (generate once, never change after first
 ; release — it tells Windows "this is the same app" for upgrades).
 #define MyAppName "DarsPack"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 
 [Setup]
 AppId={{15da954e-9bf3-4804-85db-fe556307e417}
 AppName=DarsPack
-AppVersion=0.1.0
-;VersionInfoVersion=0.1.0
+AppVersion=0.2.0
+;VersionInfoVersion=0.2.0
 AppPublisher=DarsPack
 DefaultDirName={localappdata}\Programs\DarsPack
 DefaultGroupName=DarsPack
