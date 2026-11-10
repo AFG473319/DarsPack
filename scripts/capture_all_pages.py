@@ -232,6 +232,38 @@ def generate_all_screenshots(out_dir: Path):
         snap("20_exam_pack_dialog.png", exam_dlg, "Exam Revision Pack Builder")
         exam_dlg.close()
 
+        # 21. Welcome/Onboarding Dialog - All 3 slides
+        welcome_dlg = dialogs.WelcomeDialog(driver.window, sandbox.settings, sandbox.settings_path)
+        welcome_dlg.show()
+        driver.process_events(50)
+        snap("21_welcome_slide1.png", welcome_dlg, "Welcome Dialog - Slide 1: Safe Local Library")
+        welcome_dlg.stack.setCurrentIndex(1)
+        driver.process_events(50)
+        snap("22_welcome_slide2.png", welcome_dlg, "Welcome Dialog - Slide 2: Smart Classification")
+        welcome_dlg.stack.setCurrentIndex(2)
+        driver.process_events(50)
+        snap("23_welcome_slide3.png", welcome_dlg, "Welcome Dialog - Slide 3: Offline & Phone Sharing")
+        welcome_dlg.close()
+
+        # 24-27. Help Center Dialog - All 4 tabs
+        help_dlg = dialogs.HelpDialog(driver.window, sandbox.settings, sandbox.settings_path)
+        help_dlg.show()
+        driver.process_events(50)
+        help_tabs = help_dlg.tabs
+        help_tabs.setCurrentIndex(0)
+        driver.process_events(50)
+        snap("24_help_tab1_quick.png", help_dlg, "Help Center - Tab 1: Quick Guide")
+        help_tabs.setCurrentIndex(1)
+        driver.process_events(50)
+        snap("25_help_tab2_shortcuts.png", help_dlg, "Help Center - Tab 2: Keyboard Shortcuts")
+        help_tabs.setCurrentIndex(2)
+        driver.process_events(50)
+        snap("26_help_tab3_phone.png", help_dlg, "Help Center - Tab 3: Phone Sharing Guide")
+        help_tabs.setCurrentIndex(3)
+        driver.process_events(50)
+        snap("27_help_tab4_faq.png", help_dlg, "Help Center - Tab 4: FAQ")
+        help_dlg.close()
+
         return results
 
     finally:

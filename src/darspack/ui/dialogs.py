@@ -1953,7 +1953,7 @@ class WelcomeDialog(QDialog):
         self.settings_path = settings_path
         self.setWindowTitle(tr("welcome_title"))
         self.setModal(True)
-        self.resize(600, 480)
+        self.resize(600, 520)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -1996,21 +1996,23 @@ class WelcomeDialog(QDialog):
             )
             s_layout = QVBoxLayout(slide_widget)
             s_layout.setSpacing(14)
-            s_layout.setAlignment(Qt.AlignCenter)
+
+            s_layout.addStretch()
 
             icon_lbl = QLabel()
             icon_lbl.setAlignment(Qt.AlignCenter)
             icon_lbl.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 48))
-            s_layout.addWidget(icon_lbl)
+            s_layout.addWidget(icon_lbl, 0, Qt.AlignHCenter)
 
             h_lbl = QLabel(heading)
             h_lbl.setAlignment(Qt.AlignCenter)
             h_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme.PALETTE['text']};")
-            s_layout.addWidget(h_lbl)
+            s_layout.addWidget(h_lbl, 0, Qt.AlignHCenter)
 
             d_lbl = QLabel(desc)
             d_lbl.setAlignment(Qt.AlignCenter)
             d_lbl.setWordWrap(True)
+            d_lbl.setMinimumWidth(400)
             d_lbl.setStyleSheet(f"font-size: 13px; line-height: 1.6; color: {theme.PALETTE['muted']}; padding: 0 10px;")
             s_layout.addWidget(d_lbl)
             s_layout.addStretch()
@@ -2093,7 +2095,8 @@ class HelpDialog(QDialog):
         self.settings = settings or {}
         self.settings_path = settings_path
         self.setWindowTitle(tr("help_dialog_title"))
-        self.resize(720, 540)
+        self.resize(720, 520)
+        self._clamp_to_screen()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -2128,6 +2131,32 @@ class HelpDialog(QDialog):
         layout.addLayout(btn_box)
 
         polish_dialog(self, 700)
+
+    def _clamp_to_screen(self) -> None:
+        """Keep the dialog well within the available screen area.
+
+        If the dialog's default geometry would place it too close to (or
+        below) the bottom edge, shrink it and re-centre so there is
+        always a comfortable margin.  The margin is 40 px — enough to
+        feel "a little above the absolute bottom" without wasting space.
+        """
+        from PySide6.QtWidgets import QApplication
+        screen = None
+        if self.parent():
+            screen = self.parent().screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        margin = 40
+        max_h = avail.height() - margin * 2
+        if self.height() > max_h:
+            self.resize(self.width(), max(300, max_h))
+        # Centre on the available area
+        geo = self.frameGeometry()
+        geo.moveCenter(avail.center())
+        self.move(geo.topLeft())
 
     def _launch_tour(self) -> None:
         dlg = WelcomeDialog(self, self.settings, self.settings_path)
