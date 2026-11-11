@@ -408,11 +408,13 @@ QPushButton#Ghost:hover {
     color: #ffffff;
 }
 QPushButton#Star {
-    background: transparent; border: none; padding: 0;
-    font-size: 26px; color: $faint;
+    background: transparent; border: 1px solid transparent; padding: 0;
+    border-radius: 8px; color: transparent; font-size: 0px;
 }
-QPushButton#Star:hover { color: $muted; }
-QPushButton#Star:checked { color: $accent; }
+QPushButton#Star:hover {
+    background: #252b36;
+    border: 1px solid #3c495e;
+}
 
 QToolButton {
     background: transparent; color: $text; border: 1px solid $border;
@@ -459,15 +461,13 @@ QMenu {
 }
 QMenu::item {
     border: 1px solid transparent;
-    padding: 8px 34px 8px 20px;
+    padding: $menu_item_padding;
     margin: 2px 4px;
     border-radius: 6px;
     color: $text;
 }
 QMenu::icon {
     left: 14px;
-    margin-right: 12px;
-    margin-left: 12px;
 }
 QMenu::item:selected {
     background: #323b4c;
@@ -595,6 +595,12 @@ def build_qss(palette: dict | None = None) -> str:
     values.update(palette or {})
     check_icon = asset_path("icons/check.svg")
     values["check_icon"] = str(check_icon).replace("\\", "/")
+    try:
+        from .. import i18n
+        is_fa = (i18n.language() == "fa")
+    except Exception:
+        is_fa = True
+    values["menu_item_padding"] = "8px 16px 8px 38px" if is_fa else "8px 38px 8px 16px"
     return _QSS.substitute(values)
 
 

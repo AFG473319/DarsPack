@@ -1172,46 +1172,52 @@ class MainWindow(QMainWindow):
         if not rows:
             return
 
-        menu = QMenu(self)
-
-        def add_item(text: str, icon_name: str | None = None, icon_color: str | None = None):
-            act = menu.addAction(text)
-            if icon_name and hasattr(act, "setIcon"):
-                color = icon_color or theme.PALETTE["text"]
-                act.setIcon(icons.icon(icon_name, color, 16))
-            return act
-
-        open_act = reveal_act = edit_act = copy_name_act = copy_path_act = bulk_act = None
-        if len(rows) == 1:
-            open_act = add_item(tr("menu_open"), "external-link")
-            reveal_act = add_item(tr("menu_reveal"), "folder-open")
-            edit_act = add_item(tr("btn_edit_meta"), "file-text")
-            copy_name_act = add_item(tr("menu_copy_name"), "copy")
-            copy_path_act = add_item(tr("menu_copy_path"), "link")
-        else:
-            bulk_act = add_item(tr("bulk_edit_menu"), "file-text")
-            copy_name_act = add_item(tr("menu_copy_name"), "copy")
-
-        menu.addSeparator()
-        delete_act = add_item(tr("delete_menu"), "trash-2", theme.PALETTE["danger"])
+        menu, actions = self.create_row_menu(rows)
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen is None:
             return
 
-        if chosen == delete_act:
+        if chosen == actions.get("delete"):
             self.delete_selected_files()
-        elif chosen == open_act:
+        elif chosen == actions.get("open"):
             self.open_selected_file()
-        elif chosen == reveal_act:
+        elif chosen == actions.get("reveal"):
             self.reveal_selected_file()
-        elif chosen == edit_act:
+        elif chosen == actions.get("edit"):
             self.edit_metadata()
-        elif chosen == copy_name_act:
+        elif chosen == actions.get("copy_name"):
             self.copy_selected_names()
-        elif chosen == copy_path_act:
+        elif chosen == actions.get("copy_path"):
             self.copy_selected_paths()
-        elif chosen == bulk_act:
+        elif chosen == actions.get("bulk"):
             self.bulk_edit_selected()
+
+    def create_row_menu(self, rows: list) -> tuple[QMenu, dict]:
+        """Build the localized context menu for the given selected rows."""
+        menu = QMenu(self)
+        actions = {}
+
+        def add_item(key: str, text: str, icon_name: str | None = None, icon_color: str | None = None):
+            act = menu.addAction(text)
+            if icon_name and hasattr(act, "setIcon"):
+                color = icon_color or theme.PALETTE["text"]
+                act.setIcon(icons.icon(icon_name, color, 16))
+            actions[key] = act
+            return act
+
+        if len(rows) == 1:
+            add_item("open", tr("menu_open"), "external-link")
+            add_item("reveal", tr("menu_reveal"), "folder-open")
+            add_item("edit", tr("btn_edit_meta"), "file-text")
+            add_item("copy_name", tr("menu_copy_name"), "copy")
+            add_item("copy_path", tr("menu_copy_path"), "link")
+        else:
+            add_item("bulk", tr("bulk_edit_menu"), "file-text")
+            add_item("copy_name", tr("menu_copy_name"), "copy")
+
+        menu.addSeparator()
+        add_item("delete", tr("delete_menu"), "trash-2", theme.PALETTE["danger"])
+        return menu, actions
 
     def delete_selected_files(self) -> None:
         """Del key / «حذف» button / context menu — act on every selected row."""

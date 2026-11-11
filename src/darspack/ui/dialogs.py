@@ -14,7 +14,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, Qt, QTimer, QUrl
+from PySide6.QtCore import QLocale, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QProgressBar,
@@ -66,11 +66,13 @@ def make_year_combo(current: str | None) -> QComboBox:
     return combo
 
 
-def make_spinbox(minimum: int = 0, maximum: int = 40) -> QSpinBox:
+def make_spinbox(minimum: int = 0, maximum: int = 40, special_value: str = "—") -> QSpinBox:
     """A number field that renders ۰-۹ in the Persian UI (a Persian
     QLocale is what makes QSpinBox display Persian digits)."""
     spin = QSpinBox()
     spin.setRange(minimum, maximum)
+    if special_value and minimum == 0:
+        spin.setSpecialValueText(special_value)
     if i18n.language() == "fa":
         spin.setLocale(QLocale(QLocale.Persian, QLocale.Iran))
     return spin
@@ -295,6 +297,8 @@ class FeedbackDialog(QDialog):
             star.setObjectName("Star")          # flat QSS toggle, not a blue box
             star.setCheckable(True)
             star.setFixedSize(40, 40)
+            star.setIconSize(QSize(28, 28))
+            star.setIcon(icons.icon("star", theme.PALETTE["border"], 28))
             star.setCursor(Qt.PointingHandCursor)
             star.clicked.connect(lambda checked, n=i: self._set_stars(n))
             stars.addWidget(star)
@@ -358,7 +362,7 @@ class FeedbackDialog(QDialog):
         self.category.currentIndexChanged.connect(self._schedule_draft)
         self._on_message_changed()
 
-        polish_dialog(self, 460)
+        polish_dialog(self, 480)
 
     def showEvent(self, event) -> None:
         """Queue the «ارسال نشده؟» prompt ONLY once the dialog is really
@@ -373,8 +377,14 @@ class FeedbackDialog(QDialog):
     def _set_stars(self, n: int) -> None:
         self.rating = n
         for i, star in enumerate(self.star_buttons, start=1):
-            star.setChecked(i <= n)             # QSS paints checked stars gold
-            star.setText("★" if i <= n else "☆")
+            is_active = (i <= n)
+            star.setChecked(is_active)
+            star.setText("★" if is_active else "☆")
+            star.setIcon(
+                icons.icon("star-filled" if is_active else "star",
+                           theme.PALETTE["accent"] if is_active else theme.PALETTE["border"],
+                           28)
+            )
         self._schedule_draft()
 
     def _draft_state(self) -> dict:
@@ -562,19 +572,48 @@ class ImportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(tr("import_title"))
         self.parent_window = parent
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+
+        header_frame = QFrame()
+        header_frame.setObjectName("BannerCard")
+        header_lay = QVBoxLayout(header_frame)
+        header_lay.setContentsMargins(16, 12, 16, 12)
+        header_lay.setSpacing(4)
+        title_lbl = QLabel(tr("import_title"))
+        title_lbl.setObjectName("DialogTitle")
+        hint_lbl = QLabel(tr("import_hint"))
+        hint_lbl.setObjectName("DialogHint")
+        hint_lbl.setWordWrap(True)
+        header_lay.addWidget(title_lbl)
+        header_lay.addWidget(hint_lbl)
+        layout.addWidget(header_frame)
+
         pick_files = QPushButton(tr("import_pick_files"))
         pick_files.setObjectName("Primary")
+        pick_files.setIcon(icons.icon("file-text", theme.PALETTE["on_accent"], 18))
+        pick_files.setIconSize(QSize(18, 18))
+        pick_files.setFixedHeight(38)
+
         pick_folder = QPushButton(tr("import_pick_folder"))
-        self.keep = QCheckBox(tr("import_keep"))
-        layout = QVBoxLayout(self)
+        pick_folder.setObjectName("Secondary")
+        pick_folder.setIcon(icons.icon("folder-open", theme.PALETTE["text"], 18))
+        pick_folder.setIconSize(QSize(18, 18))
+        pick_folder.setFixedHeight(38)
+
         row = QHBoxLayout()
+        row.setSpacing(10)
         row.addWidget(pick_files)
         row.addWidget(pick_folder)
         layout.addLayout(row)
+
+        self.keep = QCheckBox(tr("import_keep"))
         layout.addWidget(self.keep)
+
         pick_files.clicked.connect(self._pick_files)
         pick_folder.clicked.connect(self._pick_folder)
-        polish_dialog(self, 420)
+        polish_dialog(self, 480)
 
     def _pick_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, tr("import_title"))
@@ -611,7 +650,7 @@ class ExportDialog(QDialog):
         btn_selected.clicked.connect(lambda: self._export(selected_ids))
         btn_filtered.clicked.connect(
             lambda: self._export([r["id"] for r in parent.last_rows]))
-        polish_dialog(self, 460)
+        polish_dialog(self, 480)
 
     def _export(self, file_ids: list) -> None:
         if not file_ids:
@@ -918,15 +957,45 @@ class DuplicatesDialog(QDialog):
         self.resize(700, 420)
         tabs = QTabWidget()
         for title, groups in groups_by_tab.items():
-            listing = QListWidget()
-            enable_smooth_scroll(listing)
-            for group in groups:
-                names = " ، ".join(r["original_name"] for r in group.rows)
-                listing.addItem(f"[{group.label_fa}] {names}\n    {group.detail_fa}")
-            listing.itemDoubleClicked.connect(self._jump)
-            tabs.addTab(listing, f"{title} ({len(groups)})")
+            if not groups:
+                empty_card = QFrame()
+                empty_card.setObjectName("BannerCard")
+                e_lay = QVBoxLayout(empty_card)
+                e_lay.setContentsMargins(20, 40, 20, 40)
+                e_lay.setAlignment(Qt.AlignCenter)
+                ic_lbl = QLabel()
+                ic_lbl.setAlignment(Qt.AlignCenter)
+                ic_lbl.setPixmap(icons.tinted_pixmap("circle-check", theme.PALETTE["success"], 36))
+                msg_lbl = QLabel(tr("dups_clean_msg"))
+                msg_lbl.setObjectName("DialogTitle")
+                msg_lbl.setAlignment(Qt.AlignCenter)
+                sub_lbl = QLabel(tr("dups_clean_sub"))
+                sub_lbl.setObjectName("DialogHint")
+                sub_lbl.setAlignment(Qt.AlignCenter)
+                e_lay.addWidget(ic_lbl)
+                e_lay.addSpacing(8)
+                e_lay.addWidget(msg_lbl)
+                e_lay.addWidget(sub_lbl)
+                tabs.addTab(empty_card, f"{title} (0)")
+            else:
+                listing = QListWidget()
+                enable_smooth_scroll(listing)
+                for group in groups:
+                    names = " ، ".join(r["original_name"] for r in group.rows)
+                    listing.addItem(f"[{group.label_fa}] {names}\n    {group.detail_fa}")
+                listing.itemDoubleClicked.connect(self._jump)
+                tabs.addTab(listing, f"{title} ({len(groups)})")
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        close_btn = QPushButton(tr("close"))
+        close_btn.setObjectName("Secondary")
+        close_btn.clicked.connect(self.accept)
+        btn_box.addWidget(close_btn)
+        layout.addLayout(btn_box)
+        polish_dialog(self, 700)
 
     def _jump(self, item) -> None:
         # item text: "[label] name1 ، name2\n    detail" — search the first name
@@ -989,13 +1058,21 @@ class MetadataDialog(QDialog):
 
         form = QVBoxLayout(self)
         from .main_window import human_size, jalali_date
-        header = QLabel(
-            f"{self.row['original_name']}\n"
+        header_card = QFrame()
+        header_card.setObjectName("BannerCard")
+        header_lay = QVBoxLayout(header_card)
+        header_lay.setContentsMargins(14, 10, 14, 10)
+        header_lay.setSpacing(3)
+        fn_lbl = QLabel(self.row['original_name'])
+        fn_lbl.setObjectName("DialogTitle")
+        fn_lbl.setWordWrap(True)
+        sub_lbl = QLabel(
             f"{human_size(self.row['size_bytes'])} · "
             f"{num(jalali_date(self.row['imported_at']))}")
-        header.setObjectName("DialogHint")
-        header.setWordWrap(True)
-        form.addWidget(header)
+        sub_lbl.setObjectName("DialogHint")
+        header_lay.addWidget(fn_lbl)
+        header_lay.addWidget(sub_lbl)
+        form.addWidget(header_card)
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
                               (tr("meta_lesson"), self.lesson),
@@ -1014,7 +1091,7 @@ class MetadataDialog(QDialog):
         buttons.addWidget(cancel)
         buttons.addStretch(1)
         form.addLayout(buttons)
-        polish_dialog(self, 460)
+        polish_dialog(self, 480)
 
     def _save(self) -> None:
         conn = self.lib.conn
@@ -1057,7 +1134,8 @@ class BulkEditDialog(QDialog):
         self.lib = lib
         self.file_ids = list(file_ids)
         self.setWindowTitle(tr("bulk_edit_title"))
-        self.resize(420, 260)
+        self.setMinimumWidth(480)
+        self.resize(500, 320)
         none = tr("bulk_none")
 
         self.subject = QComboBox()
@@ -1088,8 +1166,11 @@ class BulkEditDialog(QDialog):
         self.year.setCurrentIndex(0)
 
         form = QVBoxLayout(self)
-        form.addWidget(QLabel(tr("bulk_edit_hint").format(
-            count=num(len(self.file_ids)))))
+        hint = QLabel(tr("bulk_edit_hint").format(
+            count=num(len(self.file_ids))))
+        hint.setObjectName("DialogHint")
+        hint.setWordWrap(True)
+        form.addWidget(hint)
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
                               (tr("meta_lesson"), self.lesson),
@@ -1113,7 +1194,7 @@ class BulkEditDialog(QDialog):
         buttons.addWidget(cancel)
         buttons.addStretch(1)
         form.addLayout(buttons)
-        polish_dialog(self, 460)
+        polish_dialog(self, 480)
 
     def _changes(self) -> tuple[list, list]:
         """(SET clauses, params) for exactly the fields the user chose."""
@@ -1228,7 +1309,7 @@ class SettingsDialog(QDialog):
         buttons.addWidget(cancel)
         buttons.addStretch(1)
         form.addLayout(buttons)
-        polish_dialog(self, 460)
+        polish_dialog(self, 480)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(self, tr("settings_lib"))
@@ -1494,6 +1575,8 @@ def stat_bar_row(name: str, count: int, max_count: int) -> QWidget:
     bar.setTextVisible(False)
     bar.setFixedHeight(8)
     bar.setObjectName("StatBar")
+    if i18n.language() == "fa":
+        bar.setInvertedAppearance(True)
     count_label = QLabel(num(count))
     count_label.setMinimumWidth(32)
     count_label.setAlignment(Qt.AlignCenter)
@@ -1572,16 +1655,35 @@ class StatsDialog(QDialog):
             layout.addWidget(QLabel(tr("stats_empty")))
         else:
             from .main_window import human_size
-            layout.addWidget(QLabel(
-                f"{tr('stats_total')}: "
-                f"{human_size(stats['total_bytes'])}"))
-            layout.addWidget(QLabel(
-                f"{tr('stats_dedup')}: "
-                f"{human_size(stats['dedup_bytes'])}"))
-            layout.addWidget(QLabel(
-                f"{tr('stats_unclassified')}: "
-                f"{num(stats['unclassified'])}"))
+            stat_cards_layout = QHBoxLayout()
+            stat_cards_layout.setSpacing(10)
 
+            def make_stat_card(title: str, value: str, icon_name: str) -> QFrame:
+                card = QFrame()
+                card.setObjectName("BannerCard")
+                c_lay = QVBoxLayout(card)
+                c_lay.setContentsMargins(12, 10, 12, 10)
+                c_lay.setSpacing(4)
+                top_row = QHBoxLayout()
+                ic_lbl = QLabel()
+                ic_lbl.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 18))
+                t_lbl = QLabel(title)
+                t_lbl.setObjectName("DialogHint")
+                top_row.addWidget(ic_lbl)
+                top_row.addWidget(t_lbl)
+                top_row.addStretch()
+                v_lbl = QLabel(value)
+                v_lbl.setObjectName("DialogTitle")
+                c_lay.addLayout(top_row)
+                c_lay.addWidget(v_lbl)
+                return card
+
+            stat_cards_layout.addWidget(make_stat_card(tr("stats_total"), human_size(stats["total_bytes"]), "archive"))
+            stat_cards_layout.addWidget(make_stat_card(tr("stats_dedup"), human_size(stats["dedup_bytes"]), "sparkles"))
+            stat_cards_layout.addWidget(make_stat_card(tr("stats_unclassified"), num(stats["unclassified"]), "file-text"))
+            layout.addLayout(stat_cards_layout)
+
+            layout.addSpacing(6)
             layout.addWidget(QLabel(f"<b>{tr('stats_per_subject')}</b>"))
             max_sub = max((c for _, c in stats["per_subject"]), default=0)
             for name, count in stats["per_subject"]:
@@ -1642,17 +1744,23 @@ class TrashDialog(QDialog):
 
         btn_box = QHBoxLayout()
         self.btn_restore = QPushButton(tr("trash_restore_btn"))
+        self.btn_restore.setObjectName("Primary")
+        self.btn_restore.setIcon(icons.icon("refresh-cw", theme.PALETTE["on_accent"], 16))
+        self.btn_restore.setIconSize(QSize(16, 16))
         self.btn_restore.clicked.connect(self._restore_selected)
         btn_box.addWidget(self.btn_restore)
 
         self.btn_empty = QPushButton(tr("trash_empty_btn"))
         self.btn_empty.setObjectName("Danger")
+        self.btn_empty.setIcon(icons.icon("trash-2", theme.PALETTE["danger"], 16))
+        self.btn_empty.setIconSize(QSize(16, 16))
         self.btn_empty.setStyleSheet(f"color: {theme.PALETTE['danger']};")
         self.btn_empty.clicked.connect(self._empty_trash)
         btn_box.addWidget(self.btn_empty)
 
         btn_box.addStretch()
         btn_close = QPushButton(tr("close"))
+        btn_close.setObjectName("Secondary")
         btn_close.clicked.connect(self.accept)
         btn_box.addWidget(btn_close)
 
@@ -1679,6 +1787,7 @@ class TrashDialog(QDialog):
 
         for row, it in enumerate(items):
             name_item = QTableWidgetItem(it["original_name"])
+            name_item.setIcon(icons.icon("file-text", theme.PALETTE["muted"], 16))
             name_item.setData(Qt.UserRole, it["trash_name"])
             name_item.setToolTip(it["trash_name"])
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -1814,17 +1923,12 @@ class ExamPackDialog(QDialog):
         btn_box = QHBoxLayout()
         btn_create = QPushButton(tr("exam_pack_btn_create"))
         btn_create.setObjectName("Primary")
-        btn_create.setStyleSheet(
-            f"background-color: {theme.PALETTE['primary']}; color: {theme.PALETTE['text']}; "
-            f"font-weight: bold; padding: 6px 18px; border-radius: 6px;"
-        )
         btn_create.clicked.connect(self._create_package)
         btn_box.addWidget(btn_create)
 
         btn_box.addStretch()
         btn_cancel = QPushButton(tr("cancel"))
         btn_cancel.setObjectName("Secondary")
-        btn_cancel.setStyleSheet("padding: 6px 14px; border-radius: 6px;")
         btn_cancel.clicked.connect(self.reject)
         btn_box.addWidget(btn_cancel)
 
@@ -2119,13 +2223,14 @@ class HelpDialog(QDialog):
         self.tabs.addTab(self._make_scrollable(self._build_quick_tab()), tr("help_tab_quick"))
         self.tabs.addTab(self._build_shortcuts_tab(), tr("help_tab_shortcuts"))
         self.tabs.addTab(self._make_scrollable(self._build_phone_tab()), tr("help_tab_phone"))
+        self.tabs.addTab(self._make_scrollable(self._build_mcp_tab()), tr("help_tab_mcp"))
         self.tabs.addTab(self._make_scrollable(self._build_faq_tab()), tr("help_tab_faq"))
         layout.addWidget(self.tabs, 1)
 
         btn_box = QHBoxLayout()
         btn_box.addStretch()
         btn_close = QPushButton(tr("close"))
-        btn_close.setObjectName("Primary")
+        btn_close.setObjectName("Secondary")
         btn_close.clicked.connect(self.accept)
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
@@ -2281,6 +2386,195 @@ class HelpDialog(QDialog):
         lbl.setStyleSheet(f"font-size: 13px; line-height: 1.7; color: {theme.PALETTE['text']};")
         c_lay.addWidget(lbl)
         vbox.addWidget(card)
+        vbox.addStretch()
+        return widget
+
+    def _build_mcp_tab(self) -> QWidget:
+        from ..mcp.prompt import build_agent_prompt, build_mcp_config
+
+        widget = QWidget()
+        vbox = QVBoxLayout(widget)
+        vbox.setContentsMargins(14, 14, 14, 14)
+        vbox.setSpacing(12)
+
+        library_path = self.settings.get("library")
+        self._mcp_prompt = build_agent_prompt(library_path)
+        mcp_config = build_mcp_config(library_path)
+        self._mcp_json_str = json.dumps(mcp_config, indent=2, ensure_ascii=False)
+        py_exe = mcp_config["mcpServers"]["darspack"]["command"]
+        args_str = " ".join(mcp_config["mcpServers"]["darspack"]["args"])
+        self._claude_cli_cmd = f'claude mcp add darspack -- "{py_exe}" {args_str}'
+
+        # 1. Overview Card
+        intro_card = QFrame()
+        intro_card.setObjectName("BannerCard")
+        intro_card.setStyleSheet(
+            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+            f"border-radius: {theme.METRICS['radius']}px; padding: 12px 14px;"
+        )
+        intro_lay = QHBoxLayout(intro_card)
+        intro_lay.setContentsMargins(8, 6, 8, 6)
+        intro_lay.setSpacing(12)
+
+        ic = QLabel()
+        ic.setPixmap(icons.tinted_pixmap("sparkles", theme.PALETTE["accent"], 26))
+        ic.setAlignment(Qt.AlignTop)
+        intro_lay.addWidget(ic)
+
+        text_box = QVBoxLayout()
+        text_box.setSpacing(4)
+        title_lbl = QLabel(f"<b>{tr('help_mcp_title')}</b>")
+        title_lbl.setStyleSheet(f"font-size: 14px; color: {theme.PALETTE['accent_text']};")
+        text_box.addWidget(title_lbl)
+
+        desc_lbl = QLabel(tr("help_mcp_intro"))
+        desc_lbl.setWordWrap(True)
+        desc_lbl.setStyleSheet(f"font-size: 13px; line-height: 1.6; color: {theme.PALETTE['text']};")
+        text_box.addWidget(desc_lbl)
+        intro_lay.addLayout(text_box, 1)
+        vbox.addWidget(intro_card)
+
+        # 2. 1-Click Agent Setup Card
+        auto_card = QFrame()
+        auto_card.setObjectName("BannerCard")
+        auto_card.setStyleSheet(
+            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+            f"border-radius: {theme.METRICS['radius']}px; padding: 14px;"
+        )
+        auto_lay = QVBoxLayout(auto_card)
+        auto_lay.setSpacing(10)
+
+        step_heading = QLabel(f"<b>✨ {tr('help_mcp_step_heading')}</b>")
+        step_heading.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['accent_text']};")
+        auto_lay.addWidget(step_heading)
+
+        step_desc = QLabel(tr("help_mcp_step_desc"))
+        step_desc.setWordWrap(True)
+        step_desc.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']}; line-height: 1.6;")
+        auto_lay.addWidget(step_desc)
+
+        btn_row = QHBoxLayout()
+        self.btn_copy_mcp_prompt = QPushButton(tr("help_mcp_btn_copy"))
+        self.btn_copy_mcp_prompt.setObjectName("Primary")
+        self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", "#ffffff", 16))
+        self.btn_copy_mcp_prompt.setCursor(Qt.PointingHandCursor)
+
+        def on_copy_prompt():
+            cb = QApplication.clipboard()
+            if cb:
+                cb.setText(self._mcp_prompt)
+            self.btn_copy_mcp_prompt.setText(tr("help_mcp_copied"))
+            self.btn_copy_mcp_prompt.setIcon(icons.icon("check", "#ffffff", 16))
+            QTimer.singleShot(2500, lambda: (
+                self.btn_copy_mcp_prompt.setText(tr("help_mcp_btn_copy")),
+                self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", "#ffffff", 16))
+            ))
+
+        self.btn_copy_mcp_prompt.clicked.connect(on_copy_prompt)
+        btn_row.addWidget(self.btn_copy_mcp_prompt)
+        btn_row.addStretch()
+        auto_lay.addLayout(btn_row)
+
+        preview_lbl = QLabel(f"<small>{tr('help_mcp_prompt_preview')}</small>")
+        preview_lbl.setStyleSheet(f"color: {theme.PALETTE['muted']}; margin-top: 4px;")
+        auto_lay.addWidget(preview_lbl)
+
+        prompt_box = QTextEdit()
+        prompt_box.setPlainText(self._mcp_prompt)
+        prompt_box.setReadOnly(True)
+        prompt_box.setMinimumHeight(140)
+        prompt_box.setMaximumHeight(200)
+        prompt_box.setStyleSheet(
+            f"background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
+            f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: {theme.METRICS['radius']}px; "
+            f"font-family: Consolas, 'Cascadia Code', monospace; font-size: 11px; padding: 8px;"
+        )
+        auto_lay.addWidget(prompt_box)
+        vbox.addWidget(auto_card)
+
+        # 3. Manual Configuration Card
+        manual_card = QFrame()
+        manual_card.setObjectName("BannerCard")
+        manual_card.setStyleSheet(
+            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
+            f"border-radius: {theme.METRICS['radius']}px; padding: 14px;"
+        )
+        manual_lay = QVBoxLayout(manual_card)
+        manual_lay.setSpacing(10)
+
+        man_heading = QLabel(f"<b>⚙️ {tr('help_mcp_manual_heading')}</b>")
+        man_heading.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']};")
+        manual_lay.addWidget(man_heading)
+
+        # Claude Code command
+        cli_lbl = QLabel(f"<small>{tr('help_mcp_cli_heading')}</small>")
+        cli_lbl.setStyleSheet(f"color: {theme.PALETTE['muted']};")
+        manual_lay.addWidget(cli_lbl)
+
+        cli_row = QHBoxLayout()
+        cli_input = QLineEdit(self._claude_cli_cmd)
+        cli_input.setReadOnly(True)
+        cli_input.setStyleSheet(
+            f"background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
+            f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: {theme.METRICS['radius']}px; "
+            f"font-family: Consolas, monospace; font-size: 11px; padding: 6px 8px;"
+        )
+        cli_row.addWidget(cli_input, 1)
+
+        self.btn_copy_mcp_cli = QPushButton()
+        self.btn_copy_mcp_cli.setObjectName("Secondary")
+        self.btn_copy_mcp_cli.setIcon(icons.icon("copy", theme.PALETTE["text"], 15))
+
+        def on_copy_cli():
+            cb = QApplication.clipboard()
+            if cb:
+                cb.setText(self._claude_cli_cmd)
+            self.btn_copy_mcp_cli.setIcon(icons.icon("check", theme.PALETTE["accent"], 15))
+            QTimer.singleShot(2500, lambda: self.btn_copy_mcp_cli.setIcon(icons.icon("copy", theme.PALETTE["text"], 15)))
+
+        self.btn_copy_mcp_cli.clicked.connect(on_copy_cli)
+        cli_row.addWidget(self.btn_copy_mcp_cli)
+        manual_lay.addLayout(cli_row)
+
+        # JSON config
+        json_lbl_row = QHBoxLayout()
+        json_title = QLabel("<small>JSON (OpenCode, Cursor, Antigravity, Claude Desktop):</small>")
+        json_title.setStyleSheet(f"color: {theme.PALETTE['muted']};")
+        json_lbl_row.addWidget(json_title)
+        json_lbl_row.addStretch()
+
+        self.btn_copy_mcp_json = QPushButton(tr("help_mcp_btn_copy_json"))
+        self.btn_copy_mcp_json.setObjectName("Secondary")
+        self.btn_copy_mcp_json.setIcon(icons.icon("copy", theme.PALETTE["text"], 14))
+
+        def on_copy_json():
+            cb = QApplication.clipboard()
+            if cb:
+                cb.setText(self._mcp_json_str)
+            self.btn_copy_mcp_json.setText(tr("help_mcp_json_copied"))
+            self.btn_copy_mcp_json.setIcon(icons.icon("check", theme.PALETTE["accent"], 14))
+            QTimer.singleShot(2500, lambda: (
+                self.btn_copy_mcp_json.setText(tr("help_mcp_btn_copy_json")),
+                self.btn_copy_mcp_json.setIcon(icons.icon("copy", theme.PALETTE["text"], 14))
+            ))
+
+        self.btn_copy_mcp_json.clicked.connect(on_copy_json)
+        json_lbl_row.addWidget(self.btn_copy_mcp_json)
+        manual_lay.addLayout(json_lbl_row)
+
+        json_box = QTextEdit()
+        json_box.setPlainText(self._mcp_json_str)
+        json_box.setReadOnly(True)
+        json_box.setMinimumHeight(100)
+        json_box.setMaximumHeight(140)
+        json_box.setStyleSheet(
+            f"background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
+            f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: {theme.METRICS['radius']}px; "
+            f"font-family: Consolas, monospace; font-size: 11px; padding: 8px;"
+        )
+        manual_lay.addWidget(json_box)
+        vbox.addWidget(manual_card)
+
         vbox.addStretch()
         return widget
 
