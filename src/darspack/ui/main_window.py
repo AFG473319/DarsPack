@@ -32,7 +32,7 @@ from ..core.search import unclassified_count
 from ..core import manifest as manifest_core
 from ..i18n import tr
 from . import dialogs, icons, theme
-from .delegates import FileNameDelegate, KindBadgeDelegate
+from .delegates import FileNameDelegate, FileNameLabel, KindBadgeDelegate
 from .smooth_scroll import enable_smooth_scroll
 from .workers import ImportWorker
 
@@ -168,7 +168,7 @@ def create_localized_line_edit_context_menu(
     if include_clear and bool(edit.text()):
         menu.addSeparator()
         clear_act = menu.addAction(tr("clear_search"))
-        clear_act.setIcon(icons.icon("x", theme.PALETTE["muted"], 16))
+        clear_act.setIcon(icons.icon("x", theme.PALETTE["text"], 16))
         clear_act.triggered.connect(edit.clear)
 
     theme.apply_menu_style(menu)
@@ -193,8 +193,8 @@ class MainWindow(QMainWindow):
         self.resize(1150, 720)
         self.setMinimumSize(1000, 600)
         self._file_icon = icons.icon("file-text", theme.PALETTE["muted"], 16)
-        self._pdf_icon = icons.icon("file-text", theme.PALETTE["accent"], 16)
-        self._image_icon = icons.icon("image", theme.PALETTE["accent"], 16)
+        self._pdf_icon = icons.icon("file-text", "#8ca8d9", 16)
+        self._image_icon = icons.icon("image", "#8fd0b8", 16)
         self._archive_icon = icons.icon("archive", theme.PALETTE["muted"], 16)
         self._package_icon = icons.icon("package", theme.PALETTE["accent"], 16)
 
@@ -253,9 +253,9 @@ class MainWindow(QMainWindow):
             combo.setFixedWidth(width)
             combo.setFixedHeight(30)
             theme.setup_combobox(combo)
-        self.subject_combo.currentIndexChanged.connect(self.refresh)
-        self.kind_combo.currentIndexChanged.connect(self.refresh)
-        self.year_combo.currentIndexChanged.connect(self.refresh)
+        self.subject_combo.currentIndexChanged.connect(self._on_filter_combo_changed)
+        self.kind_combo.currentIndexChanged.connect(self._on_filter_combo_changed)
+        self.year_combo.currentIndexChanged.connect(self._on_filter_combo_changed)
 
         self.import_button = QPushButton(tr("btn_import"))
         self.import_button.setObjectName("Primary")
@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
         toolbar.setSpacing(8)
 
         self.packages_menu = QMenu(self)
-        self._menu_action(self.packages_menu, tr("btn_export"), "download",
+        self._menu_action(self.packages_menu, tr("btn_export"), "upload",
                           self.export_package)
         self._menu_action(self.packages_menu, tr("btn_exam_pack"), "package",
                           self.open_exam_pack_dialog)
@@ -285,6 +285,14 @@ class MainWindow(QMainWindow):
         self.packages_button.setProperty("hasDropdown", True)
         self.packages_button.setPopupMode(QToolButton.InstantPopup)
         self.packages_button.setMenu(self.packages_menu)
+        pkg_overlay = QHBoxLayout(self.packages_button)
+        pkg_overlay.setContentsMargins(8, 0, 8, 0)
+        pkg_overlay.addStretch(1)
+        pkg_chev = QLabel()
+        pkg_chev.setFixedSize(12, 12)
+        pkg_chev.setPixmap(icons.tinted_pixmap("chevron-down", theme.PALETTE["muted"], 12))
+        pkg_chev.setAttribute(Qt.WA_TransparentForMouseEvents)
+        pkg_overlay.addWidget(pkg_chev, 0, Qt.AlignVCenter)
         toolbar.addWidget(self.packages_button)
 
         self.duplicates_button = self._tool_button(tr("btn_dups"), "copy")
@@ -298,15 +306,15 @@ class MainWindow(QMainWindow):
         self.more_menu = QMenu(self)
         self.more_menu.setMinimumWidth(220)
         self.edit_action = self._menu_action(
-            self.more_menu, tr("btn_edit_meta"), "file-text", self.edit_metadata)
+            self.more_menu, tr("btn_edit_meta"), "file-text", self._on_shortcut_edit)
         self.delete_action = self._menu_action(
             self.more_menu, tr("btn_delete"), "trash-2",
             self.delete_selected_files, icon_color=theme.PALETTE["danger"])
         self.edit_action.setEnabled(False)
-        self._menu_action(self.more_menu, tr("btn_trash_bin"), "archive",
-                          self.open_trash_dialog)
         self.delete_action.setEnabled(False)
         self.more_menu.addSeparator()
+        self._menu_action(self.more_menu, tr("btn_trash_bin"), "archive",
+                          self.open_trash_dialog)
         self._menu_action(self.more_menu, tr("btn_history"), "history",
                           self.show_history)
         self._menu_action(self.more_menu, tr("btn_stats"), "chart-column",
@@ -347,6 +355,13 @@ class MainWindow(QMainWindow):
                    tr("col_year")]
         self.table = QTableWidget(0, len(columns))
         self.table.setHorizontalHeaderLabels(columns)
+        hdr_text_align = Qt.AlignLeading | Qt.AlignVCenter
+        for col in range(len(columns)):
+            hdr_item = self.table.horizontalHeaderItem(col)
+            if hdr_item is not None:
+                hdr_item.setTextAlignment(
+                    Qt.AlignCenter if col == 3 else hdr_text_align
+                )
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         # multi-select (Ctrl/Shift) feeds the bulk actions below
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -369,8 +384,8 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(80)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, width in ((1, 130), (2, 140), (3, 100),
-                           (4, 90), (5, 110), (6, 90)):
+        for col, width in ((1, 140), (2, 140), (3, 100),
+                           (4, 84), (5, 118), (6, 86)):
             header.setSectionResizeMode(col, QHeaderView.Interactive)
             self.table.setColumnWidth(col, width)
         self._sort_orders: dict[int, Qt.SortOrder] = {}
@@ -429,6 +444,12 @@ class MainWindow(QMainWindow):
         self.empty_guide_button.setFixedSize(170, 36)
         self.empty_guide_button.clicked.connect(self.open_help_dialog)
         self.empty_guide_button.hide()
+        self.empty_clear_button = QPushButton(tr("empty_search_clear"),
+                                              self.table.viewport())
+        self.empty_clear_button.setObjectName("Secondary")
+        self.empty_clear_button.setFixedSize(170, 36)
+        self.empty_clear_button.clicked.connect(self._clear_all_filters)
+        self.empty_clear_button.hide()
         # The viewport's final geometry arrives after the first layout, so
         # centering at refresh() time is stale — re-center on every
         # viewport resize (first show, scrollbars, window resizes).
@@ -533,11 +554,6 @@ class MainWindow(QMainWindow):
         self.nav_trash = _add_nav_item(
             "trash", tr("nav_trash"), "archive", self.open_trash_dialog)
 
-        div1 = QFrame()
-        div1.setObjectName("NavDivider")
-        div1.setFrameShape(QFrame.HLine)
-        nav_vbox.addWidget(div1)
-
         nav_vbox.addStretch(1)
 
         div2 = QFrame()
@@ -571,25 +587,33 @@ class MainWindow(QMainWindow):
         cmd_layout.addStretch(1)
 
         # View Switcher (Table View vs Card Grid View)
+        view_group = QFrame()
+        view_group.setObjectName("SegmentGroup")
+        vg_layout = QHBoxLayout(view_group)
+        vg_layout.setContentsMargins(2, 2, 2, 2)
+        vg_layout.setSpacing(2)
+
         self.btn_view_table = QToolButton()
         self.btn_view_table.setObjectName("SegmentBtn")
         self.btn_view_table.setIcon(icons.icon("list", "#ffffff", 16))
         self.btn_view_table.setIconSize(QSize(16, 16))
-        self.btn_view_table.setFixedSize(38, 38)
+        self.btn_view_table.setFixedSize(32, 32)
         self.btn_view_table.setToolTip(tr("view_table"))
         self.btn_view_table.setProperty("active", True)
         self.btn_view_table.clicked.connect(lambda: self._set_view_mode("table"))
-        cmd_layout.addWidget(self.btn_view_table)
+        vg_layout.addWidget(self.btn_view_table)
 
         self.btn_view_cards = QToolButton()
         self.btn_view_cards.setObjectName("SegmentBtn")
         self.btn_view_cards.setIcon(icons.icon("grid", theme.PALETTE["muted"], 16))
         self.btn_view_cards.setIconSize(QSize(16, 16))
-        self.btn_view_cards.setFixedSize(38, 38)
+        self.btn_view_cards.setFixedSize(32, 32)
         self.btn_view_cards.setToolTip(tr("view_cards"))
         self.btn_view_cards.setProperty("active", False)
         self.btn_view_cards.clicked.connect(lambda: self._set_view_mode("cards"))
-        cmd_layout.addWidget(self.btn_view_cards)
+        vg_layout.addWidget(self.btn_view_cards)
+
+        cmd_layout.addWidget(view_group)
 
         # Primary Import Action
         cmd_layout.addWidget(self.import_button)
@@ -649,16 +673,14 @@ class MainWindow(QMainWindow):
         content_vbox.addWidget(self.card_scroll, 1)
 
         canvas_layout.addWidget(self.content_stack, 1)
-        root_layout.addWidget(canvas, 1)
-        self.setCentralWidget(central)
 
-        status = QStatusBar()
-        status.setSizeGripEnabled(False)
-        status.setContentsMargins(20, 4, 24, 5)
+        self._status_bar = QStatusBar()
+        self._status_bar.setSizeGripEnabled(False)
+        self._status_bar.setContentsMargins(10, 2, 10, 3)
         self.count_label = QLabel("")
         self.count_label.setObjectName("Muted")
-        self.count_label.setContentsMargins(14, 0, 14, 0)
-        status.addWidget(self.count_label)
+        self.count_label.setContentsMargins(10, 0, 10, 0)
+        self._status_bar.addWidget(self.count_label)
         self.unclassified_button = QPushButton("")
         self.unclassified_button.setObjectName("WarnPill")
         self.unclassified_button.setIcon(
@@ -666,8 +688,11 @@ class MainWindow(QMainWindow):
         self.unclassified_button.setIconSize(QSize(13, 13))
         self.unclassified_button.setCursor(Qt.PointingHandCursor)
         self.unclassified_button.clicked.connect(self._show_unclassified)
-        status.addPermanentWidget(self.unclassified_button)
-        self.setStatusBar(status)
+        self._status_bar.addPermanentWidget(self.unclassified_button)
+        canvas_layout.addWidget(self._status_bar)
+
+        root_layout.addWidget(canvas, 1)
+        self.setCentralWidget(central)
 
         QShortcut(QKeySequence(QKeySequence.StandardKey.Find),
                   self).activated.connect(self.search_box.setFocus)
@@ -680,6 +705,10 @@ class MainWindow(QMainWindow):
 
         self.reload_filters()
         self.refresh()
+
+    def statusBar(self) -> QStatusBar:
+        """Keep the status bar scoped to the canvas so the NavRail runs full height."""
+        return self._status_bar
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
@@ -727,9 +756,19 @@ class MainWindow(QMainWindow):
         action.triggered.connect(slot)
         return action
 
-    def _select_nav_filter(self, subject_id, kind) -> None:
-        """Handle clicks on the Fluent Navigation Rail."""
-        active_key = "unclass" if subject_id == -1 else "all"
+    def _sync_nav_to_filters(self) -> None:
+        """Keep the NavRail highlight synchronized with combo-box filter state."""
+        subj = self.subject_combo.currentData()
+        has_extra = (
+            (self.kind_combo.currentData() is not None)
+            or (self.year_combo.currentData() is not None)
+        )
+        if subj == -1 and not has_extra:
+            active_key = "unclass"
+        elif subj is None and not has_extra:
+            active_key = "all"
+        else:
+            active_key = ""
         for key, btn in getattr(self, "_nav_items", {}).items():
             is_act = (key == active_key)
             btn.setProperty("active", is_act)
@@ -745,13 +784,47 @@ class MainWindow(QMainWindow):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
+    def _on_filter_combo_changed(self) -> None:
+        self._sync_nav_to_filters()
+        self.refresh()
+
+    def _clear_all_filters(self) -> None:
+        self.search_box.blockSignals(True)
+        self.subject_combo.blockSignals(True)
+        self.kind_combo.blockSignals(True)
+        self.year_combo.blockSignals(True)
+        self.search_box.clear()
+        self.subject_combo.setCurrentIndex(0)
+        self.kind_combo.setCurrentIndex(0)
+        self.year_combo.setCurrentIndex(0)
+        self.search_box.blockSignals(False)
+        self.subject_combo.blockSignals(False)
+        self.kind_combo.blockSignals(False)
+        self.year_combo.blockSignals(False)
+        self._update_clear_button("")
+        self._sync_nav_to_filters()
+        self.refresh()
+
+    def _select_nav_filter(self, subject_id, kind) -> None:
+        """Handle clicks on the Fluent Navigation Rail."""
+        self.subject_combo.blockSignals(True)
+        self.kind_combo.blockSignals(True)
+        self.year_combo.blockSignals(True)
         if subject_id == -1:
             idx = self.subject_combo.findData(-1)
             if idx >= 0:
                 self.subject_combo.setCurrentIndex(idx)
+            self.kind_combo.setCurrentIndex(0)
+            self.year_combo.setCurrentIndex(0)
         else:
             self.subject_combo.setCurrentIndex(0)
             self.kind_combo.setCurrentIndex(0)
+            self.year_combo.setCurrentIndex(0)
+        self.subject_combo.blockSignals(False)
+        self.kind_combo.blockSignals(False)
+        self.year_combo.blockSignals(False)
+        self._sync_nav_to_filters()
+        self.refresh()
 
     def _set_view_mode(self, mode: str) -> None:
         """Switch between detailed Windows table view and modern Fluent card grid."""
@@ -800,12 +873,12 @@ class MainWindow(QMainWindow):
             header_row = QHBoxLayout()
             header_row.setSpacing(8)
             f_icon = QLabel()
+            f_icon.setFixedSize(24, 24)
             f_icon.setPixmap(self._file_icon_for(row["original_name"]).pixmap(24, 24))
             header_row.addWidget(f_icon)
 
-            lbl_name = QLabel(i18n.bidi_filename(row["original_name"]))
+            lbl_name = FileNameLabel(row["original_name"])
             lbl_name.setObjectName("CardTitle")
-            lbl_name.setWordWrap(True)
             lbl_name.setToolTip(row["original_name"])
             header_row.addWidget(lbl_name, 1)
             c_layout.addLayout(header_row)
@@ -1005,18 +1078,23 @@ class MainWindow(QMainWindow):
 
     def _update_action_states(self) -> None:
         """Edit/delete follow the table selection."""
-        has_selection = bool(self.table.selectedItems())
+        selected_rows = {i.row() for i in self.table.selectedItems()}
+        has_selection = bool(selected_rows)
+        self.edit_action.setText(
+            tr("bulk_edit_menu") if len(selected_rows) > 1 else tr("btn_edit_meta")
+        )
         self.edit_action.setEnabled(has_selection)
         self.delete_action.setEnabled(has_selection)
 
     def _update_empty_state(self, shown: int) -> None:
         """E2: hide the hint when rows exist; otherwise pick the right
         message — a fresh library vs a search that found nothing. A fresh
-        library also gets the «وارد کردن» CTA and the Guide CTA."""
+        library gets Import + Guide CTAs; a filtered empty state gets Clear."""
         if shown:
             self.empty_label.hide()
             self.empty_button.hide()
             self.empty_guide_button.hide()
+            self.empty_clear_button.hide()
             return
         total = self.lib.conn.execute(
             "SELECT COUNT(*) c FROM files").fetchone()["c"]
@@ -1025,6 +1103,7 @@ class MainWindow(QMainWindow):
             tr("empty_library") if fresh else tr("empty_search"))
         self.empty_button.setVisible(fresh)
         self.empty_guide_button.setVisible(fresh)
+        self.empty_clear_button.setVisible(not fresh)
         self._center_empty_label()
         self.empty_label.show()
 
@@ -1033,19 +1112,21 @@ class MainWindow(QMainWindow):
         self.empty_label.adjustSize()
         show_button = not self.empty_button.isHidden()
         show_guide = not self.empty_guide_button.isHidden()
-        gap = 12 if show_button else 0
-        guide_gap = 8 if show_guide else 0
-        button_h = self.empty_button.sizeHint().height() if show_button else 0
-        guide_h = self.empty_guide_button.sizeHint().height() if show_guide else 0
-        block_h = self.empty_label.height() + gap + button_h + (guide_gap + guide_h if show_guide else 0)
+        show_clear = not self.empty_clear_button.isHidden()
+        cta_btn = self.empty_button if show_button else (self.empty_clear_button if show_clear else None)
+        gap = 12 if cta_btn is not None else 0
+        guide_gap = 8 if (show_button and show_guide) else 0
+        button_h = cta_btn.sizeHint().height() if cta_btn is not None else 0
+        guide_h = self.empty_guide_button.sizeHint().height() if (show_button and show_guide) else 0
+        block_h = self.empty_label.height() + gap + button_h + (guide_gap + guide_h if show_guide and show_button else 0)
         top = max(8, (vp.height() - block_h) // 2)
         center_x = (vp.width() - self.empty_label.width()) // 2
         self.empty_label.move(max(8, center_x), top)
-        if show_button:
+        if cta_btn is not None:
             btn_top = top + self.empty_label.height() + gap
-            btn_x = (vp.width() - self.empty_button.width()) // 2
-            self.empty_button.move(max(8, btn_x), btn_top)
-            if show_guide:
+            btn_x = (vp.width() - cta_btn.width()) // 2
+            cta_btn.move(max(8, btn_x), btn_top)
+            if show_button and show_guide:
                 guide_x = (vp.width() - self.empty_guide_button.width()) // 2
                 self.empty_guide_button.move(
                     max(8, guide_x),
@@ -1105,9 +1186,9 @@ class MainWindow(QMainWindow):
 
     def _cell_text_fits(self, index) -> bool:
         """True when the cell shows its text in full; tooltips then add
-        nothing. The name column also reserves room for its file icon."""
+        nothing. The name column reserves room for icon and ext pill."""
         text = str(index.data(Qt.DisplayRole) or "")
-        reserved = 44 if index.column() == 0 else 20
+        reserved = 56 if index.column() == 0 else 20
         available = self.table.visualRect(index).width() - reserved
         return self.table.fontMetrics().horizontalAdvance(text) <= available
 
@@ -1252,17 +1333,17 @@ class MainWindow(QMainWindow):
             return act
 
         if len(rows) == 1:
-            add_item("open", tr("menu_open"), "external-link")
+            add_item("open", f"{tr('menu_open')}\tEnter", "external-link")
             add_item("reveal", tr("menu_reveal"), "folder-open")
-            add_item("edit", tr("btn_edit_meta"), "file-text")
+            add_item("edit", f"{tr('btn_edit_meta')}\tCtrl+E", "file-text")
             add_item("copy_name", tr("menu_copy_name"), "copy")
             add_item("copy_path", tr("menu_copy_path"), "link")
         else:
-            add_item("bulk", tr("bulk_edit_menu"), "file-text")
-            add_item("copy_name", tr("menu_copy_name"), "copy")
+            add_item("bulk", f"{tr('bulk_edit_menu')}\tCtrl+E", "file-text")
+            add_item("copy_name", tr("menu_copy_names"), "copy")
 
         menu.addSeparator()
-        add_item("delete", tr("delete_menu"), "trash-2", theme.PALETTE["danger"])
+        add_item("delete", f"{tr('delete_menu')}\tDel", "trash-2", theme.PALETTE["danger"])
         return menu, actions
 
     def delete_selected_files(self) -> None:
