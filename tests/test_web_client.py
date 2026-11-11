@@ -134,6 +134,53 @@ def test_client_shows_chapter_and_lesson_together(tmp_path):
     assert "درس ۵" in state["list"]
 
 
+def test_client_normalizes_persian_pin_and_includes_font_medium():
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "latinDigits" in html
+    assert "/fonts/Vazirmatn-Medium.ttf" in html
+    assert "logoutPin" in html
+    assert "clearSearch" in html
+    assert "<bdi dir=\"auto\">" in html
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — Persian PIN check skipped")
+def test_client_persian_digits_in_save_pin(tmp_path):
+    html = CLIENT.read_text(encoding="utf-8")
+    source = re.search(r"<script>([\s\S]*)</script>", html).group(1)
+    harness = tmp_path / "pin_harness.js"
+    harness.write_text(f"""
+const elements = {{}};
+const make = () => ({{ style: {{}}, textContent: '', innerHTML: '', value: '' }});
+const document = {{ getElementById: id => (elements[id] ||= make()) }};
+const store = {{}};
+const localStorage = {{
+  getItem: k => (k in store ? store[k] : null),
+  setItem: (k, v) => {{ store[k] = String(v); }},
+  removeItem: k => {{ delete store[k]; }},
+}};
+let seenUrl = '';
+const fetch = async (url) => {{
+  seenUrl = url;
+  return {{ status: 200, json: async () => ({{ files: [], subjects: [], unclassified: 0 }}) }};
+}};
+const vm = require('vm');
+const context = {{ document, localStorage, fetch, setTimeout, clearTimeout,
+                   console, encodeURIComponent, JSON }};
+vm.createContext(context);
+vm.runInContext({json.dumps(source)}, context);
+document.getElementById('pin').value = '۱۲۳۴۵۶';
+Promise.resolve(context.savePin()).then(() => {{
+  console.log(JSON.stringify({{ stored: store['darspack-pin'], url: seenUrl }}));
+}});
+""", encoding="utf-8")
+    res = subprocess.run(["node", str(harness)], capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout.strip().splitlines()[-1])
+    assert out["stored"] == "123456"
+    assert "pin=123456" in out["url"]
+
+
 def _boot_state(tmp_path, stored_pin: str, files: list | None = None) -> dict:
     """Run the page boot in Node with a stub DOM and report which panel
     the boot path made visible plus the rendered list. Real behavior, no

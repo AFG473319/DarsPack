@@ -33,6 +33,7 @@ _ICON_TYPES = {
 }
 _FONT_FILES = {
     "Vazirmatn-Regular.ttf",
+    "Vazirmatn-Medium.ttf",
     "Vazirmatn-SemiBold.ttf",
     "Vazirmatn-Bold.ttf",
 }
