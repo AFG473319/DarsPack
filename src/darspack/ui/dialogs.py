@@ -9,6 +9,7 @@ skipped).
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import zipfile
 from datetime import datetime
@@ -33,6 +34,7 @@ from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
 from .workers import FeedbackPoster, ImportWorker
 from .smooth_scroll import enable_smooth_scroll
+from .delegates import FileNameDelegate, FileNameLabel
 from . import icons, theme
 
 
@@ -50,6 +52,47 @@ def polish_dialog(dialog, min_width: int | None = None) -> None:
         layout.setSpacing(10)
     if min_width:
         dialog.setMinimumWidth(min_width)
+
+
+def _wrap_table_widget(widget: QWidget, height: int = 30) -> QWidget:
+    """Center a cell editor inside a padded transparent cell wrapper."""
+    holder = QWidget()
+    holder.setAttribute(Qt.WA_TranslucentBackground, True)
+    lay = QHBoxLayout(holder)
+    lay.setContentsMargins(5, 8, 5, 8)
+    lay.setSpacing(0)
+    widget.setFixedHeight(height)
+    lay.addWidget(widget)
+    return holder
+
+
+def _equalize_label_widths(labels: list[QLabel], padding: int = 8) -> None:
+    """Give form labels a uniform width wide enough to avoid clipping."""
+    if not labels:
+        return
+    width = max(lab.sizeHint().width() for lab in labels) + padding
+    for lab in labels:
+        lab.setFixedWidth(width)
+
+
+_IMPORT_DETAIL_RE = re.compile(r"^(.*?)\s*→\s*\d+\.[A-Za-z0-9]+$")
+_RESTORE_DETAIL_RE = re.compile(r"^(.*?)\s*\(id=\d+\)$")
+
+
+def _format_activity_detail(action: str, detail: str) -> tuple[str, bool]:
+    """Strip internal IDs/arrows from log details and flag filename rows for badge paint."""
+    text = detail.strip()
+    if action == "import":
+        match = _IMPORT_DETAIL_RE.match(text)
+        if match:
+            return match.group(1).strip(), True
+    elif action == "restore":
+        match = _RESTORE_DETAIL_RE.match(text)
+        if match:
+            return match.group(1).strip(), True
+    elif action in ("delete", "web_upload") and text:
+        return text, True
+    return detail, False
 
 
 _LATIN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -762,7 +805,7 @@ class ClassifyDialog(QDialog):
         super().__init__(parent)
         self.lib = lib
         self.setWindowTitle(tr("classify_title"))
-        self.resize(1000, 560)
+        self.resize(1060, 560)
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
                    tr("meta_kind"), tr("meta_lesson"),
@@ -770,15 +813,16 @@ class ClassifyDialog(QDialog):
         self.table = QTableWidget(len(file_ids), len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.verticalHeader().setDefaultSectionSize(46)
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setItemDelegateForColumn(0, FileNameDelegate(self.table))
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, width in ((1, 145), (2, 85), (3, 110),
-                           (4, 95), (5, 130), (6, 175)):
+        for col, width in ((1, 145), (2, 92), (3, 108),
+                           (4, 100), (5, 148), (6, 165)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
         self._scroller = enable_smooth_scroll(self.table)
@@ -793,7 +837,7 @@ class ClassifyDialog(QDialog):
                    LEFT JOIN subjects s ON s.id=f.subject_id
                    WHERE f.id=?""", (fid,)).fetchone()
 
-            name_item = QTableWidgetItem(i18n.bidi_filename(file_row["original_name"]))
+            name_item = QTableWidgetItem(file_row["original_name"])
             name_item.setToolTip(file_row["original_name"])
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(r, 0, name_item)
@@ -812,30 +856,31 @@ class ClassifyDialog(QDialog):
             subject.setCurrentText(
                 file_row["subject_name"] or prefill.get("subject")
                 or suggested["subject"] or "")
-            self.table.setCellWidget(r, 1, subject)
+            self.table.setCellWidget(r, 1, _wrap_table_widget(subject))
 
             chapter = make_spinbox()
             chapter.setValue(file_row["chapter"] or 0)
-            self.table.setCellWidget(r, 2, chapter)
+            self.table.setCellWidget(r, 2, _wrap_table_widget(chapter))
 
             kind = QComboBox()
             kind.addItems(("جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر"))
             kind.setCurrentText(file_row["kind"] or "سایر")
-            self.table.setCellWidget(r, 3, kind)
+            self.table.setCellWidget(r, 3, _wrap_table_widget(kind))
 
             # A3b: درس (lesson) is a separate number from فصل (chapter) —
             # either, both, or neither may be set (design decision).
             lesson = make_spinbox()
             lesson.setValue(file_row["lesson"] or 0)
-            self.table.setCellWidget(r, 4, lesson)
+            self.table.setCellWidget(r, 4, _wrap_table_widget(lesson))
 
             year = make_year_combo(file_row["school_year"])
-            self.table.setCellWidget(r, 5, year)
+            self.table.setCellWidget(r, 5, _wrap_table_widget(year))
 
             # A5: the manifest's tags arrive as pre-fill too
             tags_edit = QLineEdit()
+            tags_edit.setPlaceholderText(tr("meta_tags_placeholder"))
             tags_edit.setText("، ".join(prefill.get("tags") or []))
-            self.table.setCellWidget(r, 6, tags_edit)
+            self.table.setCellWidget(r, 6, _wrap_table_widget(tags_edit))
 
             # widget positions 0–3 are pinned by existing tests; the
             # newer fields go after them
@@ -897,7 +942,7 @@ class ClassifyDialog(QDialog):
         buttons.addWidget(later)
         buttons.addStretch(1)
         layout.addLayout(buttons)
-        polish_dialog(self, 980)
+        polish_dialog(self, 1040)
 
     # self.rows layout (positions 0–3 pinned by existing tests):
     # (file_id, subject, chapter, kind, lesson, year, tags)
@@ -1181,9 +1226,9 @@ class MetadataDialog(QDialog):
         header_lay = QVBoxLayout(header_card)
         header_lay.setContentsMargins(14, 10, 14, 10)
         header_lay.setSpacing(3)
-        fn_lbl = QLabel(self.row['original_name'])
+        fn_lbl = FileNameLabel(self.row['original_name'])
         fn_lbl.setObjectName("DialogTitle")
-        fn_lbl.setWordWrap(True)
+        fn_lbl.setToolTip(self.row['original_name'])
         sub_lbl = QLabel(
             f"{human_size(self.row['size_bytes'])} · "
             f"{num(jalali_date(self.row['imported_at']))}")
@@ -1191,6 +1236,8 @@ class MetadataDialog(QDialog):
         header_lay.addWidget(fn_lbl)
         header_lay.addWidget(sub_lbl)
         form.addWidget(header_card)
+        self.tags.setPlaceholderText(tr("meta_tags_placeholder"))
+        row_labels: list[QLabel] = []
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
                               (tr("meta_lesson"), self.lesson),
@@ -1200,17 +1247,18 @@ class MetadataDialog(QDialog):
                               (tr("meta_note"), self.note)):
             row = QHBoxLayout()
             lab = QLabel(label)
-            lab.setFixedWidth(115)
+            row_labels.append(lab)
             widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             row.addWidget(lab)
             row.addWidget(widget, 1)
             form.addLayout(row)
+        _equalize_label_widths(row_labels)
         buttons = QHBoxLayout()
         buttons.addWidget(save)
         buttons.addWidget(cancel)
         buttons.addStretch(1)
         form.addLayout(buttons)
-        polish_dialog(self, 480)
+        polish_dialog(self, 520)
 
     def _save(self) -> None:
         conn = self.lib.conn
@@ -1290,6 +1338,7 @@ class BulkEditDialog(QDialog):
         hint.setObjectName("DialogHint")
         hint.setWordWrap(True)
         form.addWidget(hint)
+        row_labels: list[QLabel] = []
         for label, widget in ((tr("meta_subject"), self.subject),
                               (tr("meta_chapter"), self.chapter),
                               (tr("meta_lesson"), self.lesson),
@@ -1297,11 +1346,12 @@ class BulkEditDialog(QDialog):
                               (tr("meta_year"), self.year)):
             row = QHBoxLayout()
             lab = QLabel(label)
-            lab.setFixedWidth(110)
+            row_labels.append(lab)
             widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             row.addWidget(lab)
             row.addWidget(widget, 1)
             form.addLayout(row)
+        _equalize_label_widths(row_labels)
         buttons = QHBoxLayout()
         save = QPushButton(tr("ok"))
         save.setObjectName("Primary")
@@ -1401,12 +1451,13 @@ class SettingsDialog(QDialog):
 
         form = QVBoxLayout(self)
         form.setSpacing(10)
+        row_labels: list[QLabel] = []
         for label, widget in ((tr("settings_lang"), self.lang),
                               (tr("settings_font"), self.font_size),
                               (tr("settings_lib"), None)):
             row = QHBoxLayout()
             lab = QLabel(label)
-            lab.setFixedWidth(120)
+            row_labels.append(lab)
             row.addWidget(lab)
             if widget is None:
                 self.library.setLayoutDirection(Qt.LeftToRight)
@@ -1416,6 +1467,7 @@ class SettingsDialog(QDialog):
                 widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                 row.addWidget(widget, 1)
             form.addLayout(row)
+        _equalize_label_widths(row_labels)
 
         restart = QLabel(tr("settings_restart"))
         restart.setObjectName("DialogHint")
@@ -1645,16 +1697,23 @@ class ActivityDialog(QDialog):
             eh.setSectionResizeMode(1, QHeaderView.Fixed)
             self.event_table.setColumnWidth(1, 130)
             eh.setSectionResizeMode(2, QHeaderView.Stretch)
+            self.event_table.setItemDelegateForColumn(
+                2, FileNameDelegate(self.event_table, filename_role=Qt.UserRole)
+            )
             enable_smooth_scroll(self.event_table)
             from .main_window import jalali_date
             for i, ev in enumerate(events):
                 detail_str = str(ev["detail"] or "")
+                shown_detail, is_filename = _format_activity_detail(
+                    ev["action"], detail_str
+                )
                 values = (persian_digits(jalali_date(ev["ts"])),
                           ACTION_FA.get(ev["action"], ev["action"]),
-                          detail_str)
+                          shown_detail)
                 for col, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
                     if col == 2:
+                        item.setData(Qt.UserRole, is_filename)
                         item.setToolTip(detail_str)
                     self.event_table.setItem(i, col, item)
             layout = QVBoxLayout()
@@ -1921,6 +1980,7 @@ class TrashDialog(QDialog):
         self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.table.setItemDelegateForColumn(0, FileNameDelegate(self.table))
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -1998,7 +2058,7 @@ class TrashDialog(QDialog):
         self.btn_empty.setEnabled(True)
 
         for row, it in enumerate(items):
-            name_item = QTableWidgetItem(i18n.bidi_filename(it["original_name"]))
+            name_item = QTableWidgetItem(it["original_name"])
             name_item.setIcon(icons.icon("file-text", theme.PALETTE["muted"], 16))
             name_item.setData(Qt.UserRole, it["trash_name"])
             name_item.setToolTip(it["original_name"])
@@ -2112,6 +2172,7 @@ class ExamPackDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setItemDelegateForColumn(1, FileNameDelegate(self.table))
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)
@@ -2181,7 +2242,7 @@ class ExamPackDialog(QDialog):
             chk_item.setData(Qt.UserRole, r["id"])
             self.table.setItem(i, 0, chk_item)
 
-            name_item = QTableWidgetItem(i18n.bidi_filename(r["original_name"]))
+            name_item = QTableWidgetItem(r["original_name"])
             name_item.setToolTip(r["original_name"])
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(i, 1, name_item)

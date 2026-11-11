@@ -37,6 +37,8 @@ class DummyServer:
 
 def generate_all_screenshots(out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in out_dir.glob("*.png"):
+        stale.unlink()
     app = ensure_qapp()
 
     sandbox = SandboxEnvironment(count=8)
