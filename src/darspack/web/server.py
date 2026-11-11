@@ -14,6 +14,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -113,10 +114,12 @@ class ShareServer:
         self.port = 0                       # assigned by bind()
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._stopping = False
         self._fails: dict[str, list] = {}   # ip → [timestamps]
         self._fails_lock = threading.Lock()
 
     def start(self) -> list[str]:
+        self._stopping = False
         handler = _make_handler(self)
         self._httpd = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
         # Non-daemon handler threads (fixes limitations #18): daemon
@@ -137,7 +140,11 @@ class ShareServer:
 
     def stop(self) -> None:
         if self._httpd is not None:
+            self._stopping = True
             self._httpd.shutdown()
+            idle_closer = getattr(self, "_close_idle_connections", None)
+            if idle_closer is not None:
+                idle_closer()
             self._httpd.server_close()
             self._httpd = None
             closer = getattr(self, "_close_libraries", None)
@@ -178,6 +185,7 @@ def _make_handler(server: ShareServer):
     local = threading.local()
     registry: list[Library] = []
     registry_lock = threading.Lock()
+    idle_conns: set[socket.socket] = set()
 
     def _library() -> Library:
         lib = getattr(local, "library", None)
@@ -187,6 +195,15 @@ def _make_handler(server: ShareServer):
             with registry_lock:
                 registry.append(lib)
         return lib
+
+    def _close_idle() -> None:
+        with registry_lock:
+            conns = list(idle_conns)
+        for conn in conns:
+            try:
+                conn.shutdown(socket.SHUT_RD)
+            except OSError:
+                pass
 
     def _close_all() -> None:
         import sqlite3 as _sq
@@ -198,6 +215,7 @@ def _make_handler(server: ShareServer):
                     pass   # thread already gone — nothing to save
             registry.clear()
 
+    server._close_idle_connections = _close_idle
     server._close_libraries = _close_all
 
     class Handler(BaseHTTPRequestHandler):
@@ -207,9 +225,23 @@ def _make_handler(server: ShareServer):
         # carries an exact Content-Length — _send, _json and _serve_file
         # must keep that invariant.
         protocol_version = "HTTP/1.1"
+        timeout = 5.0
 
         def log_message(self, *args) -> None:   # silence per-request noise
             pass
+
+        def handle_one_request(self) -> None:
+            with registry_lock:
+                idle_conns.add(self.connection)
+            try:
+                super().handle_one_request()
+            except (TimeoutError, ConnectionError, OSError):
+                self.close_connection = True
+            finally:
+                with registry_lock:
+                    idle_conns.discard(self.connection)
+            if server._stopping:
+                self.close_connection = True
 
         # ---- helpers --------------------------------------------------
 
@@ -238,14 +270,18 @@ def _make_handler(server: ShareServer):
             query = urllib.parse.parse_qs(
                 urllib.parse.urlparse(self.path).query)
             given = (query.get("pin") or [""])[0]
-            if server.check_pin(self.client_address[0], given):
+            ip = self.client_address[0]
+            if server.check_pin(ip, given):
                 return True
-            self._json({"error": "pin"}, 403)
+            err = "lockout" if server._locked_out(ip) else "pin"
+            self._json({"error": err}, 403)
             return False
 
         # ---- routes ---------------------------------------------------
 
         def do_GET(self) -> None:
+            with registry_lock:
+                idle_conns.discard(self.connection)
             parsed = urllib.parse.urlparse(self.path)
             route = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -280,7 +316,8 @@ def _make_handler(server: ShareServer):
                          "subject": r["subject_name"],
                          "chapter": r["chapter"], "lesson": r["lesson"],
                          "kind": r["kind"],
-                         "size": r["size_bytes"]} for r in rows]})
+                         "size": r["size_bytes"],
+                         "available": bool(r["available"])} for r in rows]})
             elif route == "/api/subjects":
                 if self._pin_ok():
                     # D1: the phone's filter chips — one SQL for every
@@ -303,6 +340,8 @@ def _make_handler(server: ShareServer):
                 self._send(404, "not found".encode(), "text/plain")
 
         def do_POST(self) -> None:
+            with registry_lock:
+                idle_conns.discard(self.connection)
             route = urllib.parse.urlparse(self.path).path
             if route != "/api/upload":
                 self.close_connection = True   # body unread: don't reuse
@@ -318,7 +357,10 @@ def _make_handler(server: ShareServer):
                 urllib.parse.urlparse(self.path).query)
             name = (query.get("name") or ["upload.bin"])[0]
             name = Path(name).name or "upload.bin"       # strip any path part
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
             if not 0 < length <= MAX_UPLOAD:
                 self.close_connection = True   # body (partly) unread
                 self._json({"error": "size"}, 413)
@@ -343,8 +385,9 @@ def _make_handler(server: ShareServer):
                 meta["lesson"] = lesson_hint
             if subject_hint:
                 meta["subject"] = subject_hint
+            safe_suffix = re.sub(r"[^A-Za-z0-9._-]", "", Path(name).suffix)[:16]
             fd, tmp_name = tempfile.mkstemp(prefix="darspack-upload-",
-                                            suffix="-" + name)
+                                            suffix=safe_suffix or ".bin")
             tmp = Path(tmp_name)
             try:
                 with os.fdopen(fd, "wb") as f:
@@ -355,6 +398,10 @@ def _make_handler(server: ShareServer):
                             break
                         remaining -= len(chunk)
                         f.write(chunk)
+                if remaining > 0:
+                    self.close_connection = True
+                    self._json({"error": "incomplete"}, 400)
+                    return
                 from ..core.importer import import_file
                 result = import_file(_library(), tmp, display_name=name,
                                      meta=meta or None)
@@ -377,7 +424,8 @@ def _make_handler(server: ShareServer):
         def _serve_client(self) -> None:
             index = CLIENT_DIR / "index.html"
             if index.exists():
-                self._send(200, index.read_bytes(), "text/html; charset=utf-8")
+                self._send(200, index.read_bytes(), "text/html; charset=utf-8",
+                           no_store=True)
             else:
                 self._send(500, "client missing".encode(), "text/plain")
 
