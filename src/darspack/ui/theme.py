@@ -93,12 +93,14 @@ QToolButton#NavItem[active="true"] {
     border: 1px solid rgba(224, 168, 60, 0.35);
     border-right: 3px solid $accent;
 }
+QToolButton#NavItem[hasBadge="true"] {
+    padding: $nav_badge_padding;
+}
 QLabel#NavSectionHeader {
     color: #7b8393;
     font-size: 8.5pt;
     font-weight: 700;
     padding: 12px 10px 4px 10px;
-    letter-spacing: 0.4px;
 }
 QLabel#NavBadge {
     background: #463412;
@@ -134,7 +136,7 @@ QToolButton#SegmentBtn {
     background: $surface_2;
     color: $muted;
     border: 1px solid $border;
-    border-radius: 6px;
+    border-radius: 8px;
     padding: 4px 8px;
 }
 QToolButton#SegmentBtn:hover {
@@ -277,6 +279,18 @@ QFrame#BannerCard {
     background: $surface; border: 1px solid $border_soft;
     border-radius: $radius; padding: 12px 16px;
 }
+QFrame#StepCard {
+    background: $surface_2; border: 1px solid $border_soft;
+    border-radius: 8px;
+}
+QFrame#SlideCard {
+    background: $surface; border: 1px solid $border;
+    border-radius: 10px;
+}
+QScrollArea#TabScrollArea, QWidget#TabScrollViewport, QWidget#TabScrollContent {
+    background: transparent;
+    border: none;
+}
 QFrame#BulkBar {
     background: $surface; border: 1px solid $border;
     border-radius: $radius; padding: 6px 12px;
@@ -322,7 +336,17 @@ QComboBox {
 QComboBoxPrivateContainer {
     background: transparent;
 }
-QComboBox::drop-down { border: 0; width: 24px; }
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: $combo_dropdown_pos;
+    border: 0;
+    width: 24px;
+}
+QComboBox::down-arrow {
+    image: url("$chevron_down_icon");
+    width: 14px;
+    height: 14px;
+}
 QComboBox QAbstractItemView {
     background: $surface_2; border: 1px solid $border;
     border-radius: $radius; padding: 4px; outline: 0;
@@ -331,10 +355,20 @@ QComboBox QAbstractItemView {
 QSpinBox::up-button, QSpinBox::down-button {
     width: 18px; border: 0; background: transparent;
 }
+QSpinBox::up-arrow {
+    image: url("$chevron_up_icon");
+    width: 12px;
+    height: 12px;
+}
+QSpinBox::down-arrow {
+    image: url("$chevron_down_icon");
+    width: 12px;
+    height: 12px;
+}
 QCheckBox { spacing: 8px; }
 QCheckBox::indicator, QAbstractItemView::indicator {
     width: 18px; height: 18px; border-radius: 5px;
-    border: 1px solid $border; background: $surface_2;
+    border: 1px solid #4d5669; background: $surface_2;
 }
 QCheckBox::indicator:hover, QAbstractItemView::indicator:hover {
     border-color: $muted;
@@ -434,6 +468,13 @@ QToolButton::menu-indicator {
     margin: 0px;
     padding: 0px;
 }
+QToolButton[hasDropdown="true"]::menu-indicator {
+    image: url("$chevron_down_icon");
+    width: 12px;
+    height: 12px;
+    subcontrol-position: center left;
+    padding-left: 6px;
+}
 QToolButton#IconGhost {
     background: transparent;
     border: 1px solid transparent;
@@ -464,6 +505,7 @@ QMenu::item {
     padding: $menu_item_padding;
     margin: 2px 4px;
     border-radius: 6px;
+    min-width: 190px;
     color: $text;
 }
 QMenu::icon {
@@ -471,10 +513,15 @@ QMenu::icon {
 }
 QMenu::item:selected {
     background: #323b4c;
-    border-color: transparent;
+    border-color: #4a5870;
     color: #ffffff;
 }
 QMenu::item:disabled {
+    color: $faint;
+}
+QMenu::item:disabled:selected {
+    background: transparent;
+    border-color: transparent;
     color: $faint;
 }
 QMenu::separator {
@@ -514,6 +561,12 @@ QHeaderView {
 QHeaderView::section {
     background: $header; color: $muted; padding: 9px 10px;
     border: none; border-bottom: 1px solid $border; font-weight: 600;
+}
+QHeaderView::section:first {
+    $header_first_radius
+}
+QHeaderView::section:last {
+    $header_last_radius
 }
 QHeaderView::section:vertical {
     background: $header; color: $muted; border: none; border-left: 1px solid $border;
@@ -565,6 +618,7 @@ QProgressBar::chunk { background: $accent; border-radius: 4px; }
 
 QStatusBar {
     background: $surface; border-top: 1px solid $border; color: $muted;
+    padding: 4px 16px;
 }
 QStatusBar::item { border: 0; }
 QToolTip {
@@ -595,12 +649,24 @@ def build_qss(palette: dict | None = None) -> str:
     values.update(palette or {})
     check_icon = asset_path("icons/check.svg")
     values["check_icon"] = str(check_icon).replace("\\", "/")
+    chevron_down_icon = asset_path("icons/chevron-down-muted.svg")
+    values["chevron_down_icon"] = str(chevron_down_icon).replace("\\", "/")
+    chevron_up_icon = asset_path("icons/chevron-up-muted.svg")
+    values["chevron_up_icon"] = str(chevron_up_icon).replace("\\", "/")
     try:
         from .. import i18n
         is_fa = (i18n.language() == "fa")
     except Exception:
         is_fa = True
-    values["menu_item_padding"] = "8px 16px 8px 38px" if is_fa else "8px 38px 8px 16px"
+    values["menu_item_padding"] = "8px 16px 8px 16px" if is_fa else "8px 38px 8px 16px"
+    values["nav_badge_padding"] = "6px 12px 6px 42px" if is_fa else "6px 42px 6px 12px"
+    values["combo_dropdown_pos"] = "center left" if is_fa else "center right"
+    values["header_first_radius"] = (
+        "border-top-right-radius: 7px;" if is_fa else "border-top-left-radius: 7px;"
+    )
+    values["header_last_radius"] = (
+        "border-top-left-radius: 7px;" if is_fa else "border-top-right-radius: 7px;"
+    )
     return _QSS.substitute(values)
 
 

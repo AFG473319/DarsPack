@@ -39,6 +39,7 @@ STRINGS = {
         "btn_feedback": "بازخورد",
         "btn_settings": "تنظیمات",
         "status_files": "{} فایل در کتابخانه",
+        "status_files_filtered": "{0} از {1} فایل در کتابخانه",
         "unit_b": "بایت",
         "unit_kb": "کیلوبایت",
         "unit_mb": "مگابایت",
@@ -147,7 +148,8 @@ STRINGS = {
         "hints_hits_col": "تعداد تکرار",
         "stats_title": "آمار کتابخانه",
         "stats_total": "حجم کل فایل‌ها",
-        "stats_dedup": "حجم صرفه‌جویی‌شده (نسخه‌های تکراری که نگه داشته نشدند)",
+        "stats_dedup": "حجم صرفه‌جویی‌شده",
+        "stats_dedup_hint": "نسخه‌های تکراری که نگه داشته نشدند",
         "stats_unclassified": "فایل بدون درس",
         "stats_per_subject": "به تفکیک درس",
         "stats_per_kind": "به تفکیک نوع",
@@ -200,7 +202,13 @@ STRINGS = {
         "trash_restore_done": "{0} فایل با موفقیت به کتابخانه بازگردانده شد.",
         "trash_no_selection": "هیچ فایلی برای بازیابی انتخاب نشده است.",
         "trash_empty_state": "سطل زباله خالی است.",
+        "trash_empty_hint": "فایل‌های حذف‌شده تا زمان پاک‌سازی دائمی در اینجا نگهداری می‌شوند.",
         "trash_restore_failed": "بازگردانی {0} فایل با خطا مواجه شد.",
+        "export_header_sub": "یک بسته‌ی قابل انتقال و قابل راستی‌آزمایی از فایل‌های درسی بسازید.",
+        "verify_header_title": "گزارش راستی‌آزمایی بسته",
+        "verify_file_label": "بسته‌ی بررسی‌شده:",
+        "verify_count_ok": "{0} فایل با موفقیت بررسی شد و سالم است.",
+        "verify_count_bad": "{0} فایل بررسی شد · {1} مشکل یافت شد.",
         "btn_exam_pack": "بسته‌ساز شب امتحان",
         "exam_pack_title": "ساخت بسته‌ی شب امتحان",
         "exam_pack_subject": "درس مورد نظر:",
@@ -209,7 +217,7 @@ STRINGS = {
         "exam_pack_btn_create": "ایجاد بسته درس‌پک",
         "exam_pack_no_files": "هیچ فایلی برای ایجاد بسته انتخاب نشده است.",
         "exam_pack_done": "بسته‌ی شب امتحان با موفقیت ساخته شد ({0} فایل).",
-        "nav_sec_library": "کتابخانه من",
+        "nav_sec_library": "کتابخانه‌ی من",
         "nav_all_files": "همه فایل‌ها",
         "nav_unclassified": "نیازمند مشخصات",
         "nav_subjects": "درس‌ها",
@@ -280,6 +288,14 @@ STRINGS = {
         "help_quick_step3": "<b>۳. جست‌وجوی آسان:</b> با فیلترها و کادر جست‌وجو در چند ثانیه فایل مورد نظرتان را بیابید.",
         "help_quick_step4": "<b>۴. بسته‌ها و اشتراک:</b> با بسته‌ساز شب امتحان فایل‌ها را در یک ZIP خروجی بگیرید یا با Wi-Fi روی گوشی ببینید.",
         "help_phone_guide": "<b>چگونه فایل‌ها را روی گوشی یا تبلت ببینیم؟</b><br><br>۱. کامپیوتر و گوشی خود را به یک مودم یا هات‌اسپات (Wi-Fi یکسان) وصل کنید (نیازی به اینترنت نیست).<br><br>۲. دکمه‌ی <b>«اشتراک شبکه»</b> را در نوار بالای درس‌پک بزنید.<br><br>۳. با دوربین گوشی، بارکدخوان یا مرورگر گوشی کد QR نمایش داده شده را باز کنید.<br><br>۴. رمز ۴ رقمی (PIN) را وارد کنید تا تمام فایل‌ها و جزوه‌ها روی صفحه گوشی شما نمایش داده شوند.",
+        "help_phone_title": "مشاهده و دانلود فایل‌ها روی گوشی و تبلت (کاملاً آفلاین)",
+        "help_phone_step1_t": "۱. اتصال به یک شبکه‌ی وای‌فای مشترک",
+        "help_phone_step1_d": "کامپیوتر و گوشی (یا تبلت) را به یک مودم یا هات‌اسپات وصل کنید؛ هیچ نیازی به اتصال اینترنت نیست.",
+        "help_phone_step2_t": "۲. فعال‌سازی اشتراک شبکه در درس‌پک",
+        "help_phone_step2_d": "از نوار کناری یا دکمه‌ی «اشتراک شبکه»، سرور محلی را روشن کنید تا کد QR و نشانی و رمز ۴ رقمی (PIN) نمایش داده شود.",
+        "help_phone_step3_t": "۳. اسکن کد QR و وارد کردن رمز اتصال",
+        "help_phone_step3_d": "کد QR را با دوربین گوشی اسکن کنید یا نشانی را در مرورگر گوشی باز کرده و رمز ۴ رقمی را بزنید تا کتابخانه و امکان آپلود باز شود.",
+        "help_phone_note": "سرور محلی فقط تا زمانی که پنجره‌ی اشتراک شبکه باز است روشن می‌ماند و رمز هر بار به‌صورت تصادفی تولید می‌شود.",
         "help_faq_q1": "آیا فایل‌های اصلی من از کامپیوتر پاک می‌شوند؟",
         "help_faq_a1": "خیر. درس‌پک هنگام وارد کردن، یک نسخه‌ی رونوشت امن در پوشه‌ی کتابخانه ذخیره می‌کند و فایل اصلی شما کاملاً دست‌نخورده می‌ماند.",
         "help_faq_q2": "تکراری‌ها و تضاد نسخه‌ها چیست و چرا خودکار حذف نمی‌شوند؟",
@@ -322,6 +338,7 @@ STRINGS = {
         "btn_feedback": "Feedback",
         "btn_settings": "Settings",
         "status_files": "{} files in library",
+        "status_files_filtered": "{0} of {1} files in library",
         "unit_b": "B",
         "unit_kb": "KB",
         "unit_mb": "MB",
@@ -430,7 +447,8 @@ STRINGS = {
         "hints_hits_col": "Times matched",
         "stats_title": "Library stats",
         "stats_total": "Total file size",
-        "stats_dedup": "Space saved (duplicate copies never stored)",
+        "stats_dedup": "Space saved",
+        "stats_dedup_hint": "Duplicate copies never stored",
         "stats_unclassified": "Files without a subject",
         "stats_per_subject": "By subject",
         "stats_per_kind": "By kind",
@@ -483,7 +501,13 @@ STRINGS = {
         "trash_restore_done": "{0} file(s) restored to library.",
         "trash_no_selection": "No files selected to restore.",
         "trash_empty_state": "Trash bin is empty.",
+        "trash_empty_hint": "Deleted files stay here until permanently emptied.",
         "trash_restore_failed": "Failed to restore {0} file(s).",
+        "export_header_sub": "Create a verifiable package archive of your study files.",
+        "verify_header_title": "Package Verification Report",
+        "verify_file_label": "Verified archive:",
+        "verify_count_ok": "{0} file(s) checked and intact.",
+        "verify_count_bad": "{0} file(s) checked · {1} issue(s) found.",
         "btn_exam_pack": "Exam Revision Pack",
         "exam_pack_title": "Build Exam Revision Pack",
         "exam_pack_subject": "Select Subject:",
@@ -563,6 +587,14 @@ STRINGS = {
         "help_quick_step3": "<b>3. Search & Filter:</b> Find any file within seconds using search and sidebar filters.",
         "help_quick_step4": "<b>4. Packs & Sharing:</b> Build exam revision ZIP packages or share via Wi-Fi to your phone.",
         "help_phone_guide": "<b>How to view files on your phone or tablet?</b><br><br>1. Connect your computer and phone to the same Wi-Fi router or hotspot (no internet required).<br><br>2. Click <b>«Network Share»</b> in the DarsPack toolbar.<br><br>3. Scan the displayed QR code with your phone camera or browser.<br><br>4. Enter the 4-digit PIN to access all your study files directly on your phone.",
+        "help_phone_title": "View & transfer study files on your phone (100% offline)",
+        "help_phone_step1_t": "1. Connect to the same Wi-Fi network",
+        "help_phone_step1_d": "Join both your computer and phone (or tablet) to the same Wi-Fi router or hotspot — no internet access is required.",
+        "help_phone_step2_t": "2. Start Network Share in DarsPack",
+        "help_phone_step2_d": "Click «Network Share» in the sidebar or toolbar to launch the local web server with a QR code, LAN address, and 4-digit PIN.",
+        "help_phone_step3_t": "3. Scan QR code & enter the pairing PIN",
+        "help_phone_step3_d": "Scan the QR code with your phone camera (or open the LAN URL in a browser) and enter the PIN to browse, read, and upload files.",
+        "help_phone_note": "Sharing stays active only while the Network Share dialog is open, with a fresh random PIN generated every session.",
         "help_faq_q1": "Are original files deleted from my computer?",
         "help_faq_a1": "No. DarsPack stores a safe copy in its library folder and leaves your original files completely untouched.",
         "help_faq_q2": "What are duplicates and conflicts, and why aren't they auto-deleted?",
@@ -601,3 +633,25 @@ def num(value, lang: str | None = None) -> str:
     The single helper for UI counts, years and sizes."""
     text = str(value)
     return text.translate(_PERSIAN_DIGITS) if (lang or _current) == "fa" else text
+
+
+def bidi_filename(name: str, lang: str | None = None) -> str:
+    """Wrap mixed RTL+ASCII-extension filenames with Unicode isolates so
+    numerals stay bound to Persian words and `.ext` stays left-to-right."""
+    if not name or (lang or _current) != "fa":
+        return name
+    has_rtl = any(
+        "\u0600" <= ch <= "\u06FF"
+        or "\u0750" <= ch <= "\u077F"
+        or "\uFB50" <= ch <= "\uFDFF"
+        or "\uFE70" <= ch <= "\uFEFF"
+        for ch in name
+    )
+    if not has_rtl:
+        return name
+    dot = name.rfind(".")
+    if 0 < dot < len(name) - 1:
+        stem, suffix = name[:dot], name[dot:]
+        if suffix.isascii():
+            return f"\u200F\u2067{stem}\u2069\u200F\u2066{suffix}\u2069"
+    return f"\u200F\u2067{name}\u2069"
