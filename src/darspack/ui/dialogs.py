@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
     QMessageBox,
-    QPushButton, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
+    QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
     QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -2095,8 +2095,8 @@ class HelpDialog(QDialog):
         self.settings = settings or {}
         self.settings_path = settings_path
         self.setWindowTitle(tr("help_dialog_title"))
-        self.resize(720, 520)
-        self._clamp_to_screen()
+        self.setMinimumSize(560, 360)
+        self.resize(720, 500)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -2116,10 +2116,10 @@ class HelpDialog(QDialog):
         layout.addLayout(top_bar)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_quick_tab(), tr("help_tab_quick"))
+        self.tabs.addTab(self._make_scrollable(self._build_quick_tab()), tr("help_tab_quick"))
         self.tabs.addTab(self._build_shortcuts_tab(), tr("help_tab_shortcuts"))
-        self.tabs.addTab(self._build_phone_tab(), tr("help_tab_phone"))
-        self.tabs.addTab(self._build_faq_tab(), tr("help_tab_faq"))
+        self.tabs.addTab(self._make_scrollable(self._build_phone_tab()), tr("help_tab_phone"))
+        self.tabs.addTab(self._make_scrollable(self._build_faq_tab()), tr("help_tab_faq"))
         layout.addWidget(self.tabs, 1)
 
         btn_box = QHBoxLayout()
@@ -2130,15 +2130,31 @@ class HelpDialog(QDialog):
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
 
-        polish_dialog(self, 700)
+        polish_dialog(self, 560)
+        self._clamp_to_screen()
+
+    def _make_scrollable(self, widget: QWidget) -> QScrollArea:
+        """Wrap a tab content widget in a smooth-scrolling frameless QScrollArea."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        scroll.viewport().setStyleSheet("background: transparent;")
+        enable_smooth_scroll(scroll)
+        scroll.setWidget(widget)
+        return scroll
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._clamp_to_screen()
 
     def _clamp_to_screen(self) -> None:
         """Keep the dialog well within the available screen area.
 
         If the dialog's default geometry would place it too close to (or
-        below) the bottom edge, shrink it and re-centre so there is
-        always a comfortable margin.  The margin is 40 px — enough to
-        feel "a little above the absolute bottom" without wasting space.
+        below) the bottom edge, shrink it and re-position so there is always
+        a comfortable breathing room (at least 48px) higher than the
+        absolute bottom and taskbar.
         """
         from PySide6.QtWidgets import QApplication
         screen = None
@@ -2149,13 +2165,17 @@ class HelpDialog(QDialog):
         if screen is None:
             return
         avail = screen.availableGeometry()
-        margin = 40
+        margin = 48
         max_h = avail.height() - margin * 2
         if self.height() > max_h:
-            self.resize(self.width(), max(300, max_h))
-        # Centre on the available area
+            self.resize(self.width(), max(360, max_h))
+        # Center horizontally, and keep comfortably above the bottom edge
         geo = self.frameGeometry()
         geo.moveCenter(avail.center())
+        if geo.bottom() > avail.bottom() - margin:
+            geo.moveBottom(avail.bottom() - margin)
+        if geo.top() < avail.top() + margin:
+            geo.moveTop(avail.top() + margin)
         self.move(geo.topLeft())
 
     def _launch_tour(self) -> None:
@@ -2293,7 +2313,7 @@ class HelpDialog(QDialog):
             c_lay.addWidget(q_lbl)
 
             a_lbl = QLabel(a)
-            a_lbl.setStyleSheet(f"font-size: 12.5px; color: {theme.PALETTE['text']}; line-height: 1.5;")
+            a_lbl.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']};")
             a_lbl.setWordWrap(True)
             c_lay.addWidget(a_lbl)
 
