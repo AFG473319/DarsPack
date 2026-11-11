@@ -193,6 +193,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1000, 600)
         self._file_icon = icons.icon("file-text", theme.PALETTE["muted"], 16)
         self._pdf_icon = icons.icon("file-text", theme.PALETTE["accent"], 16)
+        self._image_icon = icons.icon("image", theme.PALETTE["accent"], 16)
         self._archive_icon = icons.icon("archive", theme.PALETTE["muted"], 16)
         self._package_icon = icons.icon("package", theme.PALETTE["accent"], 16)
 
@@ -205,7 +206,7 @@ class MainWindow(QMainWindow):
         self.search_shell.setFixedWidth(350)
         self.search_shell.setFixedHeight(38)
         shell = QHBoxLayout(self.search_shell)
-        shell.setContentsMargins(10, 0, 6, 0)
+        shell.setContentsMargins(10, 0, 12, 0)
         shell.setSpacing(6)
         search_icon = QLabel()
         search_icon.setPixmap(
@@ -245,9 +246,9 @@ class MainWindow(QMainWindow):
         self.subject_combo = QComboBox()
         self.kind_combo = QComboBox()
         self.year_combo = QComboBox()
-        for combo, width in ((self.subject_combo, 150),
-                             (self.kind_combo, 130),
-                             (self.year_combo, 120)):
+        for combo, width in ((self.subject_combo, 142),
+                             (self.kind_combo, 120),
+                             (self.year_combo, 130)):
             combo.setFixedWidth(width)
             combo.setFixedHeight(36)
             theme.setup_combobox(combo)
@@ -255,27 +256,6 @@ class MainWindow(QMainWindow):
         self.kind_combo.currentIndexChanged.connect(self.refresh)
         self.year_combo.currentIndexChanged.connect(self.refresh)
 
-        # --- app bar: brand + search + one primary action -------------
-        app_bar = QWidget()
-        app_bar.setObjectName("AppBar")
-        bar = QHBoxLayout(app_bar)
-        bar.setContentsMargins(16, 10, 16, 10)
-        bar.setSpacing(12)
-
-        brand = QSvgWidget(str(asset_path("icon/darspack.svg")))
-        brand.setFixedSize(34, 34)
-        bar.addWidget(brand)
-        titles = QVBoxLayout()
-        titles.setSpacing(0)
-        title = QLabel(tr("app_title"))
-        title.setObjectName("BrandTitle")
-        subtitle = QLabel(tr("app_subtitle"))
-        subtitle.setObjectName("BrandSub")
-        titles.addWidget(title)
-        titles.addWidget(subtitle)
-        bar.addLayout(titles)
-        bar.addStretch(1)
-        bar.addWidget(self.search_shell)
         self.import_button = QPushButton(tr("btn_import"))
         self.import_button.setObjectName("Primary")
         self.import_button.setIcon(
@@ -283,12 +263,11 @@ class MainWindow(QMainWindow):
         self.import_button.setIconSize(QSize(18, 18))
         self.import_button.setFixedHeight(38)
         self.import_button.clicked.connect(self.open_import_dialog)
-        bar.addWidget(self.import_button)
 
         filter_bar = QWidget()
         filter_bar.setObjectName("FilterBar")
         toolbar = QHBoxLayout(filter_bar)
-        toolbar.setContentsMargins(20, 8, 20, 8)
+        toolbar.setContentsMargins(16, 8, 16, 8)
         toolbar.setSpacing(8)
 
         self.packages_menu = QMenu(self)
@@ -302,6 +281,7 @@ class MainWindow(QMainWindow):
                           "folder-open", self.import_package)
         self.packages_button = self._tool_button(tr("btn_packages"),
                           "package")
+        self.packages_button.setProperty("hasDropdown", True)
         self.packages_button.setPopupMode(QToolButton.InstantPopup)
         self.packages_button.setMenu(self.packages_menu)
         toolbar.addWidget(self.packages_button)
@@ -314,17 +294,13 @@ class MainWindow(QMainWindow):
         self.share_button.clicked.connect(self.toggle_share)
         toolbar.addWidget(self.share_button)
 
-        self.help_button = self._tool_button(tr("btn_help"), "circle-help")
-        self.help_button.clicked.connect(self.open_help_dialog)
-        toolbar.addWidget(self.help_button)
-
         self.more_menu = QMenu(self)
         self.more_menu.setMinimumWidth(220)
         self.edit_action = self._menu_action(
             self.more_menu, tr("btn_edit_meta"), "file-text", self.edit_metadata)
         self.delete_action = self._menu_action(
             self.more_menu, tr("btn_delete"), "trash-2",
-            self.delete_selected_files)
+            self.delete_selected_files, icon_color=theme.PALETTE["danger"])
         self.edit_action.setEnabled(False)
         self._menu_action(self.more_menu, tr("btn_trash_bin"), "archive",
                           self.open_trash_dialog)
@@ -338,7 +314,7 @@ class MainWindow(QMainWindow):
         self._menu_action(
             self.more_menu, tr("btn_feedback"), "message-square",
             lambda: dialogs.FeedbackDialog(self, self.settings).exec())
-        self._menu_action(self.more_menu, tr("btn_tour"), "history",
+        self._menu_action(self.more_menu, tr("btn_tour"), "compass",
                           self.open_welcome_tour)
         self._menu_action(self.more_menu, tr("btn_help"), "circle-help",
                           self.open_help_dialog)
@@ -392,9 +368,11 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         for col, width in ((1, 130), (2, 140), (3, 100),
                            (4, 90), (5, 110), (6, 90)):
-            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            header.setSectionResizeMode(col, QHeaderView.Interactive)
             self.table.setColumnWidth(col, width)
         self._sort_orders: dict[int, Qt.SortOrder] = {}
+        header.setSortIndicator(5, Qt.DescendingOrder)
+        header.setSortIndicatorShown(True)
         header.sectionClicked.connect(self._on_header_clicked)
         self.table.doubleClicked.connect(self.open_selected_file)
         # E3: right-click a row → «حذف از کتابخانه…» (confirmed, and the
@@ -463,7 +441,7 @@ class MainWindow(QMainWindow):
         # 1. Navigation Rail (سایدبار ناوبری روان)
         self.nav_rail = QWidget()
         self.nav_rail.setObjectName("NavRail")
-        self.nav_rail.setFixedWidth(180)
+        self.nav_rail.setFixedWidth(210)
         nav_vbox = QVBoxLayout(self.nav_rail)
         nav_vbox.setContentsMargins(8, 12, 8, 12)
         nav_vbox.setSpacing(4)
@@ -494,6 +472,7 @@ class MainWindow(QMainWindow):
             btn.setObjectName("NavItem")
             btn.setText(label)
             btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            btn._icon_name = icon_name
             btn.setIcon(icons.icon(icon_name, theme.PALETTE["muted"], 16))
             btn.setIconSize(QSize(16, 16))
             btn.setCursor(Qt.PointingHandCursor)
@@ -503,7 +482,18 @@ class MainWindow(QMainWindow):
 
             btn._base_label = label
             btn._badge_count = 0
-            btn._badge = True if count_badge else None
+            btn._badge = None
+            if count_badge:
+                btn.setProperty("hasBadge", True)
+                badge_row = QHBoxLayout(btn)
+                badge_row.setContentsMargins(10, 0, 10, 0)
+                badge_row.addStretch(1)
+                badge = QLabel("")
+                badge.setObjectName("NavBadge")
+                badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+                badge.hide()
+                badge_row.addWidget(badge)
+                btn._badge = badge
 
             nav_vbox.addWidget(btn)
             self._nav_items[key] = btn
@@ -517,6 +507,7 @@ class MainWindow(QMainWindow):
         self.nav_all = _add_nav_item("all", tr("nav_all_files"), "folder-open",
                                      lambda: self._select_nav_filter(None, None))
         self.nav_all.setProperty("active", True)
+        self.nav_all.setIcon(icons.icon("folder-open", "#ffd875", 16))
 
         self.nav_unclassified = _add_nav_item(
             "unclass", tr("nav_unclassified"), "triangle-alert",
@@ -540,6 +531,7 @@ class MainWindow(QMainWindow):
         # Bottom section: Stats & Settings
         _add_nav_item("stats", tr("nav_stats"), "chart-column", self.show_stats)
         _add_nav_item("history", tr("nav_history"), "history", self.show_history)
+        _add_nav_item("help", tr("btn_help"), "circle-help", self.open_help_dialog)
         _add_nav_item("settings", tr("nav_settings"), "settings", self.open_settings)
 
         root_layout.addWidget(self.nav_rail)
@@ -564,7 +556,9 @@ class MainWindow(QMainWindow):
         # View Switcher (Table View vs Card Grid View)
         self.btn_view_table = QToolButton()
         self.btn_view_table.setObjectName("SegmentBtn")
-        self.btn_view_table.setIcon(icons.icon("list", theme.PALETTE["text"], 16))
+        self.btn_view_table.setIcon(icons.icon("list", "#ffffff", 16))
+        self.btn_view_table.setIconSize(QSize(16, 16))
+        self.btn_view_table.setFixedSize(38, 38)
         self.btn_view_table.setToolTip(tr("view_table"))
         self.btn_view_table.setProperty("active", True)
         self.btn_view_table.clicked.connect(lambda: self._set_view_mode("table"))
@@ -573,6 +567,8 @@ class MainWindow(QMainWindow):
         self.btn_view_cards = QToolButton()
         self.btn_view_cards.setObjectName("SegmentBtn")
         self.btn_view_cards.setIcon(icons.icon("grid", theme.PALETTE["muted"], 16))
+        self.btn_view_cards.setIconSize(QSize(16, 16))
+        self.btn_view_cards.setFixedSize(38, 38)
         self.btn_view_cards.setToolTip(tr("view_cards"))
         self.btn_view_cards.setProperty("active", False)
         self.btn_view_cards.clicked.connect(lambda: self._set_view_mode("cards"))
@@ -643,7 +639,6 @@ class MainWindow(QMainWindow):
         status.setSizeGripEnabled(False)
         self.count_label = QLabel("")
         self.count_label.setObjectName("Muted")
-        self.count_label.setContentsMargins(12, 0, 0, 0)
         status.addWidget(self.count_label)
         self.unclassified_button = QPushButton("")
         self.unclassified_button.setObjectName("WarnPill")
@@ -703,32 +698,33 @@ class MainWindow(QMainWindow):
         return button
 
     def _menu_action(self, menu: QMenu, text: str, icon_name: str,
-                     slot) -> QAction:
+                     slot, icon_color: str | None = None) -> QAction:
+        color = icon_color or theme.PALETTE["text"]
         action = menu.addAction(
-            icons.icon(icon_name, theme.PALETTE["muted"], 16), text)
+            icons.icon(icon_name, color, 16), text)
         action.triggered.connect(slot)
         return action
 
     def _select_nav_filter(self, subject_id, kind) -> None:
         """Handle clicks on the Fluent Navigation Rail."""
+        active_key = "unclass" if subject_id == -1 else "all"
         for key, btn in getattr(self, "_nav_items", {}).items():
-            btn.setProperty("active", False)
+            is_act = (key == active_key)
+            btn.setProperty("active", is_act)
+            if hasattr(btn, "_icon_name"):
+                btn.setIcon(icons.icon(
+                    btn._icon_name,
+                    "#ffd875" if is_act else theme.PALETTE["muted"],
+                    16,
+                ))
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
         if subject_id == -1:
-            if hasattr(self, "nav_unclassified"):
-                self.nav_unclassified.setProperty("active", True)
-                self.nav_unclassified.style().unpolish(self.nav_unclassified)
-                self.nav_unclassified.style().polish(self.nav_unclassified)
             idx = self.subject_combo.findData(-1)
             if idx >= 0:
                 self.subject_combo.setCurrentIndex(idx)
         else:
-            if hasattr(self, "nav_all"):
-                self.nav_all.setProperty("active", True)
-                self.nav_all.style().unpolish(self.nav_all)
-                self.nav_all.style().polish(self.nav_all)
             self.subject_combo.setCurrentIndex(0)
             self.kind_combo.setCurrentIndex(0)
 
@@ -737,6 +733,10 @@ class MainWindow(QMainWindow):
         is_cards = (mode == "cards")
         self.btn_view_table.setProperty("active", not is_cards)
         self.btn_view_cards.setProperty("active", is_cards)
+        self.btn_view_table.setIcon(icons.icon(
+            "list", theme.PALETTE["muted"] if is_cards else "#ffffff", 16))
+        self.btn_view_cards.setIcon(icons.icon(
+            "grid", "#ffffff" if is_cards else theme.PALETTE["muted"], 16))
         self.btn_view_table.style().unpolish(self.btn_view_table)
         self.btn_view_table.style().polish(self.btn_view_table)
         self.btn_view_cards.style().unpolish(self.btn_view_cards)
@@ -778,9 +778,10 @@ class MainWindow(QMainWindow):
             f_icon.setPixmap(self._file_icon_for(row["original_name"]).pixmap(24, 24))
             header_row.addWidget(f_icon)
 
-            lbl_name = QLabel(row["original_name"])
+            lbl_name = QLabel(i18n.bidi_filename(row["original_name"]))
             lbl_name.setObjectName("CardTitle")
             lbl_name.setWordWrap(True)
+            lbl_name.setToolTip(row["original_name"])
             header_row.addWidget(lbl_name, 1)
             c_layout.addLayout(header_row)
 
@@ -863,6 +864,8 @@ class MainWindow(QMainWindow):
             return self._package_icon
         if ext == ".pdf":
             return self._pdf_icon
+        if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"):
+            return self._image_icon
         return self._file_icon
 
     def _on_header_clicked(self, logical_index: int) -> None:
@@ -909,7 +912,8 @@ class MainWindow(QMainWindow):
         for i, row in enumerate(rows):
             date_str, size_str = self._display_strs_for(row)
             year_str = row["school_year"] or "—"
-            values = [row["original_name"], row["subject_name"] or "—",
+            values = [i18n.bidi_filename(row["original_name"]),
+                      row["subject_name"] or "—",
                       chapter_lesson_display(row["chapter"], row["lesson"]),
                       row["kind"] or "—", size_str,
                       persian_digits(date_str), persian_digits(year_str)]
@@ -939,19 +943,36 @@ class MainWindow(QMainWindow):
         self._update_empty_state(len(rows))
         self._update_action_states()
         unclassified = unclassified_count(self.lib.conn)   # F6: computed once
-        self.count_label.setText(
-            tr("status_files").format(i18n.num(len(rows))))
+        total_files = self.lib.conn.execute(
+            "SELECT COUNT(*) FROM files").fetchone()[0]
+        is_filtered = bool(
+            self.search_box.text().strip()
+            or subject_data is not None
+            or self.kind_combo.currentData() is not None
+            or year is not None
+        )
+        if is_filtered and total_files > 0:
+            self.count_label.setText(
+                tr("status_files_filtered").format(
+                    i18n.num(len(rows)), i18n.num(total_files)))
+        else:
+            self.count_label.setText(
+                tr("status_files").format(i18n.num(len(rows))))
         self.unclassified_button.setText(
             tr("status_unclassified").format(i18n.num(unclassified)))
         self.unclassified_button.setVisible(bool(unclassified))
 
         # Update Navigation Rail unclassified count badge
         if hasattr(self, "nav_unclassified"):
-            base = getattr(self.nav_unclassified, "_base_label", tr("nav_unclassified"))
-            if unclassified > 0:
-                self.nav_unclassified.setText(f"{base} ({i18n.num(unclassified)})")
+            badge = getattr(self.nav_unclassified, "_badge", None)
+            if isinstance(badge, QLabel):
+                badge.setText(i18n.num(unclassified))
+                badge.setVisible(unclassified > 0)
             else:
-                self.nav_unclassified.setText(base)
+                base = getattr(self.nav_unclassified, "_base_label", tr("nav_unclassified"))
+                self.nav_unclassified.setText(
+                    f"{base} ({i18n.num(unclassified)})" if unclassified > 0 else base
+                )
 
         # If card view is currently active, re-populate cards
         if hasattr(self, "card_scroll") and self.card_scroll.isVisible():
