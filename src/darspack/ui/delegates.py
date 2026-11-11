@@ -5,10 +5,10 @@ widget per row — 2,000 rows stay cheap, and the badge stays crisp.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
+    QApplication, QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
 )
 
 # subject/kind colours are deliberately muted so the eye stays on the names
@@ -47,3 +47,157 @@ class KindBadgeDelegate(QStyledItemDelegate):
         painter.setPen(QColor(foreground))
         painter.drawText(rect, Qt.AlignCenter, text)
         painter.restore()
+
+
+def split_filename_ext(name: str) -> tuple[str, str]:
+    """Split an ASCII file extension into `(stem, EXT)` for badge display."""
+    dot = name.rfind(".")
+    if 0 < dot < len(name) - 1:
+        ext = name[dot + 1:]
+        if ext.isascii() and ext.isalnum() and 1 <= len(ext) <= 6:
+            return name[:dot], ext.upper()
+    return name, ""
+
+
+def paint_filename_badge(
+    painter: QPainter,
+    rect: QRectF,
+    font: QFont,
+    text: str,
+    *,
+    text_color: QColor,
+    selected: bool,
+    rtl: bool,
+    inline_badge: bool = False,
+) -> None:
+    """Paint a filename stem plus a muted ASCII extension pill without BiDi glitches."""
+    if not text:
+        return
+    stem, ext = split_filename_ext(text)
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    painter.setFont(font)
+    fm = painter.fontMetrics()
+
+    if ext:
+        badge_font = QFont(font)
+        badge_font.setPointSizeF(max(7.2, badge_font.pointSizeF() - 1.5))
+        badge_font.setWeight(QFont.DemiBold)
+        bm = QFontMetrics(badge_font)
+        ext_w = max(36, bm.horizontalAdvance(ext) + 12)
+        ext_h = 19
+        gap = 8
+        cy = rect.center().y()
+
+        if inline_badge:
+            max_stem_w = max(24.0, rect.width() - ext_w - gap - 4)
+            elided = fm.elidedText(stem, Qt.ElideMiddle, int(max_stem_w))
+            drawn_w = min(float(fm.horizontalAdvance(elided)), max_stem_w)
+            if rtl:
+                stem_rect = QRectF(
+                    rect.right() - drawn_w, rect.top(), drawn_w + 1, rect.height()
+                )
+                bx = stem_rect.left() - gap - ext_w
+            else:
+                stem_rect = QRectF(
+                    rect.left(), rect.top(), drawn_w + 1, rect.height()
+                )
+                bx = stem_rect.right() + gap
+        else:
+            elided = None
+            if rtl:
+                bx = rect.left() + 4
+                stem_rect = QRectF(
+                    bx + ext_w + gap, rect.top(),
+                    max(24.0, rect.right() - (bx + ext_w + gap)),
+                    rect.height(),
+                )
+            else:
+                bx = rect.right() - ext_w - 4
+                stem_rect = QRectF(
+                    rect.left(), rect.top(),
+                    max(24.0, bx - gap - rect.left()),
+                    rect.height(),
+                )
+
+        badge_rect = QRectF(bx, cy - ext_h / 2, ext_w, ext_h)
+        painter.setPen(QColor("#3c4860" if selected else "#2c3446"))
+        painter.setBrush(QColor("#263044" if selected else "#1d222e"))
+        painter.drawRoundedRect(badge_rect, 5, 5)
+        painter.setFont(badge_font)
+        painter.setPen(QColor("#c7d1e2" if selected else "#949eae"))
+        painter.drawText(badge_rect, Qt.AlignCenter, ext)
+
+        painter.setFont(font)
+        if elided is None:
+            elided = fm.elidedText(stem, Qt.ElideMiddle, int(stem_rect.width()))
+    else:
+        stem_rect = QRectF(rect)
+        elided = fm.elidedText(stem, Qt.ElideMiddle, int(stem_rect.width()))
+
+    painter.setPen(text_color)
+    align = (Qt.AlignRight if rtl else Qt.AlignLeft) | Qt.AlignAbsolute | Qt.AlignVCenter
+    painter.drawText(stem_rect, align, elided)
+    painter.restore()
+
+
+class FileNameLabel(QLabel):
+    """QLabel that keeps the raw filename in `.text()` while painting the stem
+    and an inline extension pill cleanly in RTL/LTR banners."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        fm = self.fontMetrics()
+        stem, ext = split_filename_ext(self.text())
+        w = fm.horizontalAdvance(stem) + (48 if ext else 0) + 8
+        return QSize(max(120, min(640, w)), max(fm.height() + 6, 26))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(120, max(self.fontMetrics().height() + 6, 26))
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        rtl = self.layoutDirection() == Qt.RightToLeft
+        color = self.palette().color(QPalette.ColorRole.WindowText)
+        paint_filename_badge(
+            painter, QRectF(self.rect()), self.font(), self.text(),
+            text_color=color, selected=False, rtl=rtl, inline_badge=True,
+        )
+
+
+class FileNameDelegate(QStyledItemDelegate):
+    """Render filenames cleanly in RTL/LTR tables with a muted extension badge
+    so Latin extensions (e.g. PDF, PNG) never collide with Persian numerals or
+    strand a leading dot at the end of a line."""
+
+    _split_ext = staticmethod(split_filename_ext)
+
+    def __init__(self, parent=None, *, filename_role: int | None = None):
+        super().__init__(parent)
+        self._filename_role = filename_role
+
+    def paint(self, painter, option, index) -> None:
+        if self._filename_role is not None and not index.data(self._filename_role):
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text = opt.text
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        text_rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        opt.text = ""
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        selected = bool(opt.state & QStyle.State_Selected)
+        rtl = opt.direction == Qt.RightToLeft
+        text_color = (
+            opt.palette.color(QPalette.ColorRole.HighlightedText)
+            if selected else opt.palette.color(QPalette.ColorRole.Text)
+        )
+        paint_filename_badge(
+            painter, QRectF(text_rect), opt.font, text,
+            text_color=text_color, selected=selected, rtl=rtl, inline_badge=False,
+        )

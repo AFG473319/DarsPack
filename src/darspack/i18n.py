@@ -83,6 +83,7 @@ STRINGS = {
         "meta_chapter": "فصل",
         "meta_kind": "نوع",
         "meta_tags": "برچسب‌ها (با ویرگول جدا کنید)",
+        "meta_tags_placeholder": "مثلاً: فصل ۱، میان‌ترم",
         "meta_note": "یادداشت",
         "settings_title": "تنظیمات",
         "settings_lang": "زبان / Language",
@@ -382,6 +383,7 @@ STRINGS = {
         "meta_chapter": "Chapter",
         "meta_kind": "Kind",
         "meta_tags": "Tags (comma separated)",
+        "meta_tags_placeholder": "e.g. chapter 1, midterm",
         "meta_note": "Note",
         "settings_title": "Settings",
         "settings_lang": "Language / زبان",
@@ -652,6 +654,6 @@ def bidi_filename(name: str, lang: str | None = None) -> str:
     dot = name.rfind(".")
     if 0 < dot < len(name) - 1:
         stem, suffix = name[:dot], name[dot:]
-        if suffix.isascii():
-            return f"\u200F\u2067{stem}\u2069\u200F\u2066{suffix}\u2069"
+        if suffix.isascii() and suffix[1:].isalnum():
+            return f"\u200F\u2067{stem}\u2069 \u2066({suffix})\u2069"
     return f"\u200F\u2067{name}\u2069"
