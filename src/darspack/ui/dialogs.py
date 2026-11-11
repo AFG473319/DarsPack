@@ -15,15 +15,16 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QLocale, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QProgressBar,
 
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
     QMessageBox,
-    QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget,
+    QTableWidget, QTabWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+    QWidget,
 )
 
 from .. import __version__, asset_path, i18n
@@ -51,12 +52,29 @@ def polish_dialog(dialog, min_width: int | None = None) -> None:
         dialog.setMinimumWidth(min_width)
 
 
+_LATIN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _latin_digits(text: str) -> str:
+    return text.translate(_LATIN_DIGITS)
+
+
+class _PersianSpinBox(QSpinBox):
+    """QSpinBox subclass that renders Persian numerals (۰-۹) in `fa` mode."""
+
+    def textFromValue(self, val: int) -> str:
+        return num(val)
+
+    def valueFromText(self, text: str) -> int:
+        return super().valueFromText(_latin_digits(text))
+
+
 def make_year_combo(current: str | None) -> QComboBox:
     """Editable school-year combo (A3): the row's year (or the current
     school year) plus the years around it — anything else can be typed,
     the column is free text («1405-1406»)."""
     from ..core.schoolyear import current_school_year
-    chosen = current or current_school_year()
+    chosen = _latin_digits(current) if current else current_school_year()
     base = int(chosen[:4])
     combo = QComboBox()
     combo.setEditable(True)
@@ -67,9 +85,8 @@ def make_year_combo(current: str | None) -> QComboBox:
 
 
 def make_spinbox(minimum: int = 0, maximum: int = 40, special_value: str = "—") -> QSpinBox:
-    """A number field that renders ۰-۹ in the Persian UI (a Persian
-    QLocale is what makes QSpinBox display Persian digits)."""
-    spin = QSpinBox()
+    """A number field that renders ۰-۹ in the Persian UI."""
+    spin = _PersianSpinBox()
     spin.setRange(minimum, maximum)
     if special_value and minimum == 0:
         spin.setSpecialValueText(special_value)
@@ -288,9 +305,13 @@ class FeedbackDialog(QDialog):
 
         layout = QVBoxLayout(self)
         self.notice = QLabel("")          # «پیش‌نویسِ قبلی بازگردانده شد»
+        self.notice.setObjectName("SuccessText")
+        self.notice.hide()
         layout.addWidget(self.notice)
         layout.addWidget(QLabel(tr("fb_rating")))
         stars = QHBoxLayout()
+        stars.setSpacing(10)
+        stars.addStretch(1)
         self.star_buttons = []
         for i in range(1, 6):
             star = QPushButton("☆")
@@ -298,11 +319,12 @@ class FeedbackDialog(QDialog):
             star.setCheckable(True)
             star.setFixedSize(40, 40)
             star.setIconSize(QSize(28, 28))
-            star.setIcon(icons.icon("star", theme.PALETTE["border"], 28))
+            star.setIcon(icons.icon("star", theme.PALETTE["muted"], 28))
             star.setCursor(Qt.PointingHandCursor)
             star.clicked.connect(lambda checked, n=i: self._set_stars(n))
             stars.addWidget(star)
             self.star_buttons.append(star)
+        stars.addStretch(1)
         layout.addLayout(stars)
 
         layout.addWidget(QLabel(tr("fb_category")))
@@ -356,6 +378,7 @@ class FeedbackDialog(QDialog):
             self.message.setPlainText(str(draft.get("message") or ""))
             self.contact.setText(str(draft.get("contact") or ""))
             self.notice.setText(tr("fb_draft_restored"))
+            self.notice.show()
 
         self.message.textChanged.connect(self._on_message_changed)
         self.contact.textChanged.connect(self._schedule_draft)
@@ -382,7 +405,7 @@ class FeedbackDialog(QDialog):
             star.setText("★" if is_active else "☆")
             star.setIcon(
                 icons.icon("star-filled" if is_active else "star",
-                           theme.PALETTE["accent"] if is_active else theme.PALETTE["border"],
+                           theme.PALETTE["accent"] if is_active else theme.PALETTE["muted"],
                            28)
             )
         self._schedule_draft()
@@ -611,6 +634,14 @@ class ImportDialog(QDialog):
         self.keep = QCheckBox(tr("import_keep"))
         layout.addWidget(self.keep)
 
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton(tr("cancel"))
+        cancel_btn.setObjectName("Secondary")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+
         pick_files.clicked.connect(self._pick_files)
         pick_folder.clicked.connect(self._pick_folder)
         polish_dialog(self, 480)
@@ -639,14 +670,59 @@ class ExportDialog(QDialog):
         self.selected_ids = selected_ids
         self.setWindowTitle(tr("export_title"))
 
-        btn_selected = QPushButton(
-            tr("export_scope_selected").format(len(selected_ids)))
-        btn_filtered = QPushButton(
-            tr("export_scope_filtered").format(len(parent.last_rows)))
-        btn_selected.setEnabled(bool(selected_ids))
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName("BannerCard")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(14, 10, 14, 10)
+        h_lay.setSpacing(12)
+        h_icon = QLabel()
+        h_icon.setPixmap(icons.tinted_pixmap("package", theme.PALETTE["accent"], 26))
+        h_lay.addWidget(h_icon)
+        h_text = QVBoxLayout()
+        h_text.setSpacing(3)
+        h_title = QLabel(tr("export_title"))
+        h_title.setObjectName("DialogTitle")
+        h_sub = QLabel(tr("export_header_sub"))
+        h_sub.setObjectName("DialogHint")
+        h_sub.setWordWrap(True)
+        h_text.addWidget(h_title)
+        h_text.addWidget(h_sub)
+        h_lay.addLayout(h_text, 1)
+        layout.addWidget(header)
+
+        btn_selected = QPushButton(
+            tr("export_scope_selected").format(num(len(selected_ids))))
+        btn_filtered = QPushButton(
+            tr("export_scope_filtered").format(num(len(parent.last_rows))))
+        btn_selected.setEnabled(bool(selected_ids))
+        btn_selected.setObjectName("Primary" if selected_ids else "Secondary")
+        btn_filtered.setObjectName("Secondary" if selected_ids else "Primary")
+        btn_selected.setFixedHeight(38)
+        btn_filtered.setFixedHeight(38)
+        btn_selected.setIcon(icons.icon(
+            "package",
+            theme.PALETTE["on_accent"] if selected_ids else theme.PALETTE["muted"],
+            16,
+        ))
+        btn_filtered.setIcon(icons.icon(
+            "download",
+            theme.PALETTE["text"] if selected_ids else theme.PALETTE["on_accent"],
+            16,
+        ))
         layout.addWidget(btn_selected)
         layout.addWidget(btn_filtered)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch(1)
+        btn_cancel = QPushButton(tr("cancel"))
+        btn_cancel.setObjectName("Secondary")
+        btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(btn_cancel)
+        layout.addLayout(btn_box)
+
         btn_selected.clicked.connect(lambda: self._export(selected_ids))
         btn_filtered.clicked.connect(
             lambda: self._export([r["id"] for r in parent.last_rows]))
@@ -686,7 +762,7 @@ class ClassifyDialog(QDialog):
         super().__init__(parent)
         self.lib = lib
         self.setWindowTitle(tr("classify_title"))
-        self.resize(940, 560)
+        self.resize(1000, 560)
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
                    tr("meta_kind"), tr("meta_lesson"),
@@ -701,8 +777,8 @@ class ClassifyDialog(QDialog):
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        for col, width in ((1, 150), (2, 85), (3, 110),
-                           (4, 85), (5, 130), (6, 140)):
+        for col, width in ((1, 145), (2, 85), (3, 110),
+                           (4, 95), (5, 130), (6, 175)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
             self.table.setColumnWidth(col, width)
         self._scroller = enable_smooth_scroll(self.table)
@@ -717,7 +793,8 @@ class ClassifyDialog(QDialog):
                    LEFT JOIN subjects s ON s.id=f.subject_id
                    WHERE f.id=?""", (fid,)).fetchone()
 
-            name_item = QTableWidgetItem(file_row["original_name"])
+            name_item = QTableWidgetItem(i18n.bidi_filename(file_row["original_name"]))
+            name_item.setToolTip(file_row["original_name"])
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(r, 0, name_item)
 
@@ -886,7 +963,7 @@ class ClassifyDialog(QDialog):
                        lesson=?, school_year=? WHERE id=?""",
                     (subject_id, chapter.value() or None,
                      kind.currentText(), lesson.value() or None,
-                     year.currentText().strip() or None, fid))
+                     _latin_digits(year.currentText().strip()) or None, fid))
                 if name:
                     self._learn_tokens(fid, name)
                 self._save_tags(conn, fid, tags.text())
@@ -914,17 +991,56 @@ class VerifyReportDialog(QDialog):
         self.parent_window = parent
         self.path, self.report = path, report
         self.setWindowTitle(tr("btn_verify"))
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        header = QFrame()
+        header.setObjectName("BannerCard")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(14, 10, 14, 10)
+        h_lay.setSpacing(12)
+        h_icon = QLabel()
+        h_icon.setPixmap(icons.tinted_pixmap(
+            "circle-check" if report.ok else "triangle-alert",
+            theme.PALETTE["success"] if report.ok else theme.PALETTE["danger"],
+            26,
+        ))
+        h_lay.addWidget(h_icon)
+        h_text = QVBoxLayout()
+        h_text.setSpacing(3)
+        h_title = QLabel(tr("verify_header_title"))
+        h_title.setObjectName("DialogTitle")
+        h_sub = QLabel(
+            f"{tr('verify_file_label')} "
+            f"{i18n.bidi_filename(Path(str(path)).name)}"
+        )
+        h_sub.setObjectName("DialogHint")
+        h_sub.setWordWrap(True)
+        h_text.addWidget(h_title)
+        h_text.addWidget(h_sub)
+        h_lay.addLayout(h_text, 1)
+        layout.addWidget(header)
+
+        body = QFrame()
+        body.setObjectName("StepCard")
+        b_lay = QVBoxLayout(body)
+        b_lay.setContentsMargins(14, 12, 14, 12)
         text = (tr("verify_ok") if report.ok
                 else tr("verify_problems") + "\n" + "\n".join(report.problems))
         label = QLabel(text)
+        label.setWordWrap(True)
+        label.setObjectName("SuccessText" if report.ok else "Muted")
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout = QVBoxLayout(self)
-        layout.addWidget(label)
+        b_lay.addWidget(label)
+        layout.addWidget(body)
+
         db.log(library.conn, "verify",
                f"{'ok' if report.ok else len(report.problems)} problems — {path}")
         if report.ok and offer_import:
             btn = QPushButton(tr("pkg_import_btn"))
             btn.setObjectName("Primary")
+            btn.setFixedHeight(38)
+            btn.setIcon(icons.icon("download", theme.PALETTE["on_accent"], 16))
             btn.clicked.connect(self._import_contents)
             layout.addWidget(btn)
         polish_dialog(self, 520)
@@ -976,15 +1092,16 @@ class DuplicatesDialog(QDialog):
                 e_lay.addSpacing(8)
                 e_lay.addWidget(msg_lbl)
                 e_lay.addWidget(sub_lbl)
-                tabs.addTab(empty_card, f"{title} (0)")
+                tabs.addTab(empty_card, f"{title} ({num(0)})")
             else:
                 listing = QListWidget()
                 enable_smooth_scroll(listing)
                 for group in groups:
-                    names = " ، ".join(r["original_name"] for r in group.rows)
+                    names = " ، ".join(
+                        i18n.bidi_filename(r["original_name"]) for r in group.rows)
                     listing.addItem(f"[{group.label_fa}] {names}\n    {group.detail_fa}")
                 listing.itemDoubleClicked.connect(self._jump)
-                tabs.addTab(listing, f"{title} ({len(groups)})")
+                tabs.addTab(listing, f"{title} ({num(len(groups))})")
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
 
@@ -1000,6 +1117,7 @@ class DuplicatesDialog(QDialog):
     def _jump(self, item) -> None:
         # item text: "[label] name1 ، name2\n    detail" — search the first name
         first = item.text().split("] ", 1)[1].split(" ، ", 1)[0].strip()
+        first = first.translate(str.maketrans("", "", "\u200f\u2066\u2067\u2069"))
         self.parent_window.search_box.setText(first)
         self.accept()
 
@@ -1082,9 +1200,10 @@ class MetadataDialog(QDialog):
                               (tr("meta_note"), self.note)):
             row = QHBoxLayout()
             lab = QLabel(label)
-            lab.setMinimumWidth(90)
+            lab.setFixedWidth(115)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             row.addWidget(lab)
-            row.addWidget(widget)
+            row.addWidget(widget, 1)
             form.addLayout(row)
         buttons = QHBoxLayout()
         buttons.addWidget(save)
@@ -1106,7 +1225,7 @@ class MetadataDialog(QDialog):
                    WHERE id=?""",
                 (subject_id, chapter, self.lesson.value() or None,
                  self.kind.currentText(),
-                 self.year.currentText().strip() or None,
+                 _latin_digits(self.year.currentText().strip()) or None,
                  self.note.text(), self.file_id))
             conn.execute("DELETE FROM file_tags WHERE file_id=?", (self.file_id,))
             for tag in self.tags.text().replace(",", "،").split("،"):
@@ -1178,9 +1297,10 @@ class BulkEditDialog(QDialog):
                               (tr("meta_year"), self.year)):
             row = QHBoxLayout()
             lab = QLabel(label)
-            lab.setMinimumWidth(90)
+            lab.setFixedWidth(110)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             row.addWidget(lab)
-            row.addWidget(widget)
+            row.addWidget(widget, 1)
             form.addLayout(row)
         buttons = QHBoxLayout()
         save = QPushButton(tr("ok"))
@@ -1214,7 +1334,7 @@ class BulkEditDialog(QDialog):
         if self.lesson.value():
             sets.append("lesson=?")
             params.append(self.lesson.value())
-        year = self.year.currentText().strip()
+        year = _latin_digits(self.year.currentText().strip())
         if year and year != none:
             sets.append("school_year=?")
             params.append(year)
@@ -1253,16 +1373,23 @@ class SettingsDialog(QDialog):
 
         self.library = QLineEdit(str(settings.get("library", "")))
 
-        browse = QPushButton("…")
+        browse = QPushButton()
+        browse.setObjectName("Secondary")
+        browse.setIcon(icons.icon("folder-open", theme.PALETTE["text"], 16))
+        browse.setIconSize(QSize(16, 16))
+        browse.setFixedSize(38, 36)
+        browse.setToolTip(tr("import_pick_folder"))
         browse.clicked.connect(self._browse)
 
         from .. import feedback_config
         self.fb_endpoint = QLineEdit(
             str(settings.get("feedback_endpoint") or
                 feedback_config.FEEDBACK_ENDPOINT))
+        self.fb_endpoint.setLayoutDirection(Qt.LeftToRight)
         self.fb_form_url = QLineEdit(
             str(settings.get("feedback_form_url") or
                 feedback_config.FEEDBACK_FORM_URL))
+        self.fb_form_url.setLayoutDirection(Qt.LeftToRight)
 
         save = QPushButton(tr("ok"))
         save.setObjectName("Primary")
@@ -1273,43 +1400,52 @@ class SettingsDialog(QDialog):
         cancel.clicked.connect(self.reject)
 
         form = QVBoxLayout(self)
+        form.setSpacing(10)
         for label, widget in ((tr("settings_lang"), self.lang),
                               (tr("settings_font"), self.font_size),
                               (tr("settings_lib"), None)):
             row = QHBoxLayout()
-            row.addWidget(QLabel(label))
+            lab = QLabel(label)
+            lab.setFixedWidth(120)
+            row.addWidget(lab)
             if widget is None:
+                self.library.setLayoutDirection(Qt.LeftToRight)
                 row.addWidget(self.library, 1)
                 row.addWidget(browse)
             else:
+                widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                 row.addWidget(widget, 1)
             form.addLayout(row)
-
-        # endpoints are developer-facing: behind an «پیشرفته» toggle
-        self.advanced = QCheckBox(tr("settings_advanced"))
-        self.advanced_fields = QWidget()
-        advanced_layout = QVBoxLayout(self.advanced_fields)
-        advanced_layout.setContentsMargins(0, 0, 0, 0)
-        advanced_layout.setSpacing(6)
-        advanced_layout.addWidget(QLabel(tr("settings_fb_endpoint")))
-        advanced_layout.addWidget(self.fb_endpoint)
-        advanced_layout.addWidget(QLabel(tr("settings_fb_form_url")))
-        advanced_layout.addWidget(self.fb_form_url)
-        self.advanced_fields.setVisible(False)
-        self.advanced.toggled.connect(self.advanced_fields.setVisible)
-        form.addWidget(self.advanced)
-        form.addWidget(self.advanced_fields)
 
         restart = QLabel(tr("settings_restart"))
         restart.setObjectName("DialogHint")
         restart.setWordWrap(True)
         form.addWidget(restart)
+
+        # endpoints are developer-facing: behind an «پیشرفته» toggle
+        self.advanced = QCheckBox(tr("settings_advanced"))
+        self.advanced_fields = QFrame()
+        self.advanced_fields.setObjectName("BannerCard")
+        advanced_layout = QVBoxLayout(self.advanced_fields)
+        advanced_layout.setContentsMargins(12, 10, 12, 10)
+        advanced_layout.setSpacing(8)
+        for lbl_key, field in (("settings_fb_endpoint", self.fb_endpoint),
+                               ("settings_fb_form_url", self.fb_form_url)):
+            adv_lbl = QLabel(tr(lbl_key))
+            adv_lbl.setObjectName("DialogHint")
+            advanced_layout.addWidget(adv_lbl)
+            advanced_layout.addWidget(field)
+        self.advanced_fields.setVisible(False)
+        self.advanced.toggled.connect(self.advanced_fields.setVisible)
+        form.addWidget(self.advanced)
+        form.addWidget(self.advanced_fields)
+
         buttons = QHBoxLayout()
         buttons.addWidget(save)
         buttons.addWidget(cancel)
         buttons.addStretch(1)
         form.addLayout(buttons)
-        polish_dialog(self, 480)
+        polish_dialog(self, 500)
 
     def _browse(self) -> None:
         path = QFileDialog.getExistingDirectory(self, tr("settings_lib"))
@@ -1336,29 +1472,42 @@ class ShareDialog(QDialog):
         self.on_close = on_close
         self.setWindowTitle(tr("share_title"))
         layout = QVBoxLayout(self)
+        layout.setSpacing(10)
         caption = QLabel(tr("share_pin"))
+        caption.setObjectName("DialogHint")
         caption.setAlignment(Qt.AlignCenter)
-        caption.setStyleSheet("color: #a0a0a8;")
         layout.addWidget(caption)
         pin_label = QLabel(persian_digits(str(server.pin)))
+        pin_label.setObjectName("PinDigits")
         pin_label.setAlignment(Qt.AlignCenter)
-        pin_label.setStyleSheet(
-            "font-size: 30px; font-weight: bold; letter-spacing: 6px;")
         layout.addWidget(pin_label)
         copy_pin = QPushButton(tr("copy_pin"))
         copy_pin.setObjectName("Ghost")
+        copy_pin.setIcon(icons.icon("copy", theme.PALETTE["muted"], 14))
         copy_pin.clicked.connect(
             lambda: QApplication.clipboard().setText(str(server.pin)))
         layout.addWidget(copy_pin, 0, Qt.AlignCenter)
-        layout.addWidget(QLabel(tr("share_urls")))
-        for url in urls:
-            line = QLabel(url)
-            line.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        urls_lbl = QLabel(tr("share_urls"))
+        urls_lbl.setWordWrap(True)
+        layout.addWidget(urls_lbl)
+        from urllib.parse import urlparse
+        non_loopback = [
+            u for u in urls
+            if (urlparse(u).hostname or "") not in ("127.0.0.1", "localhost", "::1")
+        ]
+        shown_urls = non_loopback or urls
+        for url in shown_urls:
+            line = QLineEdit(url)
+            line.setReadOnly(True)
+            line.setLayoutDirection(Qt.LeftToRight)
+            line.setAlignment(Qt.AlignCenter)
             layout.addWidget(line)
         lan = pick_lan_url(urls)
         if lan is not None:
             copy_url = QPushButton(tr("copy_url"))
             copy_url.setObjectName("Ghost")
+            copy_url.setIcon(icons.icon("link", theme.PALETTE["muted"], 14))
             copy_url.clicked.connect(
                 lambda: QApplication.clipboard().setText(lan))
             layout.addWidget(copy_url, 0, Qt.AlignCenter)
@@ -1378,13 +1527,20 @@ class ShareDialog(QDialog):
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(12, 12, 12, 12)
             card_layout.addWidget(qr, 0, Qt.AlignCenter)
-            layout.addWidget(QLabel(tr("qr_caption")))
+            qr_cap = QLabel(tr("qr_caption"))
+            qr_cap.setObjectName("DialogHint")
+            qr_cap.setAlignment(Qt.AlignCenter)
+            layout.addWidget(qr_cap)
             layout.addWidget(card, 0, Qt.AlignCenter)
-        layout.addWidget(QLabel(tr("share_hint")))
+        hint_lbl = QLabel(tr("share_hint"))
+        hint_lbl.setObjectName("DialogHint")
+        hint_lbl.setWordWrap(True)
+        layout.addWidget(hint_lbl)
         # D4: poll the catalog every 5 s — a phone upload becomes visible
         # on the desktop while sharing, not only after the dialog closes.
         self._upload_label = QLabel("")
-        self._upload_label.setStyleSheet("color: #8fd08f;")
+        self._upload_label.setObjectName("SuccessText")
+        self._upload_label.setAlignment(Qt.AlignCenter)
         self._upload_label.hide()
         layout.addWidget(self._upload_label)
         self._file_count_at_start = self._count_files()
@@ -1393,10 +1549,14 @@ class ShareDialog(QDialog):
         self._poll_timer.setInterval(5000)
         self._poll_timer.timeout.connect(self._check_files)
         self._poll_timer.start()
+        stop_row = QHBoxLayout()
+        stop_row.addStretch(1)
         stop = QPushButton(tr("btn_stop_share"))
         stop.setObjectName("Secondary")
         stop.clicked.connect(self.accept)
-        layout.addWidget(stop)
+        stop_row.addWidget(stop)
+        stop_row.addStretch(1)
+        layout.addLayout(stop_row)
         polish_dialog(self, 440)
 
     def _count_files(self) -> int:
@@ -1478,16 +1638,25 @@ class ActivityDialog(QDialog):
             self.event_table.setShowGrid(False)
             self.event_table.setAlternatingRowColors(True)
             self.event_table.setSelectionBehavior(QTableWidget.SelectRows)
-            self.event_table.horizontalHeader().setStretchLastSection(True)
+            self.event_table.setWordWrap(False)
+            eh = self.event_table.horizontalHeader()
+            eh.setSectionResizeMode(0, QHeaderView.Fixed)
+            self.event_table.setColumnWidth(0, 120)
+            eh.setSectionResizeMode(1, QHeaderView.Fixed)
+            self.event_table.setColumnWidth(1, 130)
+            eh.setSectionResizeMode(2, QHeaderView.Stretch)
             enable_smooth_scroll(self.event_table)
             from .main_window import jalali_date
             for i, ev in enumerate(events):
+                detail_str = str(ev["detail"] or "")
                 values = (persian_digits(jalali_date(ev["ts"])),
                           ACTION_FA.get(ev["action"], ev["action"]),
-                          ev["detail"])
+                          detail_str)
                 for col, value in enumerate(values):
-                    self.event_table.setItem(
-                        i, col, QTableWidgetItem(str(value)))
+                    item = QTableWidgetItem(str(value))
+                    if col == 2:
+                        item.setToolTip(detail_str)
+                    self.event_table.setItem(i, col, item)
             layout = QVBoxLayout()
             layout.addWidget(self.event_table)
             page = QWidget()
@@ -1503,9 +1672,12 @@ class ActivityDialog(QDialog):
                ORDER BY h.hits DESC""").fetchall()
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.addWidget(QLabel(tr("hints_explain")))
+        layout.setSpacing(10)
+        explain_lbl = QLabel(tr("hints_explain"))
+        explain_lbl.setObjectName("DialogHint")
+        explain_lbl.setWordWrap(True)
+        layout.addWidget(explain_lbl)
         if rules:
-            from PySide6.QtWidgets import QHeaderView
             self.rule_table = QTableWidget(len(rules), 3)
             self.rule_table.setHorizontalHeaderLabels(
                 (tr("hints_token"), tr("meta_subject"), tr("hints_hits_col")))
@@ -1515,26 +1687,48 @@ class ActivityDialog(QDialog):
             self.rule_table.setShowGrid(False)
             self.rule_table.setAlternatingRowColors(True)
             self.rule_table.setSelectionBehavior(QTableWidget.SelectRows)
-            self.rule_table.horizontalHeader().setSectionResizeMode(
-                0, QHeaderView.Stretch)
+            rh = self.rule_table.horizontalHeader()
+            rh.setSectionResizeMode(0, QHeaderView.Stretch)
+            rh.setSectionResizeMode(1, QHeaderView.Fixed)
+            self.rule_table.setColumnWidth(1, 140)
+            rh.setSectionResizeMode(2, QHeaderView.Fixed)
+            self.rule_table.setColumnWidth(2, 110)
             enable_smooth_scroll(self.rule_table)
             for i, rule in enumerate(rules):
                 self.rule_table.setItem(i, 0, QTableWidgetItem(rule["token"]))
                 self.rule_table.setItem(i, 1, QTableWidgetItem(rule["subject"]))
-                self.rule_table.setItem(
-                    i, 2, QTableWidgetItem(tr("hints_hits").format(
-                        num(rule["hits"]))))
+                hits_item = QTableWidgetItem(tr("hints_hits").format(
+                    num(rule["hits"])))
+                hits_item.setTextAlignment(Qt.AlignCenter)
+                self.rule_table.setItem(i, 2, hits_item)
             layout.addWidget(self.rule_table)
-            forget = QPushButton(tr("hints_forget"))
-            forget.setObjectName("Danger")
-            forget.clicked.connect(self._forget_selected_rule)
-            layout.addWidget(forget)
+            forget_row = QHBoxLayout()
+            self.forget_btn = QPushButton(tr("hints_forget"))
+            self.forget_btn.setObjectName("Danger")
+            self.forget_btn.setIcon(icons.icon("trash-2", theme.PALETTE["danger"], 15))
+            self.forget_btn.setEnabled(False)
+            self.rule_table.itemSelectionChanged.connect(
+                lambda: self.forget_btn.setEnabled(
+                    bool(self.rule_table.selectedItems())
+                )
+            )
+            self.forget_btn.clicked.connect(self._forget_selected_rule)
+            forget_row.addWidget(self.forget_btn)
+            forget_row.addStretch(1)
+            layout.addLayout(forget_row)
         else:
             layout.addWidget(self._message_page(tr("hints_empty")))
         tabs.addTab(page, tr("hints_title"))
 
         layout = QVBoxLayout(self)
         layout.addWidget(tabs)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QPushButton(tr("close"))
+        close_btn.setObjectName("Secondary")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
         polish_dialog(self, 720)
 
     def _forget_selected_rule(self) -> None:
@@ -1575,8 +1769,6 @@ def stat_bar_row(name: str, count: int, max_count: int) -> QWidget:
     bar.setTextVisible(False)
     bar.setFixedHeight(8)
     bar.setObjectName("StatBar")
-    if i18n.language() == "fa":
-        bar.setInvertedAppearance(True)
     count_label = QLabel(num(count))
     count_label.setMinimumWidth(32)
     count_label.setAlignment(Qt.AlignCenter)
@@ -1648,7 +1840,7 @@ class StatsDialog(QDialog):
     def __init__(self, parent, stats: dict):
         super().__init__(parent)
         self.setWindowTitle(tr("stats_title"))
-        self.resize(480, 520)
+        self.resize(600, 540)
 
         layout = QVBoxLayout(self)
         if stats["file_count"] == 0 and not stats["dedup_bytes"]:
@@ -1658,9 +1850,12 @@ class StatsDialog(QDialog):
             stat_cards_layout = QHBoxLayout()
             stat_cards_layout.setSpacing(10)
 
-            def make_stat_card(title: str, value: str, icon_name: str) -> QFrame:
+            def make_stat_card(title: str, value: str, icon_name: str,
+                               tooltip: str = "") -> QFrame:
                 card = QFrame()
                 card.setObjectName("BannerCard")
+                if tooltip:
+                    card.setToolTip(tooltip)
                 c_lay = QVBoxLayout(card)
                 c_lay.setContentsMargins(12, 10, 12, 10)
                 c_lay.setSpacing(4)
@@ -1679,7 +1874,9 @@ class StatsDialog(QDialog):
                 return card
 
             stat_cards_layout.addWidget(make_stat_card(tr("stats_total"), human_size(stats["total_bytes"]), "archive"))
-            stat_cards_layout.addWidget(make_stat_card(tr("stats_dedup"), human_size(stats["dedup_bytes"]), "sparkles"))
+            stat_cards_layout.addWidget(make_stat_card(
+                tr("stats_dedup"), human_size(stats["dedup_bytes"]),
+                "sparkles", tr("stats_dedup_hint")))
             stat_cards_layout.addWidget(make_stat_card(tr("stats_unclassified"), num(stats["unclassified"]), "file-text"))
             layout.addLayout(stat_cards_layout)
 
@@ -1697,10 +1894,10 @@ class StatsDialog(QDialog):
         close.setObjectName("Secondary")
         close.clicked.connect(self.accept)
         buttons = QHBoxLayout()
-        buttons.addWidget(close)
         buttons.addStretch(1)
+        buttons.addWidget(close)
         layout.addLayout(buttons)
-        polish_dialog(self, 520)
+        polish_dialog(self, 600)
 
 
 class TrashDialog(QDialog):
@@ -1737,9 +1934,25 @@ class TrashDialog(QDialog):
 
         layout.addWidget(self.table)
 
-        self.empty_label = QLabel(tr("trash_empty_state"))
-        self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet(f"color: {theme.PALETTE['muted']}; padding: 20px; font-size: 13px;")
+        self.empty_label = QFrame()
+        self.empty_label.setObjectName("BannerCard")
+        e_lay = QVBoxLayout(self.empty_label)
+        e_lay.setContentsMargins(24, 36, 24, 36)
+        e_lay.setSpacing(8)
+        e_lay.setAlignment(Qt.AlignCenter)
+        e_icon = QLabel()
+        e_icon.setAlignment(Qt.AlignCenter)
+        e_icon.setPixmap(icons.tinted_pixmap("archive", theme.PALETTE["muted"], 36))
+        e_title = QLabel(tr("trash_empty_state"))
+        e_title.setObjectName("DialogTitle")
+        e_title.setAlignment(Qt.AlignCenter)
+        e_hint = QLabel(tr("trash_empty_hint"))
+        e_hint.setObjectName("DialogHint")
+        e_hint.setWordWrap(True)
+        e_hint.setAlignment(Qt.AlignCenter)
+        e_lay.addWidget(e_icon)
+        e_lay.addWidget(e_title)
+        e_lay.addWidget(e_hint)
         layout.addWidget(self.empty_label)
 
         btn_box = QHBoxLayout()
@@ -1754,7 +1967,6 @@ class TrashDialog(QDialog):
         self.btn_empty.setObjectName("Danger")
         self.btn_empty.setIcon(icons.icon("trash-2", theme.PALETTE["danger"], 16))
         self.btn_empty.setIconSize(QSize(16, 16))
-        self.btn_empty.setStyleSheet(f"color: {theme.PALETTE['danger']};")
         self.btn_empty.clicked.connect(self._empty_trash)
         btn_box.addWidget(self.btn_empty)
 
@@ -1786,10 +1998,10 @@ class TrashDialog(QDialog):
         self.btn_empty.setEnabled(True)
 
         for row, it in enumerate(items):
-            name_item = QTableWidgetItem(it["original_name"])
+            name_item = QTableWidgetItem(i18n.bidi_filename(it["original_name"]))
             name_item.setIcon(icons.icon("file-text", theme.PALETTE["muted"], 16))
             name_item.setData(Qt.UserRole, it["trash_name"])
-            name_item.setToolTip(it["trash_name"])
+            name_item.setToolTip(it["original_name"])
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(row, 0, name_item)
 
@@ -1803,7 +2015,7 @@ class TrashDialog(QDialog):
             size_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(row, 2, size_item)
 
-            date_str = jalali_date(it["deleted_at"]) if it.get("deleted_at") else "—"
+            date_str = num(jalali_date(it["deleted_at"])) if it.get("deleted_at") else "—"
             date_item = QTableWidgetItem(date_str)
             date_item.setTextAlignment(Qt.AlignCenter)
             date_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -1868,11 +2080,7 @@ class ExamPackDialog(QDialog):
         layout = QVBoxLayout(self)
 
         filter_card = QFrame()
-        filter_card.setObjectName("filterCard")
-        filter_card.setStyleSheet(
-            f"QFrame#filterCard {{ background-color: {theme.PALETTE['surface_2']}; "
-            f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: 8px; }}"
-        )
+        filter_card.setObjectName("BannerCard")
         card_layout = QHBoxLayout(filter_card)
         card_layout.setContentsMargins(12, 8, 12, 8)
         card_layout.setSpacing(14)
@@ -1896,7 +2104,7 @@ class ExamPackDialog(QDialog):
 
         layout.addWidget(filter_card)
 
-        headers = ["✓", tr("col_name"), tr("col_subject"), tr("col_kind"), tr("col_chapter"), tr("col_size")]
+        headers = ["☑", tr("col_name"), tr("col_subject"), tr("col_kind"), tr("col_chapter"), tr("col_size")]
         self.table = QTableWidget(0, len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
@@ -1907,7 +2115,8 @@ class ExamPackDialog(QDialog):
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.Fixed)
-        self.table.setColumnWidth(0, 36)
+        self.table.setColumnWidth(0, 38)
+        header.sectionClicked.connect(self._on_header_clicked)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         for col, width in ((2, 120), (3, 110), (4, 90), (5, 90)):
             header.setSectionResizeMode(col, QHeaderView.Fixed)
@@ -1917,7 +2126,7 @@ class ExamPackDialog(QDialog):
         layout.addWidget(self.table)
 
         self.summary_label = QLabel()
-        self.summary_label.setStyleSheet(f"color: {theme.PALETTE['muted']}; font-size: 12.5px; padding: 2px 4px;")
+        self.summary_label.setObjectName("DialogHint")
         layout.addWidget(self.summary_label)
 
         btn_box = QHBoxLayout()
@@ -1972,7 +2181,8 @@ class ExamPackDialog(QDialog):
             chk_item.setData(Qt.UserRole, r["id"])
             self.table.setItem(i, 0, chk_item)
 
-            name_item = QTableWidgetItem(r["original_name"])
+            name_item = QTableWidgetItem(i18n.bidi_filename(r["original_name"]))
+            name_item.setToolTip(r["original_name"])
             name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(i, 1, name_item)
 
@@ -1997,6 +2207,23 @@ class ExamPackDialog(QDialog):
             sz_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(i, 5, sz_item)
 
+        self._updating = False
+        self._update_summary()
+
+    def _on_header_clicked(self, col: int) -> None:
+        if col != 0 or self.table.rowCount() == 0:
+            return
+        all_checked = all(
+            (self.table.item(r, 0).checkState() == Qt.Checked)
+            for r in range(self.table.rowCount())
+            if self.table.item(r, 0) is not None
+        )
+        new_state = Qt.Unchecked if all_checked else Qt.Checked
+        self._updating = True
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it is not None:
+                it.setCheckState(new_state)
         self._updating = False
         self._update_summary()
 
@@ -2093,12 +2320,9 @@ class WelcomeDialog(QDialog):
         ]
         for icon_name, heading, desc in slides_data:
             slide_widget = QFrame()
-            slide_widget.setObjectName("BannerCard")
-            slide_widget.setStyleSheet(
-                f"background: {theme.PALETTE['surface']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-                f"border-radius: {theme.METRICS['radius_card']}px; padding: 20px;"
-            )
+            slide_widget.setObjectName("SlideCard")
             s_layout = QVBoxLayout(slide_widget)
+            s_layout.setContentsMargins(28, 24, 28, 24)
             s_layout.setSpacing(14)
 
             s_layout.addStretch()
@@ -2109,25 +2333,26 @@ class WelcomeDialog(QDialog):
             s_layout.addWidget(icon_lbl, 0, Qt.AlignHCenter)
 
             h_lbl = QLabel(heading)
+            h_lbl.setObjectName("DialogTitle")
             h_lbl.setAlignment(Qt.AlignCenter)
-            h_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme.PALETTE['text']};")
             s_layout.addWidget(h_lbl, 0, Qt.AlignHCenter)
 
             d_lbl = QLabel(desc)
+            d_lbl.setObjectName("DialogHint")
             d_lbl.setAlignment(Qt.AlignCenter)
             d_lbl.setWordWrap(True)
             d_lbl.setMinimumWidth(400)
-            d_lbl.setStyleSheet(f"font-size: 13px; line-height: 1.6; color: {theme.PALETTE['muted']}; padding: 0 10px;")
             s_layout.addWidget(d_lbl)
             s_layout.addStretch()
 
             self.stack.addWidget(slide_widget)
 
+        self.stack.currentChanged.connect(lambda _: self._update_slide_view())
         layout.addWidget(self.stack, 1)
 
         self.indicator_lbl = QLabel()
+        self.indicator_lbl.setObjectName("DialogHint")
         self.indicator_lbl.setAlignment(Qt.AlignCenter)
-        self.indicator_lbl.setStyleSheet(f"color: {theme.PALETTE['muted']}; font-size: 12px;")
         layout.addWidget(self.indicator_lbl)
 
         self.dont_show_check = QCheckBox(tr("welcome_dont_show"))
@@ -2199,8 +2424,8 @@ class HelpDialog(QDialog):
         self.settings = settings or {}
         self.settings_path = settings_path
         self.setWindowTitle(tr("help_dialog_title"))
-        self.setMinimumSize(560, 360)
-        self.resize(720, 500)
+        self.setMinimumSize(600, 420)
+        self.resize(760, 620)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
@@ -2214,7 +2439,7 @@ class HelpDialog(QDialog):
 
         btn_tour = QPushButton(tr("btn_tour"))
         btn_tour.setObjectName("Secondary")
-        btn_tour.setIcon(icons.icon("history", theme.PALETTE["text"], 16))
+        btn_tour.setIcon(icons.icon("compass", theme.PALETTE["text"], 16))
         btn_tour.clicked.connect(self._launch_tour)
         top_bar.addWidget(btn_tour)
         layout.addLayout(top_bar)
@@ -2235,16 +2460,17 @@ class HelpDialog(QDialog):
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
 
-        polish_dialog(self, 560)
+        polish_dialog(self, 620)
         self._clamp_to_screen()
 
     def _make_scrollable(self, widget: QWidget) -> QScrollArea:
         """Wrap a tab content widget in a smooth-scrolling frameless QScrollArea."""
         scroll = QScrollArea()
+        scroll.setObjectName("TabScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
-        scroll.viewport().setStyleSheet("background: transparent;")
+        scroll.viewport().setObjectName("TabScrollViewport")
+        widget.setObjectName("TabScrollContent")
         enable_smooth_scroll(scroll)
         scroll.setWidget(widget)
         return scroll
@@ -2290,11 +2516,11 @@ class HelpDialog(QDialog):
     def _build_quick_tab(self) -> QWidget:
         widget = QWidget()
         vbox = QVBoxLayout(widget)
-        vbox.setContentsMargins(14, 14, 14, 14)
-        vbox.setSpacing(12)
+        vbox.setContentsMargins(12, 10, 12, 10)
+        vbox.setSpacing(8)
 
         intro = QLabel(f"<b>{tr('help_quick_title')}</b>")
-        intro.setStyleSheet(f"font-size: 14px; color: {theme.PALETTE['accent_text']};")
+        intro.setStyleSheet(f"QLabel {{ font-size: 13.5px; color: {theme.PALETTE['accent_text']}; }}")
         vbox.addWidget(intro)
 
         steps = [
@@ -2305,22 +2531,17 @@ class HelpDialog(QDialog):
         ]
         for icon_name, text in steps:
             card = QFrame()
-            card.setObjectName("BannerCard")
-            card.setStyleSheet(
-                f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-                f"border-radius: {theme.METRICS['radius']}px; padding: 10px 14px;"
-            )
+            card.setObjectName("StepCard")
             c_lay = QHBoxLayout(card)
-            c_lay.setContentsMargins(8, 6, 8, 6)
+            c_lay.setContentsMargins(14, 10, 14, 10)
             c_lay.setSpacing(12)
 
             ic = QLabel()
-            ic.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 22))
+            ic.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 20))
             c_lay.addWidget(ic)
 
             lbl = QLabel(text)
             lbl.setWordWrap(True)
-            lbl.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']};")
             c_lay.addWidget(lbl, 1)
 
             vbox.addWidget(card)
@@ -2331,7 +2552,7 @@ class HelpDialog(QDialog):
     def _build_shortcuts_tab(self) -> QWidget:
         widget = QWidget()
         vbox = QVBoxLayout(widget)
-        vbox.setContentsMargins(14, 14, 14, 14)
+        vbox.setContentsMargins(12, 12, 12, 12)
         vbox.setSpacing(8)
 
         shortcuts = [
@@ -2347,19 +2568,35 @@ class HelpDialog(QDialog):
 
         table = QTableWidget(len(shortcuts), 2)
         table.setHorizontalHeaderLabels([tr("help_col_key"), tr("help_col_action")])
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         table.verticalHeader().setVisible(False)
+        table.verticalHeader().setDefaultSectionSize(40)
+        table.setShowGrid(False)
+        table.setAlternatingRowColors(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
+        h_hdr = table.horizontalHeader()
+        h_hdr.setSectionResizeMode(0, QHeaderView.Fixed)
+        table.setColumnWidth(0, 145)
+        h_hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        is_rtl = (i18n.language() == "fa")
+        action_align = (Qt.AlignRight | Qt.AlignVCenter) if is_rtl else (Qt.AlignLeft | Qt.AlignVCenter)
+        if table.horizontalHeaderItem(0):
+            table.horizontalHeaderItem(0).setTextAlignment(Qt.AlignCenter)
+        if table.horizontalHeaderItem(1):
+            table.horizontalHeaderItem(1).setTextAlignment(action_align)
 
+        key_font = QFont("Consolas", 10, QFont.Bold)
+        key_brush = QBrush(QColor(theme.PALETTE["accent_text"]))
         for i, (k, action) in enumerate(shortcuts):
             k_item = QTableWidgetItem(k)
             k_item.setTextAlignment(Qt.AlignCenter)
+            k_item.setFont(key_font)
+            k_item.setForeground(key_brush)
             k_item.setFlags(Qt.ItemIsEnabled)
             table.setItem(i, 0, k_item)
 
             a_item = QTableWidgetItem(action)
+            a_item.setTextAlignment(action_align)
             a_item.setFlags(Qt.ItemIsEnabled)
             table.setItem(i, 1, a_item)
 
@@ -2369,23 +2606,57 @@ class HelpDialog(QDialog):
     def _build_phone_tab(self) -> QWidget:
         widget = QWidget()
         vbox = QVBoxLayout(widget)
-        vbox.setContentsMargins(16, 16, 16, 16)
-        vbox.setSpacing(12)
+        vbox.setContentsMargins(12, 10, 12, 8)
+        vbox.setSpacing(8)
 
-        card = QFrame()
-        card.setObjectName("BannerCard")
-        card.setStyleSheet(
-            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-            f"border-radius: {theme.METRICS['radius']}px; padding: 14px;"
-        )
-        c_lay = QVBoxLayout(card)
-        c_lay.setSpacing(10)
+        intro = QLabel(f"<b>{tr('help_phone_title')}</b>")
+        intro.setStyleSheet(f"QLabel {{ font-size: 13.5px; color: {theme.PALETTE['accent_text']}; }}")
+        intro.setWordWrap(True)
+        vbox.addWidget(intro)
 
-        lbl = QLabel(tr("help_phone_guide"))
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet(f"font-size: 13px; line-height: 1.7; color: {theme.PALETTE['text']};")
-        c_lay.addWidget(lbl)
-        vbox.addWidget(card)
+        phone_steps = [
+            ("share-2", tr("help_phone_step1_t"), tr("help_phone_step1_d")),
+            ("link", tr("help_phone_step2_t"), tr("help_phone_step2_d")),
+            ("circle-check", tr("help_phone_step3_t"), tr("help_phone_step3_d")),
+        ]
+        for icon_name, title, desc in phone_steps:
+            card = QFrame()
+            card.setObjectName("StepCard")
+            c_lay = QHBoxLayout(card)
+            c_lay.setContentsMargins(14, 8, 14, 8)
+            c_lay.setSpacing(12)
+
+            ic = QLabel()
+            ic.setPixmap(icons.tinted_pixmap(icon_name, theme.PALETTE["accent"], 22))
+            ic.setAlignment(Qt.AlignTop)
+            c_lay.addWidget(ic)
+
+            txt = QVBoxLayout()
+            txt.setSpacing(3)
+            t_lbl = QLabel(f"<b>{title}</b>")
+            t_lbl.setWordWrap(True)
+            d_lbl = QLabel(desc)
+            d_lbl.setObjectName("DialogHint")
+            d_lbl.setWordWrap(True)
+            txt.addWidget(t_lbl)
+            txt.addWidget(d_lbl)
+            c_lay.addLayout(txt, 1)
+            vbox.addWidget(card)
+
+        note_card = QFrame()
+        note_card.setObjectName("BannerCard")
+        n_lay = QHBoxLayout(note_card)
+        n_lay.setContentsMargins(12, 8, 12, 8)
+        n_lay.setSpacing(10)
+        n_ic = QLabel()
+        n_ic.setPixmap(icons.tinted_pixmap("info", theme.PALETTE["muted"], 18))
+        n_lay.addWidget(n_ic)
+        n_lbl = QLabel(tr("help_phone_note"))
+        n_lbl.setObjectName("DialogHint")
+        n_lbl.setWordWrap(True)
+        n_lay.addWidget(n_lbl, 1)
+        vbox.addWidget(note_card)
+
         vbox.addStretch()
         return widget
 
@@ -2394,8 +2665,8 @@ class HelpDialog(QDialog):
 
         widget = QWidget()
         vbox = QVBoxLayout(widget)
-        vbox.setContentsMargins(14, 14, 14, 14)
-        vbox.setSpacing(12)
+        vbox.setContentsMargins(12, 10, 12, 10)
+        vbox.setSpacing(10)
 
         library_path = self.settings.get("library")
         self._mcp_prompt = build_agent_prompt(library_path)
@@ -2407,56 +2678,49 @@ class HelpDialog(QDialog):
 
         # 1. Overview Card
         intro_card = QFrame()
-        intro_card.setObjectName("BannerCard")
-        intro_card.setStyleSheet(
-            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-            f"border-radius: {theme.METRICS['radius']}px; padding: 12px 14px;"
-        )
+        intro_card.setObjectName("StepCard")
         intro_lay = QHBoxLayout(intro_card)
-        intro_lay.setContentsMargins(8, 6, 8, 6)
+        intro_lay.setContentsMargins(14, 10, 14, 10)
         intro_lay.setSpacing(12)
 
         ic = QLabel()
-        ic.setPixmap(icons.tinted_pixmap("sparkles", theme.PALETTE["accent"], 26))
+        ic.setPixmap(icons.tinted_pixmap("sparkles", theme.PALETTE["accent"], 22))
         ic.setAlignment(Qt.AlignTop)
         intro_lay.addWidget(ic)
 
         text_box = QVBoxLayout()
-        text_box.setSpacing(4)
+        text_box.setSpacing(3)
         title_lbl = QLabel(f"<b>{tr('help_mcp_title')}</b>")
-        title_lbl.setStyleSheet(f"font-size: 14px; color: {theme.PALETTE['accent_text']};")
+        title_lbl.setStyleSheet(f"QLabel {{ font-size: 13.5px; color: {theme.PALETTE['accent_text']}; }}")
         text_box.addWidget(title_lbl)
 
         desc_lbl = QLabel(tr("help_mcp_intro"))
+        desc_lbl.setObjectName("DialogHint")
         desc_lbl.setWordWrap(True)
-        desc_lbl.setStyleSheet(f"font-size: 13px; line-height: 1.6; color: {theme.PALETTE['text']};")
         text_box.addWidget(desc_lbl)
         intro_lay.addLayout(text_box, 1)
         vbox.addWidget(intro_card)
 
         # 2. 1-Click Agent Setup Card
         auto_card = QFrame()
-        auto_card.setObjectName("BannerCard")
-        auto_card.setStyleSheet(
-            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-            f"border-radius: {theme.METRICS['radius']}px; padding: 14px;"
-        )
+        auto_card.setObjectName("StepCard")
         auto_lay = QVBoxLayout(auto_card)
-        auto_lay.setSpacing(10)
+        auto_lay.setContentsMargins(14, 12, 14, 12)
+        auto_lay.setSpacing(8)
 
         step_heading = QLabel(f"<b>✨ {tr('help_mcp_step_heading')}</b>")
-        step_heading.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['accent_text']};")
+        step_heading.setStyleSheet(f"QLabel {{ font-size: 13px; color: {theme.PALETTE['accent_text']}; }}")
         auto_lay.addWidget(step_heading)
 
         step_desc = QLabel(tr("help_mcp_step_desc"))
         step_desc.setWordWrap(True)
-        step_desc.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']}; line-height: 1.6;")
         auto_lay.addWidget(step_desc)
 
         btn_row = QHBoxLayout()
         self.btn_copy_mcp_prompt = QPushButton(tr("help_mcp_btn_copy"))
         self.btn_copy_mcp_prompt.setObjectName("Primary")
-        self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", "#ffffff", 16))
+        self.btn_copy_mcp_prompt.setFixedHeight(36)
+        self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", theme.PALETTE["on_accent"], 16))
         self.btn_copy_mcp_prompt.setCursor(Qt.PointingHandCursor)
 
         def on_copy_prompt():
@@ -2464,10 +2728,10 @@ class HelpDialog(QDialog):
             if cb:
                 cb.setText(self._mcp_prompt)
             self.btn_copy_mcp_prompt.setText(tr("help_mcp_copied"))
-            self.btn_copy_mcp_prompt.setIcon(icons.icon("check", "#ffffff", 16))
+            self.btn_copy_mcp_prompt.setIcon(icons.icon("check", theme.PALETTE["on_accent"], 16))
             QTimer.singleShot(2500, lambda: (
                 self.btn_copy_mcp_prompt.setText(tr("help_mcp_btn_copy")),
-                self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", "#ffffff", 16))
+                self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", theme.PALETTE["on_accent"], 16))
             ))
 
         self.btn_copy_mcp_prompt.clicked.connect(on_copy_prompt)
@@ -2476,53 +2740,54 @@ class HelpDialog(QDialog):
         auto_lay.addLayout(btn_row)
 
         preview_lbl = QLabel(f"<small>{tr('help_mcp_prompt_preview')}</small>")
-        preview_lbl.setStyleSheet(f"color: {theme.PALETTE['muted']}; margin-top: 4px;")
+        preview_lbl.setObjectName("DialogHint")
         auto_lay.addWidget(preview_lbl)
 
         prompt_box = QTextEdit()
+        prompt_box.setObjectName("McpCodeBox")
+        prompt_box.setLayoutDirection(Qt.LeftToRight)
         prompt_box.setPlainText(self._mcp_prompt)
         prompt_box.setReadOnly(True)
-        prompt_box.setMinimumHeight(140)
-        prompt_box.setMaximumHeight(200)
+        prompt_box.setMinimumHeight(130)
+        prompt_box.setMaximumHeight(180)
         prompt_box.setStyleSheet(
-            f"background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
+            f"QTextEdit#McpCodeBox {{ background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
             f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: {theme.METRICS['radius']}px; "
-            f"font-family: Consolas, 'Cascadia Code', monospace; font-size: 11px; padding: 8px;"
+            f"font-family: Consolas, 'Cascadia Code', monospace; font-size: 11px; padding: 8px; }}"
         )
         auto_lay.addWidget(prompt_box)
         vbox.addWidget(auto_card)
 
         # 3. Manual Configuration Card
         manual_card = QFrame()
-        manual_card.setObjectName("BannerCard")
-        manual_card.setStyleSheet(
-            f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-            f"border-radius: {theme.METRICS['radius']}px; padding: 14px;"
-        )
+        manual_card.setObjectName("StepCard")
         manual_lay = QVBoxLayout(manual_card)
-        manual_lay.setSpacing(10)
+        manual_lay.setContentsMargins(14, 12, 14, 12)
+        manual_lay.setSpacing(8)
 
-        man_heading = QLabel(f"<b>⚙️ {tr('help_mcp_manual_heading')}</b>")
-        man_heading.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']};")
+        man_heading = QLabel(f"<b>⚙ {tr('help_mcp_manual_heading')}</b>")
         manual_lay.addWidget(man_heading)
 
         # Claude Code command
         cli_lbl = QLabel(f"<small>{tr('help_mcp_cli_heading')}</small>")
-        cli_lbl.setStyleSheet(f"color: {theme.PALETTE['muted']};")
+        cli_lbl.setObjectName("DialogHint")
         manual_lay.addWidget(cli_lbl)
 
         cli_row = QHBoxLayout()
         cli_input = QLineEdit(self._claude_cli_cmd)
+        cli_input.setObjectName("McpCliInput")
+        cli_input.setLayoutDirection(Qt.LeftToRight)
         cli_input.setReadOnly(True)
         cli_input.setStyleSheet(
-            f"background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
+            f"QLineEdit#McpCliInput {{ background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
             f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: {theme.METRICS['radius']}px; "
-            f"font-family: Consolas, monospace; font-size: 11px; padding: 6px 8px;"
+            f"font-family: Consolas, monospace; font-size: 11px; padding: 6px 8px; }}"
         )
         cli_row.addWidget(cli_input, 1)
 
         self.btn_copy_mcp_cli = QPushButton()
         self.btn_copy_mcp_cli.setObjectName("Secondary")
+        self.btn_copy_mcp_cli.setFixedSize(34, 34)
         self.btn_copy_mcp_cli.setIcon(icons.icon("copy", theme.PALETTE["text"], 15))
 
         def on_copy_cli():
@@ -2539,7 +2804,7 @@ class HelpDialog(QDialog):
         # JSON config
         json_lbl_row = QHBoxLayout()
         json_title = QLabel("<small>JSON (OpenCode, Cursor, Antigravity, Claude Desktop):</small>")
-        json_title.setStyleSheet(f"color: {theme.PALETTE['muted']};")
+        json_title.setObjectName("DialogHint")
         json_lbl_row.addWidget(json_title)
         json_lbl_row.addStretch()
 
@@ -2563,14 +2828,16 @@ class HelpDialog(QDialog):
         manual_lay.addLayout(json_lbl_row)
 
         json_box = QTextEdit()
+        json_box.setObjectName("McpJsonBox")
+        json_box.setLayoutDirection(Qt.LeftToRight)
         json_box.setPlainText(self._mcp_json_str)
         json_box.setReadOnly(True)
-        json_box.setMinimumHeight(100)
+        json_box.setMinimumHeight(105)
         json_box.setMaximumHeight(140)
         json_box.setStyleSheet(
-            f"background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
+            f"QTextEdit#McpJsonBox {{ background: {theme.PALETTE['surface']}; color: {theme.PALETTE['text']}; "
             f"border: 1px solid {theme.PALETTE['border_soft']}; border-radius: {theme.METRICS['radius']}px; "
-            f"font-family: Consolas, monospace; font-size: 11px; padding: 8px;"
+            f"font-family: Consolas, monospace; font-size: 11px; padding: 8px; }}"
         )
         manual_lay.addWidget(json_box)
         vbox.addWidget(manual_card)
@@ -2581,8 +2848,8 @@ class HelpDialog(QDialog):
     def _build_faq_tab(self) -> QWidget:
         widget = QWidget()
         vbox = QVBoxLayout(widget)
-        vbox.setContentsMargins(14, 14, 14, 14)
-        vbox.setSpacing(10)
+        vbox.setContentsMargins(12, 10, 12, 8)
+        vbox.setSpacing(8)
 
         faqs = [
             (tr("help_faq_q1"), tr("help_faq_a1")),
@@ -2593,21 +2860,17 @@ class HelpDialog(QDialog):
 
         for q, a in faqs:
             card = QFrame()
-            card.setObjectName("BannerCard")
-            card.setStyleSheet(
-                f"background: {theme.PALETTE['surface_2']}; border: 1px solid {theme.PALETTE['border_soft']}; "
-                f"border-radius: {theme.METRICS['radius']}px; padding: 10px 14px;"
-            )
+            card.setObjectName("StepCard")
             c_lay = QVBoxLayout(card)
-            c_lay.setSpacing(6)
+            c_lay.setContentsMargins(14, 10, 14, 10)
+            c_lay.setSpacing(4)
 
             q_lbl = QLabel(f"<b>❓ {q}</b>")
-            q_lbl.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['accent_text']};")
+            q_lbl.setStyleSheet(f"QLabel {{ font-size: 13px; color: {theme.PALETTE['accent_text']}; }}")
             q_lbl.setWordWrap(True)
             c_lay.addWidget(q_lbl)
 
             a_lbl = QLabel(a)
-            a_lbl.setStyleSheet(f"font-size: 13px; color: {theme.PALETTE['text']};")
             a_lbl.setWordWrap(True)
             c_lay.addWidget(a_lbl)
 
