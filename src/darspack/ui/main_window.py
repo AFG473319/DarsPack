@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
-    QScrollArea, QStatusBar, QTableWidget, QTableWidgetItem, QToolButton, QToolTip,
-    QVBoxLayout, QWidget,
+    QScrollArea, QSizePolicy, QStatusBar, QTableWidget, QTableWidgetItem,
+    QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from .. import APP_NAME, __version__, asset_path, i18n
@@ -32,7 +32,7 @@ from ..core.search import unclassified_count
 from ..core import manifest as manifest_core
 from ..i18n import tr
 from . import dialogs, icons, theme
-from .delegates import KindBadgeDelegate
+from .delegates import FileNameDelegate, KindBadgeDelegate
 from .smooth_scroll import enable_smooth_scroll
 from .workers import ImportWorker
 
@@ -171,6 +171,7 @@ def create_localized_line_edit_context_menu(
         clear_act.setIcon(icons.icon("x", theme.PALETTE["muted"], 16))
         clear_act.triggered.connect(edit.clear)
 
+    theme.apply_menu_style(menu)
     return menu
 
 
@@ -246,11 +247,11 @@ class MainWindow(QMainWindow):
         self.subject_combo = QComboBox()
         self.kind_combo = QComboBox()
         self.year_combo = QComboBox()
-        for combo, width in ((self.subject_combo, 142),
-                             (self.kind_combo, 120),
-                             (self.year_combo, 130)):
+        for combo, width in ((self.subject_combo, 140),
+                             (self.kind_combo, 118),
+                             (self.year_combo, 128)):
             combo.setFixedWidth(width)
-            combo.setFixedHeight(36)
+            combo.setFixedHeight(30)
             theme.setup_combobox(combo)
         self.subject_combo.currentIndexChanged.connect(self.refresh)
         self.kind_combo.currentIndexChanged.connect(self.refresh)
@@ -267,7 +268,7 @@ class MainWindow(QMainWindow):
         filter_bar = QWidget()
         filter_bar.setObjectName("FilterBar")
         toolbar = QHBoxLayout(filter_bar)
-        toolbar.setContentsMargins(16, 8, 16, 8)
+        toolbar.setContentsMargins(10, 6, 10, 6)
         toolbar.setSpacing(8)
 
         self.packages_menu = QMenu(self)
@@ -328,10 +329,10 @@ class MainWindow(QMainWindow):
         self.more_button = QToolButton()
         self.more_button.setObjectName("IconGhost")
         self.more_button.setIcon(
-            icons.icon("ellipsis-vertical", theme.PALETTE["muted"], 18))
-        self.more_button.setIconSize(QSize(18, 18))
+            icons.icon("ellipsis-vertical", theme.PALETTE["muted"], 16))
+        self.more_button.setIconSize(QSize(16, 16))
         self.more_button.setToolTip(tr("more_actions"))
-        self.more_button.setFixedSize(36, 36)
+        self.more_button.setFixedSize(30, 30)
         self.more_button.setPopupMode(QToolButton.InstantPopup)
         self.more_button.setMenu(self.more_menu)
         toolbar.addWidget(self.more_button)
@@ -357,6 +358,8 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(
             theme.METRICS["row_height"])
+        self.table.setItemDelegateForColumn(
+            0, FileNameDelegate(self.table))
         self.table.setItemDelegateForColumn(
             3, KindBadgeDelegate(self.table))
         # Stretch the NAME column. setStretchLastSection stretched
@@ -477,22 +480,35 @@ class MainWindow(QMainWindow):
             btn.setIconSize(QSize(16, 16))
             btn.setCursor(Qt.PointingHandCursor)
             btn.setFixedHeight(34)
-            btn.setSizePolicy(btn.sizePolicy().horizontalPolicy(), btn.sizePolicy().verticalPolicy())
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             btn.clicked.connect(slot)
 
             btn._base_label = label
             btn._badge_count = 0
             btn._badge = None
+            overlay = QHBoxLayout(btn)
+            overlay.setContentsMargins(6, 0, 6, 0)
+            overlay.setSpacing(0)
+
+            indicator = QFrame()
+            indicator.setObjectName("NavIndicator")
+            indicator.setFixedSize(3, 16)
+            indicator.setAttribute(Qt.WA_TransparentForMouseEvents)
+            indicator.hide()
+            btn._indicator = indicator
+            overlay.addWidget(indicator, 0, Qt.AlignVCenter)
+            overlay.addStretch(1)
+
             if count_badge:
                 btn.setProperty("hasBadge", True)
-                badge_row = QHBoxLayout(btn)
-                badge_row.setContentsMargins(10, 0, 10, 0)
-                badge_row.addStretch(1)
                 badge = QLabel("")
                 badge.setObjectName("NavBadge")
+                badge.setAlignment(Qt.AlignCenter)
+                badge.setFixedHeight(18)
+                badge.setMinimumWidth(20)
                 badge.setAttribute(Qt.WA_TransparentForMouseEvents)
                 badge.hide()
-                badge_row.addWidget(badge)
+                overlay.addWidget(badge, 0, Qt.AlignVCenter)
                 btn._badge = badge
 
             nav_vbox.addWidget(btn)
@@ -507,7 +523,8 @@ class MainWindow(QMainWindow):
         self.nav_all = _add_nav_item("all", tr("nav_all_files"), "folder-open",
                                      lambda: self._select_nav_filter(None, None))
         self.nav_all.setProperty("active", True)
-        self.nav_all.setIcon(icons.icon("folder-open", "#ffd875", 16))
+        self.nav_all._indicator.show()
+        self.nav_all.setIcon(icons.icon("folder-open", theme.PALETTE["accent"], 16))
 
         self.nav_unclassified = _add_nav_item(
             "unclass", tr("nav_unclassified"), "triangle-alert",
@@ -546,7 +563,7 @@ class MainWindow(QMainWindow):
         command_bar = QWidget()
         command_bar.setObjectName("CommandBar")
         cmd_layout = QHBoxLayout(command_bar)
-        cmd_layout.setContentsMargins(20, 10, 20, 10)
+        cmd_layout.setContentsMargins(10, 8, 10, 8)
         cmd_layout.setSpacing(12)
 
         # Search Bar
@@ -610,8 +627,8 @@ class MainWindow(QMainWindow):
         # Content area with Stacked Views: Table and Card Grid
         self.content_stack = QWidget()
         content_vbox = QVBoxLayout(self.content_stack)
-        content_vbox.setContentsMargins(20, 12, 20, 12)
-        content_vbox.setSpacing(10)
+        content_vbox.setContentsMargins(10, 6, 10, 10)
+        content_vbox.setSpacing(8)
         content_vbox.addWidget(self.info_bar)
 
         # Table View
@@ -637,11 +654,16 @@ class MainWindow(QMainWindow):
 
         status = QStatusBar()
         status.setSizeGripEnabled(False)
+        status.setContentsMargins(20, 4, 24, 5)
         self.count_label = QLabel("")
         self.count_label.setObjectName("Muted")
+        self.count_label.setContentsMargins(14, 0, 14, 0)
         status.addWidget(self.count_label)
         self.unclassified_button = QPushButton("")
         self.unclassified_button.setObjectName("WarnPill")
+        self.unclassified_button.setIcon(
+            icons.icon("triangle-alert", theme.PALETTE["accent"], 13))
+        self.unclassified_button.setIconSize(QSize(13, 13))
         self.unclassified_button.setCursor(Qt.PointingHandCursor)
         self.unclassified_button.clicked.connect(self._show_unclassified)
         status.addPermanentWidget(self.unclassified_button)
@@ -691,10 +713,10 @@ class MainWindow(QMainWindow):
         button = QToolButton()
         button.setText(text)
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        button.setIcon(icons.icon(icon_name, theme.PALETTE["text"], 18))
-        button.setIconSize(QSize(18, 18))
+        button.setIcon(icons.icon(icon_name, theme.PALETTE["text"], 15))
+        button.setIconSize(QSize(15, 15))
         button.setCursor(Qt.PointingHandCursor)
-        button.setFixedHeight(36)
+        button.setFixedHeight(30)
         return button
 
     def _menu_action(self, menu: QMenu, text: str, icon_name: str,
@@ -711,10 +733,13 @@ class MainWindow(QMainWindow):
         for key, btn in getattr(self, "_nav_items", {}).items():
             is_act = (key == active_key)
             btn.setProperty("active", is_act)
+            ind = getattr(btn, "_indicator", None)
+            if ind is not None:
+                ind.setVisible(is_act)
             if hasattr(btn, "_icon_name"):
                 btn.setIcon(icons.icon(
                     btn._icon_name,
-                    "#ffd875" if is_act else theme.PALETTE["muted"],
+                    theme.PALETTE["accent"] if is_act else theme.PALETTE["muted"],
                     16,
                 ))
             btn.style().unpolish(btn)
@@ -912,7 +937,7 @@ class MainWindow(QMainWindow):
         for i, row in enumerate(rows):
             date_str, size_str = self._display_strs_for(row)
             year_str = row["school_year"] or "—"
-            values = [i18n.bidi_filename(row["original_name"]),
+            values = [row["original_name"],
                       row["subject_name"] or "—",
                       chapter_lesson_display(row["chapter"], row["lesson"]),
                       row["kind"] or "—", size_str,

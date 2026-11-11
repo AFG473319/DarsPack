@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from string import Template
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import QEvent, QObject, QRect, QRectF, Qt
+from PySide6.QtGui import (
+    QColor, QFontDatabase, QFontMetrics, QPainter, QPainterPath, QPen,
+)
 from PySide6.QtWidgets import QComboBox, QMenu
 
 from .. import asset_path
@@ -72,44 +74,52 @@ QToolButton#NavItem {
     background: transparent;
     color: #cfd4dc;
     border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 6px 12px;
+    border-radius: 7px;
+    padding: 6px 16px;
     font-size: 9.5pt;
     font-weight: 500;
     text-align: right;
 }
 QToolButton#NavItem:hover {
-    background: #252e3d;
+    background: #1d2330;
     color: #ffffff;
-    border: 1px solid #3c495e;
+    border: 1px solid #2b3446;
 }
 QToolButton#NavItem:pressed {
-    background: #1c222c;
+    background: #181d28;
 }
 QToolButton#NavItem[active="true"] {
-    background: rgba(224, 168, 60, 0.15);
-    color: #ffd875;
+    background: #202634;
+    color: #ffffff;
     font-weight: 600;
-    border: 1px solid rgba(224, 168, 60, 0.35);
-    border-right: 3px solid $accent;
+    border: 1px solid #2e384b;
+}
+QToolButton#NavItem[active="true"]:hover {
+    background: #252c3c;
+    border: 1px solid #39455c;
 }
 QToolButton#NavItem[hasBadge="true"] {
     padding: $nav_badge_padding;
+}
+QFrame#NavIndicator {
+    background: $accent;
+    border: none;
+    border-radius: 1px;
 }
 QLabel#NavSectionHeader {
     color: #7b8393;
     font-size: 8.5pt;
     font-weight: 700;
-    padding: 12px 10px 4px 10px;
+    padding: 12px 12px 4px 12px;
 }
 QLabel#NavBadge {
-    background: #463412;
-    color: #ffd875;
+    background: rgba(230, 179, 77, 0.16);
+    color: #f6c453;
     border-radius: 9px;
-    padding: 1px 7px;
-    font-size: 8pt;
+    padding: 0px 6px;
+    font-size: 7.5pt;
     font-weight: 700;
-    border: 1px solid #785a21;
+    border: 1px solid rgba(230, 179, 77, 0.30);
 }
 QFrame#NavDivider {
     background: rgba(255, 255, 255, 0.07);
@@ -121,6 +131,17 @@ QFrame#NavDivider {
 QWidget#CommandBar {
     background: $surface;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+QWidget#FilterBar QComboBox, QWidget#FilterBar QToolButton {
+    min-height: 16px;
+    padding: 3px 10px;
+    font-size: 9pt;
+}
+QWidget#FilterBar QToolButton[hasDropdown="true"] {
+    padding: $filter_dropdown_padding;
+}
+QWidget#FilterBar QToolButton#IconGhost {
+    padding: 0px;
 }
 QLabel#PageTitle {
     font-size: 15pt;
@@ -270,10 +291,21 @@ QLabel#WarnPill {
     padding: 3px 12px; font-weight: 600;
 }
 QPushButton#WarnPill {
-    background: $accent_soft; color: $accent_text; border: none;
-    border-radius: 11px; padding: 3px 12px; font-weight: 600;
+    background: rgba(230, 179, 77, 0.08);
+    color: #f4c96b;
+    border: 1px solid rgba(230, 179, 77, 0.24);
+    border-radius: 6px;
+    padding: 3px 10px;
+    margin: 2px 0px;
+    font-size: 8.5pt;
+    font-weight: 500;
+    min-height: 18px;
 }
-QPushButton#WarnPill:hover { background: #4a3b1d; }
+QPushButton#WarnPill:hover {
+    background: rgba(230, 179, 77, 0.16);
+    border-color: rgba(230, 179, 77, 0.45);
+    color: #ffe094;
+}
 
 QFrame#BannerCard {
     background: $surface; border: 1px solid $border_soft;
@@ -545,11 +577,11 @@ QTableWidget::item {
 QTableWidget::item:selected { background: $selection; color: $text; }
 
 QTableWidget QComboBox, QTableWidget QSpinBox, QTableWidget QLineEdit {
-    background: $surface_2; border: 1px solid $border_soft;
-    border-radius: 6px; padding: 3px 8px; min-height: 26px;
+    background: $surface_2; border: 1px solid $border;
+    border-radius: 6px; padding: 2px 8px; min-height: 20px; font-size: 9.5pt;
 }
 QTableWidget QComboBox:hover, QTableWidget QSpinBox:hover, QTableWidget QLineEdit:hover {
-    border-color: $muted;
+    border-color: #4a5870;
 }
 QTableWidget QComboBox:focus, QTableWidget QSpinBox:focus, QTableWidget QLineEdit:focus {
     border-color: $accent; background: $surface_3;
@@ -618,7 +650,7 @@ QProgressBar::chunk { background: $accent; border-radius: 4px; }
 
 QStatusBar {
     background: $surface; border-top: 1px solid $border; color: $muted;
-    padding: 4px 16px;
+    min-height: 34px; padding: 4px 20px;
 }
 QStatusBar::item { border: 0; }
 QToolTip {
@@ -659,7 +691,8 @@ def build_qss(palette: dict | None = None) -> str:
     except Exception:
         is_fa = True
     values["menu_item_padding"] = "8px 16px 8px 16px" if is_fa else "8px 38px 8px 16px"
-    values["nav_badge_padding"] = "6px 12px 6px 42px" if is_fa else "6px 42px 6px 12px"
+    values["nav_badge_padding"] = "6px 16px 6px 38px" if is_fa else "6px 38px 6px 16px"
+    values["filter_dropdown_padding"] = "3px 10px 3px 24px" if is_fa else "3px 24px 3px 10px"
     values["combo_dropdown_pos"] = "center left" if is_fa else "center right"
     values["header_first_radius"] = (
         "border-top-right-radius: 7px;" if is_fa else "border-top-left-radius: 7px;"
@@ -704,12 +737,163 @@ def _patched_combo_set_view(self, view):
 
 QComboBox.setView = _patched_combo_set_view
 
+def _action_parts(action) -> tuple[str, str]:
+    """Split a QAction label and its tab-separated / key-sequence shortcut."""
+    raw = (action.text() or "").replace("&", "")
+    parts = raw.split("\t", 1)
+    label = parts[0].strip()
+    shortcut = parts[1].strip() if len(parts) > 1 else ""
+    if not shortcut and not action.shortcut().isEmpty():
+        shortcut = action.shortcut().toString()
+    return label, shortcut
+
+
+def _menu_layout_width(menu: QMenu) -> int:
+    """Compute a balanced menu width for tight icon-text gaps and shortcuts."""
+    fm = QFontMetrics(menu.font())
+    visible = [a for a in menu.actions() if a.isVisible() and not a.isSeparator()]
+    has_icons = any(not a.icon().isNull() for a in visible)
+    max_label = max((fm.horizontalAdvance(_action_parts(a)[0]) for a in visible), default=0)
+    max_sc = max((fm.horizontalAdvance(_action_parts(a)[1]) for a in visible), default=0)
+    w = 34 + max_label
+    if has_icons:
+        w += 16 + 9
+    if max_sc:
+        w += 28 + max_sc
+    return max(240, w)
+
+
+class _MenuStyler(QObject):
+    """Paint QMenu panels, tight icon-text gaps, hover pills, and aligned shortcuts."""
+
+    def eventFilter(self, obj, event) -> bool:
+        if isinstance(obj, QMenu):
+            etype = event.type()
+            if etype == QEvent.Show:
+                obj.setMinimumWidth(_menu_layout_width(obj))
+                obj.adjustSize()
+            elif etype == QEvent.Paint:
+                self._paint_menu(obj)
+                return True
+        return False
+
+    @staticmethod
+    def _paint_menu(menu: QMenu) -> None:
+        painter = QPainter(menu)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        bg_rect = QRectF(menu.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(bg_rect, 10, 10)
+        painter.fillPath(path, QColor(PALETTE["surface_2"]))
+        painter.setPen(QPen(QColor(PALETTE["border"]), 1))
+        painter.drawPath(path)
+
+        rtl = menu.layoutDirection() == Qt.RightToLeft
+        visible = [a for a in menu.actions() if a.isVisible()]
+        has_icons = any((not a.isSeparator()) and (not a.icon().isNull()) for a in visible)
+        active = menu.activeAction()
+
+        painter.setFont(menu.font())
+        icon_size = 16
+        icon_gap = 9
+
+        for act in visible:
+            rect = menu.actionGeometry(act)
+            if not rect.isValid():
+                continue
+            if act.isSeparator():
+                y = rect.center().y()
+                painter.setPen(QPen(QColor(255, 255, 255, 22), 1))
+                painter.drawLine(rect.left() + 10, y, rect.right() - 10, y)
+                continue
+
+            enabled = act.isEnabled()
+            hovered = enabled and (act is active)
+
+            pill = rect.adjusted(6, 2, -6, -2)
+            if hovered:
+                painter.setBrush(QColor("#323b4c"))
+                painter.setPen(QPen(QColor("#4a5870"), 1))
+                painter.drawRoundedRect(QRectF(pill).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+
+            content = pill.adjusted(10, 0, -10, 0)
+            if has_icons:
+                if rtl:
+                    icon_rect = QRect(
+                        content.right() - icon_size + 1,
+                        content.center().y() - icon_size // 2,
+                        icon_size, icon_size,
+                    )
+                    text_left = content.left()
+                    text_right = icon_rect.left() - icon_gap
+                else:
+                    icon_rect = QRect(
+                        content.left(),
+                        content.center().y() - icon_size // 2,
+                        icon_size, icon_size,
+                    )
+                    text_left = icon_rect.right() + 1 + icon_gap
+                    text_right = content.right()
+                if not act.icon().isNull():
+                    mode = act.icon().Mode.Normal if enabled else act.icon().Mode.Disabled
+                    act.icon().paint(painter, icon_rect, Qt.AlignCenter, mode)
+            else:
+                text_left = content.left()
+                text_right = content.right()
+
+            label, shortcut = _action_parts(act)
+            text_rect = QRect(
+                text_left, content.top(),
+                max(20, text_right - text_left + 1), content.height(),
+            )
+            fg = (
+                QColor("#ffffff") if hovered
+                else QColor(PALETTE["text"] if enabled else PALETTE["faint"])
+            )
+            painter.setPen(fg)
+            label_align = (
+                (Qt.AlignRight if rtl else Qt.AlignLeft)
+                | Qt.AlignAbsolute
+                | Qt.AlignVCenter
+            )
+            painter.drawText(text_rect, label_align, label)
+
+            if shortcut:
+                sc_color = (
+                    QColor("#d0d7e3") if hovered
+                    else QColor(PALETTE["muted"] if enabled else PALETTE["faint"])
+                )
+                painter.setPen(sc_color)
+                # Explicit physical outer alignment so narrow keys like Del
+                # share the same outer edge as Ctrl+Z / Ctrl+A.
+                sc_align = (
+                    (Qt.AlignLeft if rtl else Qt.AlignRight)
+                    | Qt.AlignAbsolute
+                    | Qt.AlignVCenter
+                )
+                painter.drawText(text_rect, sc_align, shortcut)
+
+        painter.end()
+
+
+def apply_menu_style(menu: QMenu) -> QMenu:
+    """Attach translucent framing and custom item painting to any QMenu,
+    including C++-constructed menus such as QLineEdit.createStandardContextMenu."""
+    if not menu.property("_dp_menu_styled"):
+        menu.setProperty("_dp_menu_styled", True)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        menu._menu_styler = _MenuStyler(menu)
+        menu.installEventFilter(menu._menu_styler)
+    return menu
+
+
 _orig_menu_init = QMenu.__init__
 
 
 def _patched_menu_init(self, *args, **kwargs):
     _orig_menu_init(self, *args, **kwargs)
-    self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    apply_menu_style(self)
 
 
 QMenu.__init__ = _patched_menu_init
