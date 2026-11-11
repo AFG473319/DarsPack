@@ -154,7 +154,7 @@ class Library:
                 "size": stat.st_size,
                 "deleted_at": deleted_at,
                 "subject_name": meta.get("subject_name") or "?",
-                "kind": meta.get("kind") or "?",
+                "kind": meta.get("kind") or "",
                 "chapter": meta.get("chapter"),
                 "lesson": meta.get("lesson"),
                 "school_year": meta.get("school_year"),

@@ -31,8 +31,9 @@ from scripts.app_harness import AppDriver, SandboxEnvironment, ensure_qapp
 
 
 class DummyServer:
-    def __init__(self, pin=481920):
+    def __init__(self, pin=481920, port=8765):
         self.pin = pin
+        self.port = port
 
 
 def generate_all_screenshots(out_dir: Path):
