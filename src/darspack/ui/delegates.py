@@ -41,12 +41,32 @@ class KindBadgeDelegate(QStyledItemDelegate):
         height = 21
         rect = QRectF(option.rect.center().x() - width / 2,
                       option.rect.center().y() - height / 2, width, height)
-        painter.setPen(Qt.NoPen)
+        border_color = QColor(foreground)
+        border_color.setAlpha(75)
+        painter.setPen(border_color)
         painter.setBrush(QColor(background))
         painter.drawRoundedRect(rect, 10, 10)
         painter.setPen(QColor(foreground))
         painter.drawText(rect, Qt.AlignCenter, text)
         painter.restore()
+
+
+def _has_rtl(text: str) -> bool:
+    return any(
+        "\u0600" <= ch <= "\u06FF"
+        or "\u0750" <= ch <= "\u077F"
+        or "\uFB50" <= ch <= "\uFDFF"
+        or "\uFE70" <= ch <= "\uFEFF"
+        for ch in text
+    )
+
+
+def _isolate_stem(stem: str) -> str:
+    """Wrap stems with Arabic/Persian characters in RTL directional isolates
+    so mixed English/number words inside filenames don't reorder awkwardly."""
+    if not stem or not _has_rtl(stem):
+        return stem
+    return f"\u200F\u2067{stem}\u2069"
 
 
 def split_filename_ext(name: str) -> tuple[str, str]:
@@ -86,7 +106,7 @@ def paint_filename_badge(
         badge_font.setWeight(QFont.DemiBold)
         bm = QFontMetrics(badge_font)
         ext_w = max(36, bm.horizontalAdvance(ext) + 12)
-        ext_h = 19
+        ext_h = max(19, bm.height() + 4)
         gap = 8
         cy = rect.center().y()
 
@@ -138,7 +158,7 @@ def paint_filename_badge(
 
     painter.setPen(text_color)
     align = (Qt.AlignRight if rtl else Qt.AlignLeft) | Qt.AlignAbsolute | Qt.AlignVCenter
-    painter.drawText(stem_rect, align, elided)
+    painter.drawText(stem_rect, align, _isolate_stem(elided))
     painter.restore()
 
 
@@ -153,11 +173,17 @@ class FileNameLabel(QLabel):
     def sizeHint(self) -> QSize:
         fm = self.fontMetrics()
         stem, ext = split_filename_ext(self.text())
-        w = fm.horizontalAdvance(stem) + (48 if ext else 0) + 8
-        return QSize(max(120, min(640, w)), max(fm.height() + 6, 26))
+        badge_w = 0
+        if ext:
+            badge_font = QFont(self.font())
+            badge_font.setPointSizeF(max(7.2, badge_font.pointSizeF() - 1.5))
+            badge_font.setWeight(QFont.DemiBold)
+            badge_w = max(36, QFontMetrics(badge_font).horizontalAdvance(ext) + 12) + 8
+        w = fm.horizontalAdvance(stem) + badge_w + 8
+        return QSize(max(120, min(640, w)), max(fm.height() + 8, 28))
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(120, max(self.fontMetrics().height() + 6, 26))
+        return QSize(120, max(self.fontMetrics().height() + 8, 28))
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -167,6 +193,49 @@ class FileNameLabel(QLabel):
             painter, QRectF(self.rect()), self.font(), self.text(),
             text_color=color, selected=False, rtl=rtl, inline_badge=True,
         )
+
+
+class KeycapDelegate(QStyledItemDelegate):
+    """Paint keyboard shortcuts inside crisp styled `<kbd>` keycap pills while
+    preserving the raw text in `QTableWidgetItem`."""
+
+    def paint(self, painter, option, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text = opt.text
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        if not text:
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setLayoutDirection(Qt.LeftToRight)
+        key_font = QFont("Consolas", 9, QFont.Bold)
+        painter.setFont(key_font)
+        fm = painter.fontMetrics()
+        parts = [p.strip() for p in text.split("+")] if " + " in text else [text]
+        gap = 4
+        plus_w = fm.horizontalAdvance("+") + 4
+        pill_widths = [max(26, fm.horizontalAdvance(p) + 14) for p in parts]
+        total_w = sum(pill_widths) + (len(parts) - 1) * (plus_w + gap * 2)
+        h = 22
+        y = option.rect.center().y() - h / 2
+        x = option.rect.center().x() - total_w / 2
+        for idx, (part, pw) in enumerate(zip(parts, pill_widths)):
+            pill = QRectF(x, y, pw, h)
+            painter.setPen(QColor("#3d4658"))
+            painter.setBrush(QColor("#22262f"))
+            painter.drawRoundedRect(pill, 6, 6)
+            painter.setPen(QColor("#f0c56a"))
+            painter.drawText(pill, Qt.AlignCenter, part)
+            x += pw + gap
+            if idx < len(parts) - 1:
+                plus_rect = QRectF(x, y, plus_w, h)
+                painter.setPen(QColor("#9aa0ab"))
+                painter.drawText(plus_rect, Qt.AlignCenter, "+")
+                x += plus_w + gap
+        painter.restore()
 
 
 class FileNameDelegate(QStyledItemDelegate):
@@ -199,5 +268,5 @@ class FileNameDelegate(QStyledItemDelegate):
         )
         paint_filename_badge(
             painter, QRectF(text_rect), opt.font, text,
-            text_color=text_color, selected=selected, rtl=rtl, inline_badge=False,
+            text_color=text_color, selected=selected, rtl=rtl, inline_badge=True,
         )
