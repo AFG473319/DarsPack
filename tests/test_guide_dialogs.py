@@ -75,11 +75,12 @@ def test_welcome_dialog_keep_enabled_if_unchecked(qapp, tmp_path):
 
 def test_help_dialog_structure_and_tabs(qapp):
     dlg = HelpDialog(None)
-    assert dlg.tabs.count() == 4
-    tab_titles = [dlg.tabs.tabText(i) for i in range(4)]
+    assert dlg.tabs.count() == 5
+    tab_titles = [dlg.tabs.tabText(i) for i in range(5)]
     assert i18n.tr("help_tab_quick") in tab_titles
     assert i18n.tr("help_tab_shortcuts") in tab_titles
     assert i18n.tr("help_tab_phone") in tab_titles
+    assert i18n.tr("help_tab_mcp") in tab_titles
     assert i18n.tr("help_tab_faq") in tab_titles
 
     # Verify shortcuts table in tab 1
@@ -93,6 +94,26 @@ def test_help_dialog_structure_and_tabs(qapp):
     assert "Ctrl + E" in keys
     assert "Delete" in keys
     assert "F1" in keys
+
+    # Verify MCP tab (tab 3)
+    assert hasattr(dlg, "btn_copy_mcp_prompt")
+    assert hasattr(dlg, "btn_copy_mcp_json")
+    assert hasattr(dlg, "btn_copy_mcp_cli")
+    assert "Connect to DarsPack MCP Server" in dlg._mcp_prompt
+    assert "darspack.mcp" in dlg._mcp_prompt
+    assert "mcpServers" in dlg._mcp_json_str
+
+    # Test copy prompt button
+    dlg.btn_copy_mcp_prompt.click()
+    from PySide6.QtWidgets import QApplication
+    cb = QApplication.clipboard()
+    assert cb.text() == dlg._mcp_prompt
+    assert dlg.btn_copy_mcp_prompt.text() == i18n.tr("help_mcp_copied")
+
+    # Test copy json button
+    dlg.btn_copy_mcp_json.click()
+    assert cb.text() == dlg._mcp_json_str
+    assert dlg.btn_copy_mcp_json.text() == i18n.tr("help_mcp_json_copied")
 
 
 def test_main_window_empty_state_guide_button(window):

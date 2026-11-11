@@ -14,6 +14,7 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 - **Manual delete, shortcuts and bulk actions** — Delete key, «حذف» button or right-click anywhere on a row; select several files (Ctrl/Shift) to remove them together (moved to the library's `.trash` folder, never erased) or reclassify them in one form. Keyboard shortcuts: Enter to open, Ctrl+E to edit metadata, Esc to clear search/selection, F5 to refresh; column header click-to-sort with visual indicators.
 - Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
 - Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, inline viewing for PDFs/images/text, download, multi-file upload) with a web-app manifest for «Add to Home screen».
+- **Built-in Model Context Protocol (MCP) server & 1-click AI integration**: Connect AI agents (Claude Code, OpenCode, Antigravity, Cursor, Hermes, OpenClaw) directly to the library. The in-app Help Center (F1) offers a 1-click prompt generator for seamless auto-setup.
 - Persian-first dark RTL UI with the bundled Vazirmatn typeface, one consistent icon set, a compact app bar and toolbar, kind badges, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
 
 ## Key ideas
