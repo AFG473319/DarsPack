@@ -30,7 +30,7 @@ src/darspack/
 │   ├── app.py            # QApplication wiring, language toggle, theme, fonts
 │   ├── theme.py          # brand palette + QSS tokens, bundled Vazirmatn loader
 │   ├── icons.py          # tinted Lucide SVGs (cached pixmaps)
-│   ├── delegates.py      # table painters (kind badges, no per-row widgets)
+│   ├── delegates.py      # table painters (kind badges, BiDi filename + extension pills)
 │   ├── main_window.py    # app bar + toolbar, library table, filters, empty states,
 │   │                     #   multi-select + row delete → files/.trash, bulk
 │   │                     #   reclassify, share toggle, history/stats
@@ -46,7 +46,8 @@ src/darspack/
 │   └── client/           # static RTL HTML/CSS/JS + PWA manifest/icons — no build step
 ├── mcp/                  # Model Context Protocol stdio server for AI agents
 │   ├── server.py         # JSON-RPC 2.0 / MCP tool dispatch & handlers
-│   └── extractor.py      # zero-dependency text & PDF stream preview extractor
+│   ├── extractor.py      # zero-dependency text & PDF stream preview extractor
+│   └── prompt.py         # 1-click AI agent connection prompt & MCP config builder
 └── i18n.py               # fa/en string dictionaries (plain dicts, no Qt Linguist)
 tests/                    # one test file per core module
 eval/make_testset.py      # generates the labelled synthetic set from eval/benchmark-plan.md
