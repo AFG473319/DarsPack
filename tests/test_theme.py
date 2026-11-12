@@ -96,3 +96,42 @@ def test_combobox_and_menu_popup_translucent(qapp):
 
     menu = QMenu()
     assert menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    menu_flags = menu.windowFlags()
+    assert bool(menu_flags & Qt.WindowType.FramelessWindowHint)
+    assert bool(menu_flags & Qt.WindowType.NoDropShadowWindowHint)
+    assert bool(menu_flags & Qt.WindowType.Popup)
+
+
+def test_menu_fit_width_and_styled_standard_context_menu(qapp):
+    """Menus must keep frameless translucent popup flags and fit all Persian
+    labels and shortcuts inside the menu width without clipping."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLineEdit, QMenu
+    from darspack.ui.theme import apply_menu_style
+
+    menu = QMenu()
+    menu.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    act1 = menu.addAction("خروجی بسته‌ی درس‌پک...")
+    act2 = menu.addAction("باز کردن فایل")
+    act2.setShortcut("Enter")
+    act3 = menu.addAction("بازگردانی")
+    act3.setShortcut("Ctrl+Z")
+
+    try:
+        menu.show()
+        qapp.processEvents()
+        for act in (act1, act2, act3):
+            geom = menu.actionGeometry(act)
+            assert geom.right() < menu.width()
+    finally:
+        menu.close()
+
+    edit = QLineEdit("سلام")
+    std_menu = edit.createStandardContextMenu()
+    apply_menu_style(std_menu)
+    assert std_menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    std_flags = std_menu.windowFlags()
+    assert bool(std_flags & Qt.WindowType.Popup)
+    assert bool(std_flags & Qt.WindowType.FramelessWindowHint)
+    assert bool(std_flags & Qt.WindowType.NoDropShadowWindowHint)
+

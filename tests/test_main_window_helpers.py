@@ -868,3 +868,53 @@ def test_search_box_has_custom_context_menu(window, monkeypatch):
     assert calls == [QPoint(10, 10)]
 
 
+def test_persian_translator_preserves_unmapped_strings(qapp):
+    from darspack.ui.app import PersianTranslator
+
+    translator = PersianTranslator(qapp)
+    assert translator.translate("QPlatformTheme", "&Yes") == "بله"
+    assert translator.translate("QWidgetTextControl", "&Undo\tCtrl+Z") is None
+
+
+def test_localized_search_context_menu_with_translator_is_popup_and_dismissible(qapp, window):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QLineEdit
+    from darspack.i18n import set_language, tr
+    from darspack.ui.app import PersianTranslator
+    from darspack.ui.main_window import create_localized_line_edit_context_menu
+
+    set_language("fa")
+    translator = PersianTranslator(qapp)
+    qapp.installTranslator(translator)
+    try:
+        edit = QLineEdit("سلام دنیا")
+        menu = create_localized_line_edit_context_menu(
+            edit, parent=window, include_clear=True
+        )
+        texts = [act.text() for act in menu.actions() if not act.isSeparator()]
+        assert "بازگردانی\tCtrl+Z" in texts
+        assert "کپی\tCtrl+C" in texts
+        assert "چسباندن\tCtrl+V" in texts
+        assert "انتخاب همه\tCtrl+A" in texts
+        assert tr("clear_search") in texts
+        assert not any(t.startswith("\t") for t in texts)
+
+        flags = menu.windowFlags()
+        assert bool(flags & Qt.WindowType.Popup)
+        assert bool(flags & Qt.WindowType.FramelessWindowHint)
+        assert bool(flags & Qt.WindowType.NoDropShadowWindowHint)
+        assert menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        menu.show()
+        qapp.processEvents()
+        assert menu.isVisible()
+        QTest.keyClick(menu, Qt.Key.Key_Escape)
+        qapp.processEvents()
+        assert not menu.isVisible()
+    finally:
+        menu.close()
+        qapp.removeTranslator(translator)
+
+
+

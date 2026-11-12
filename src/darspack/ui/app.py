@@ -50,7 +50,9 @@ class PersianTranslator(QTranslator):
     def translate(self, context, sourceText, disambiguation=None, n=-1):
         if sourceText in self._MAPPING:
             return self._MAPPING[sourceText]
-        return super().translate(context, sourceText, disambiguation, n)
+        # Return None (null QString) so Qt keeps unmapped native strings/shortcuts
+        # instead of replacing them with an empty string.
+        return None
 
 
 def load_settings() -> tuple[dict, Path]:

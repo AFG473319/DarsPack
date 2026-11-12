@@ -132,7 +132,9 @@ def create_localized_line_edit_context_menu(
     """
     menu = edit.createStandardContextMenu()
     if parent is not None:
-        menu.setParent(parent)
+        # Preserve Qt.Popup window flags so reparenting does not turn the
+        # context menu into an embedded non-dismissible child widget.
+        menu.setParent(parent, menu.windowFlags())
 
     for action in list(menu.actions()):
         if action.menu():

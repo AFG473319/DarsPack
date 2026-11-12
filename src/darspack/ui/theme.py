@@ -856,9 +856,13 @@ class _MenuStyler(QObject):
         if isinstance(obj, QMenu):
             etype = event.type()
             if etype == QEvent.Show:
-                if "min-width: 0px" not in obj.styleSheet():
-                    obj.setStyleSheet("QMenu { min-width: 0px; }")
-                w = max(obj.minimumWidth(), _menu_layout_width(obj))
+                if obj.property("_dp_base_min_w") is None:
+                    obj.setProperty("_dp_base_min_w", obj.minimumWidth())
+                base_min = int(obj.property("_dp_base_min_w") or 0)
+                obj.setMinimumWidth(0)
+                obj.setMaximumWidth(16777215)
+                obj.ensurePolished()
+                w = max(base_min, _menu_layout_width(obj), obj.sizeHint().width())
                 obj.setFixedWidth(w)
                 obj.adjustSize()
             elif etype == QEvent.Paint:
@@ -969,10 +973,20 @@ class _MenuStyler(QObject):
 def apply_menu_style(menu: QMenu) -> QMenu:
     """Attach translucent framing and custom item painting to any QMenu,
     including C++-constructed menus such as QLineEdit.createStandardContextMenu."""
+    # FramelessWindowHint + NoDropShadowWindowHint are required on Windows so
+    # Qt enables WS_EX_LAYERED for WA_TranslucentBackground (preventing black corners).
+    menu.setWindowFlags(
+        Qt.WindowType.Popup
+        | Qt.WindowType.FramelessWindowHint
+        | Qt.WindowType.NoDropShadowWindowHint
+    )
+    menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
     if not menu.property("_dp_menu_styled"):
         menu.setProperty("_dp_menu_styled", True)
-        menu.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
-        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        menu.setStyleSheet(
+            "QMenu { min-width: 0px; } "
+            "QMenu::item { min-width: 0px; padding: 6px 12px; }"
+        )
         menu._menu_styler = _MenuStyler(menu)
         menu.installEventFilter(menu._menu_styler)
     return menu
