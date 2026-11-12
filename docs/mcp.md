@@ -1,6 +1,6 @@
 # DarsPack MCP (Model Context Protocol) Server
 
-DarsPack includes a built-in, zero-dependency MCP server that enables AI agents (such as **OpenCode**, **Claude Desktop**, **Antigravity**, **Cursor**) to connect directly to the local library.
+DarsPack includes a built-in, zero-dependency MCP server that enables AI agents (such as **Claude Code**, **OpenCode**, **Antigravity**, **Cursor**, **Hermes**, **OpenClaw**, **Claude Desktop**) to connect directly to the local library.
 
 The MCP server allows agents to:
 1. List and create school subjects (`darspack_list_subjects`, `darspack_add_subject`).
@@ -12,7 +12,19 @@ The MCP server allows agents to:
 
 ---
 
-## 1. Running the MCP Server
+## 1. 1-Click In-App Agent Setup (Recommended)
+
+DarsPack's in-app **Help Center (`F1`)** contains a dedicated **AI & MCP (هوش مصنوعی و MCP)** tab designed for effortless connection:
+1. In DarsPack, click **راهنما (Help)** or press **F1**.
+2. Select the **هوش مصنوعی و MCP** tab.
+3. Click **«📋 کپی متن اتصال برای هوش مصنوعی»** (*Copy Connection Prompt for AI*).
+4. Paste the copied text into your AI agent's chat (Claude Code, OpenCode, Antigravity, Cursor, Hermes, OpenClaw, etc.).
+
+The prompt is generated dynamically using your system's current Python binary and your configured library path. The AI agent will read the prompt, self-locate its configuration format (JSON config or CLI command), connect to DarsPack, test the connection, and confirm readiness!
+
+---
+
+## 2. Running the MCP Server Manually
 
 The server communicates using JSON-RPC 2.0 / MCP over standard input/output (`stdio`).
 
@@ -33,9 +45,14 @@ set DARSPACK_LIBRARY=D:\School\DarsPackLibrary
 
 ---
 
-## 2. Configuring in AI Agents
+## 3. Manual Configuration in AI Agents
 
-### OpenCode / Claude Desktop / Cursor (`claude_desktop_config.json` or `mcp.json`)
+### Claude Code CLI
+```bash
+claude mcp add darspack -- python -m darspack.mcp
+```
+
+### OpenCode / Claude Desktop / Cursor / Antigravity (`claude_desktop_config.json` or `mcp.json`)
 
 ```json
 {
@@ -62,7 +79,7 @@ If you are using a virtual environment:
 
 ---
 
-## 3. Available Tools
+## 4. Available Tools
 
 | Tool | Purpose |
 |---|---|
@@ -87,7 +104,7 @@ If you are using a virtual environment:
 
 ---
 
-## 4. Architecture & Safety
+## 5. Architecture & Safety
 
 - **Local & Offline**: Zero network calls. Only accesses your local SQLite catalog and files directory.
 - **Concurrent Safe**: Runs alongside the DarsPack desktop GUI using SQLite WAL mode.

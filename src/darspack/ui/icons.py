@@ -48,6 +48,12 @@ def tinted_pixmap(name: str, color: str = None, size: int = 20,
 
 
 def icon(name: str, color: str = None, size: int = 20) -> QIcon:
-    """A QIcon for `name`; an empty QIcon when the asset is missing."""
+    """A QIcon for `name` with matching disabled dim tint; empty when missing."""
     pixmap = tinted_pixmap(name, color, size)
-    return QIcon() if pixmap.isNull() else QIcon(pixmap)
+    if pixmap.isNull():
+        return QIcon()
+    qicon = QIcon(pixmap)
+    disabled = tinted_pixmap(name, PALETTE["faint"], size)
+    if not disabled.isNull():
+        qicon.addPixmap(disabled, QIcon.Mode.Disabled)
+    return qicon

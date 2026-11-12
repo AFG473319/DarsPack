@@ -117,6 +117,7 @@ def run() -> None:
         Qt.RightToLeft if i18n.language() == "fa" else Qt.LeftToRight)
     app.setStyle("Fusion")          # one predictable base before the QSS
     theme.load_fonts()
+    theme.apply_palette(app)
     app.setStyleSheet(theme.build_qss())
     apply_font_size(settings, app)
     _install_excepthook()

@@ -31,12 +31,15 @@ from scripts.app_harness import AppDriver, SandboxEnvironment, ensure_qapp
 
 
 class DummyServer:
-    def __init__(self, pin=481920):
+    def __init__(self, pin=481920, port=8765):
         self.pin = pin
+        self.port = port
 
 
 def generate_all_screenshots(out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
+    for stale in out_dir.glob("*.png"):
+        stale.unlink()
     app = ensure_qapp()
 
     sandbox = SandboxEnvironment(count=8)
@@ -245,7 +248,7 @@ def generate_all_screenshots(out_dir: Path):
         snap("23_welcome_slide3.png", welcome_dlg, "Welcome Dialog - Slide 3: Offline & Phone Sharing")
         welcome_dlg.close()
 
-        # 24-27. Help Center Dialog - All 4 tabs
+        # 24-28. Help Center Dialog - All 5 tabs
         help_dlg = dialogs.HelpDialog(driver.window, sandbox.settings, sandbox.settings_path)
         help_dlg.show()
         driver.process_events(50)
@@ -261,8 +264,57 @@ def generate_all_screenshots(out_dir: Path):
         snap("26_help_tab3_phone.png", help_dlg, "Help Center - Tab 3: Phone Sharing Guide")
         help_tabs.setCurrentIndex(3)
         driver.process_events(50)
-        snap("27_help_tab4_faq.png", help_dlg, "Help Center - Tab 4: FAQ")
+        snap("27_help_tab4_mcp.png", help_dlg, "Help Center - Tab 4: AI & MCP Integration Guide")
+        help_tabs.setCurrentIndex(4)
+        driver.process_events(50)
+        snap("28_help_tab5_faq.png", help_dlg, "Help Center - Tab 5: FAQ")
         help_dlg.close()
+
+        # 29-33. Context and Dropdown Menus
+        # Single row table context menu
+        table_rows = driver.get_table_rows()
+        if table_rows:
+            menu_single, _ = driver.window.create_row_menu([table_rows[0]])
+            menu_single.adjustSize()
+            menu_single.show()
+            driver.process_events(50)
+            snap("29_menu_table_single.png", menu_single, "Context Menu - Single File Selected")
+            menu_single.close()
+
+            if len(table_rows) >= 2:
+                menu_multi, _ = driver.window.create_row_menu(table_rows[:2])
+                menu_multi.adjustSize()
+                menu_multi.show()
+                driver.process_events(50)
+                snap("30_menu_table_multi.png", menu_multi, "Context Menu - Multiple Files Selected")
+                menu_multi.close()
+
+        # Search box context menu
+        from darspack.ui.main_window import create_localized_line_edit_context_menu
+        driver.window.search_box.setText("ریاضی")
+        search_menu = create_localized_line_edit_context_menu(
+            driver.window.search_box, driver.window, include_clear=True
+        )
+        search_menu.adjustSize()
+        search_menu.show()
+        driver.process_events(50)
+        snap("31_menu_search_box.png", search_menu, "Context Menu - Search Box")
+        search_menu.close()
+        driver.window.search_box.clear()
+
+        # Packages dropdown menu
+        driver.window.packages_menu.adjustSize()
+        driver.window.packages_menu.show()
+        driver.process_events(50)
+        snap("32_menu_packages.png", driver.window.packages_menu, "Dropdown Menu - Packages")
+        driver.window.packages_menu.close()
+
+        # More actions dropdown menu
+        driver.window.more_menu.adjustSize()
+        driver.window.more_menu.show()
+        driver.process_events(50)
+        snap("33_menu_more_actions.png", driver.window.more_menu, "Dropdown Menu - More Actions")
+        driver.window.more_menu.close()
 
         return results
 

@@ -281,3 +281,39 @@ def test_mcp_package_export_verify_and_stats(mcp_server, tmp_path):
     dup_res = json.loads(mcp_server.handle_request(dup_req)["result"]["content"][0]["text"])
     assert "exact_duplicates" in dup_res
     assert "version_conflicts" in dup_res
+
+
+def test_build_mcp_config():
+    from darspack.mcp.prompt import build_mcp_config
+    from darspack.mcp.server import DEFAULT_LIBRARY_PATH
+
+    cfg_default = build_mcp_config(library_path=DEFAULT_LIBRARY_PATH, python_path="C:\\Python\\python.exe")
+    assert "mcpServers" in cfg_default
+    darspack = cfg_default["mcpServers"]["darspack"]
+    assert darspack["command"] == "C:/Python/python.exe"
+    assert darspack["args"] == ["-m", "darspack.mcp"]
+
+    # Custom library
+    custom_lib = Path("D:/Custom/Library")
+    cfg_custom = build_mcp_config(library_path=custom_lib, python_path="C:\\Python\\python.exe")
+    args = cfg_custom["mcpServers"]["darspack"]["args"]
+    assert args[0] == "-m"
+    assert args[1] == "darspack.mcp"
+    assert "Custom" in args[2]
+
+
+def test_build_agent_prompt():
+    from darspack.mcp.prompt import build_agent_prompt
+
+    prompt = build_agent_prompt(library_path="D:/School/Lib", python_path="C:\\Python314\\python.exe")
+    assert "# Connect to DarsPack MCP Server" in prompt
+    assert "C:/Python314/python.exe" in prompt
+    assert "claude mcp add darspack" in prompt
+    assert "OpenCode" in prompt
+    assert "Antigravity" in prompt
+    assert "Hermes" in prompt
+    assert "OpenClaw" in prompt
+    assert "darspack_list_subjects" in prompt
+    assert "darspack_classify_file" in prompt
+    assert "Flag, never touch" in prompt
+

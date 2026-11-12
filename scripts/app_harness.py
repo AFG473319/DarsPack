@@ -73,7 +73,7 @@ class SandboxEnvironment:
         self.settings_path = self.temp_dir / "settings.json"
         self.settings = {
             "language": "fa",
-            "library_root": str(self.library_dir),
+            "library": str(self.library_dir),
             "share_port": 8765,
         }
         self.settings_path.write_text(json.dumps(self.settings, ensure_ascii=False), encoding="utf-8")
