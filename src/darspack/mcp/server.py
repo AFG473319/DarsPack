@@ -2,9 +2,13 @@
 
 Zero third-party dependencies: runs over stdio using Python's standard library.
 Compatible with OpenCode, Claude Desktop, Cursor, and any MCP client.
+
+The process is deliberately headless: nothing here imports Qt or the UI
+package, so an agent gets a small stdio process instead of a desktop window.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -24,11 +28,47 @@ from .extractor import extract_preview
 
 DEFAULT_LIBRARY_PATH = Path.home() / "Documents" / "DarsPackLibrary"
 
+#: Protocol revisions this server understands, newest first.  During
+#: ``initialize`` we echo the client's revision when we support it and
+#: answer with :attr:`DarsPackMcpServer.PROTOCOL_VERSION` otherwise.
+SUPPORTED_PROTOCOL_VERSIONS = (
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+)
+
+#: Tools that only read.  Advertised as ``readOnlyHint`` so clients can
+#: auto-approve them and so agents know they are safe to call freely.
+READ_ONLY_TOOLS = frozenset({
+    "darspack_list_subjects",
+    "darspack_get_unclassified_files",
+    "darspack_search_files",
+    "darspack_preview_file",
+    "darspack_list_trash",
+    "darspack_check_duplicates",
+    "darspack_verify_package",
+    "darspack_get_stats",
+})
+
 
 class DarsPackMcpServer:
     """Core handler for MCP protocol methods."""
 
-    PROTOCOL_VERSION = "2024-11-05"
+    PROTOCOL_VERSION = "2025-06-18"
+
+    #: Sent to the client during ``initialize``; most clients (OpenCode,
+    #: Claude) inject this into the system prompt, which is the cheapest way
+    #: to stop an agent from guessing how the catalog works.
+    INSTRUCTIONS = (
+        "DarsPack is the user's local, offline Persian library of school materials. "
+        "Start with darspack_get_stats, then use darspack_get_unclassified_files as the "
+        "work queue. Read darspack_preview_file before choosing a subject; never invent "
+        "one, and call darspack_add_subject first if it is missing. Duplicates and "
+        "conflicts are flagged, never merged or deleted; trash is reversible and "
+        "permanent deletion stays in the GUI. Persian text is normalized "
+        "automatically (ي/ی, ك/ک, ZWNJ, Persian and Latin digits). Reply in Persian."
+    )
 
     def __init__(self, library_path: Path | str | None = None):
         self.library_path = Path(library_path) if library_path else self._resolve_library_path()
@@ -576,45 +616,61 @@ class DarsPackMcpServer:
 
     # --- Dispatch JSON-RPC methods ---
 
-    def handle_request(self, req: dict) -> dict | None:
+    def handle_request(self, req: dict | list) -> dict | list | None:
+        """Handle one JSON-RPC message (or a batch array) and return a reply."""
+        if isinstance(req, list):
+            # JSON-RPC 2.0 batches are rare but legal; answer them in order.
+            replies = [self.handle_request(item) for item in req]
+            non_null = [r for r in replies if r is not None]
+            return non_null or None
+
         msg_id = req.get("id")
         method = req.get("method")
-        params = req.get("params", {})
+        params = req.get("params") or {}
 
-        # Notifications (no id)
+        # Notifications (no id) never get a reply.
         if msg_id is None:
             return None
 
         if method == "initialize":
+            requested = params.get("protocolVersion")
+            version = (
+                requested
+                if requested in SUPPORTED_PROTOCOL_VERSIONS
+                else self.PROTOCOL_VERSION
+            )
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
                 "result": {
-                    "protocolVersion": self.PROTOCOL_VERSION,
+                    "protocolVersion": version,
                     "capabilities": {
                         "tools": {"listChanged": False},
-                        "resources": {},
                     },
                     "serverInfo": {
                         "name": "darspack-mcp",
-                        "version": "0.1.0",
+                        "version": _server_version(),
                     },
+                    "instructions": self.INSTRUCTIONS,
                 },
             }
 
         elif method == "tools/list":
             tools_list = []
             for name, meta in self.tools.items():
-                tools_list.append({
+                entry = {
                     "name": name,
                     "description": meta["description"],
                     "inputSchema": meta["inputSchema"],
-                })
+                }
+                if name in READ_ONLY_TOOLS:
+                    entry["annotations"] = {"readOnlyHint": True}
+                tools_list.append(entry)
             return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": tools_list}}
 
         elif method == "tools/call":
             tool_name = params.get("name")
-            arguments = params.get("arguments", {})
+            arguments = params.get("arguments") or {}
             if tool_name not in self.tools:
                 return {
                     "jsonrpc": "2.0",
@@ -644,6 +700,20 @@ class DarsPackMcpServer:
                     },
                 }
 
+        elif method == "resources/list":
+            # We declare no resources; an empty list is friendlier than an
+            # error because some clients probe this unconditionally.
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"resources": []}}
+
+        elif method == "resources/templates/list":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"resourceTemplates": []}}
+
+        elif method == "prompts/list":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {"prompts": []}}
+
+        elif method == "logging/setLevel":
+            return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+
         elif method == "ping":
             return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
 
@@ -655,19 +725,128 @@ class DarsPackMcpServer:
             }
 
 
+def _server_version() -> str:
+    """Report the app version so logs match the installed build."""
+    try:
+        from .. import __version__
+
+        return __version__
+    except Exception:
+        return "0.0.0"
+
+
+class _StderrOnlyStream:
+    """Stand-in for ``sys.stdout`` that sends text to stderr.
+
+    Only ``sys.stdout.buffer`` carries JSON-RPC.  A stray ``print()``
+    anywhere in the core code would otherwise land in that stream, and a
+    single non-JSON line makes most clients drop the connection.  Routing
+    text to stderr keeps the protocol stream clean and still lets the agent
+    (and the user) see the message as a log line.
+    """
+
+    encoding = "utf-8"
+    errors = "replace"
+
+    def __init__(self, target) -> None:
+        self._target = target
+
+    def write(self, text: str) -> int:
+        try:
+            self._target.write(text)
+        except Exception:
+            pass
+        return len(text)
+
+    def flush(self) -> None:
+        try:
+            self._target.flush()
+        except Exception:
+            pass
+
+    def isatty(self) -> bool:
+        return False
+
+
+def build_selftest_report(library_path: Path | str | None = None) -> tuple[dict, int]:
+    """Answer "does this command work?" without opening the library.
+
+    Agents are told to run this before writing any configuration, so it must
+    be side-effect free: it reports the library it *would* open, but never
+    creates or migrates anything.
+    """
+    from .launch import resolve_launch
+
+    launch = resolve_launch(library_path)
+    library = Path(launch.args[-1]) if launch.args else DEFAULT_LIBRARY_PATH
+
+    server = DarsPackMcpServer(library)
+    listed = server.handle_request(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    )
+    tool_names = [tool["name"] for tool in listed["result"]["tools"]]
+    pinged = server.handle_request({"jsonrpc": "2.0", "id": 2, "method": "ping"})
+    server.close()
+
+    checks = [
+        {"check": "json_rpc", "ok": pinged.get("result") == {}},
+        {"check": "tools_registered", "ok": len(tool_names) > 0},
+        {"check": "launch_mode", "ok": launch.available, "mode": launch.mode},
+        {
+            "check": "library_present",
+            "ok": library.is_dir(),
+            "path": str(library),
+            "note": "not required for connecting; the app creates it on first run",
+        },
+    ]
+    ok = all(item["ok"] for item in checks if item["check"] != "library_present")
+
+    report = {
+        "ok": ok,
+        "server": "darspack-mcp",
+        "version": _server_version(),
+        "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+        "launch_mode": launch.mode,
+        "command": launch.command_line(),
+        "library": str(library),
+        "library_exists": library.is_dir(),
+        "tool_count": len(tool_names),
+        "tools": tool_names,
+        "checks": checks,
+        "note": launch.note,
+    }
+    return report, (0 if ok else 1)
+
+
+def _write_json_line(payload: dict) -> None:
+    """Write one UTF-8 JSON line to the real stdout (used by --selftest)."""
+    data = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode(
+        "utf-8", "replace"
+    )
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        buffer.write(data)
+        buffer.flush()
+    else:  # pragma: no cover - only when stdout was replaced by a test harness
+        sys.stdout.write(data.decode("utf-8", "replace"))
+        sys.stdout.flush()
+
+
 def run_stdio_server(library_path: Path | str | None = None) -> None:
-    """Run MCP server over standard input/output."""
+    """Run MCP server over standard input/output (line-delimited JSON-RPC)."""
     server = DarsPackMcpServer(library_path)
-    # Binary stdio for clean UTF-8 JSON streaming
+    # Binary stdio for clean UTF-8 JSON streaming.  Grab the real streams
+    # *before* guarding sys.stdout.
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
+    sys.stdout = _StderrOnlyStream(sys.stderr)
 
     try:
         while True:
             line = stdin.readline()
             if not line:
                 break
-            line_str = line.decode("utf-8").strip()
+            line_str = line.decode("utf-8", "replace").strip()
             if not line_str:
                 continue
 
@@ -677,9 +856,75 @@ def run_stdio_server(library_path: Path | str | None = None) -> None:
                 continue
 
             resp = server.handle_request(req)
-            if resp is not None:
-                out_data = (json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8")
-                stdout.write(out_data)
-                stdout.flush()
+            if resp is None:
+                continue
+            out_data = (json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8")
+            stdout.write(out_data)
+            stdout.flush()
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
     finally:
         server.close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: run the server, or ``--selftest`` and exit."""
+    parser = argparse.ArgumentParser(
+        prog="darspack.mcp",
+        description=(
+            "DarsPack MCP server (JSON-RPC 2.0 over stdio). "
+            "Headless: it never opens the DarsPack window."
+        ),
+    )
+    parser.add_argument(
+        "library",
+        nargs="?",
+        help="DarsPack library folder (defaults to settings.json or ~/Documents/DarsPackLibrary)",
+    )
+    parser.add_argument(
+        "--library",
+        dest="library_flag",
+        metavar="PATH",
+        help="DarsPack library folder (preferred over the positional form)",
+    )
+    parser.add_argument(
+        "--selftest",
+        action="store_true",
+        help="print a JSON health report and exit 0 when the server is usable",
+    )
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="print a ready-to-paste MCP config block for this machine and exit",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("mcp", "opencode"),
+        default="mcp",
+        help="config flavour for --print-config (default: mcp -> mcpServers block)",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"darspack-mcp {_server_version()}"
+    )
+    args = parser.parse_args(argv)
+
+    library = args.library_flag or args.library
+    if args.print_config:
+        from .launch import build_mcp_config, build_opencode_config
+
+        config = (
+            build_opencode_config(library)
+            if args.format == "opencode"
+            else build_mcp_config(library)
+        )
+        _write_json_line(config)
+        return 0
+
+    if args.selftest:
+        report, code = build_selftest_report(library)
+        _write_json_line(report)
+        return code
+
+    run_stdio_server(library)
+    return 0
+

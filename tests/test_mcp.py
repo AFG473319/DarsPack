@@ -1,6 +1,9 @@
 """Tests for DarsPack MCP (Model Context Protocol) server."""
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import pytest
 
 from darspack.core.library import Library
@@ -283,23 +286,70 @@ def test_mcp_package_export_verify_and_stats(mcp_server, tmp_path):
     assert "version_conflicts" in dup_res
 
 
-def test_build_mcp_config():
+def test_build_mcp_config_python_mode(tmp_path):
     from darspack.mcp.prompt import build_mcp_config
-    from darspack.mcp.server import DEFAULT_LIBRARY_PATH
 
-    cfg_default = build_mcp_config(library_path=DEFAULT_LIBRARY_PATH, python_path="C:\\Python\\python.exe")
-    assert "mcpServers" in cfg_default
-    darspack = cfg_default["mcpServers"]["darspack"]
-    assert darspack["command"] == "C:/Python/python.exe"
-    assert darspack["args"] == ["-m", "darspack.mcp"]
+    cfg = build_mcp_config(python_path="C:\\Python\\python.exe", library_path=tmp_path / "lib")
+    entry = cfg["mcpServers"]["darspack"]
+    assert entry["command"] == "C:\\Python\\python.exe"
+    assert entry["args"][:2] == ["-m", "darspack.mcp"]
+    assert entry["args"][-2] == "--library"
+    assert entry["args"][-1] == str((tmp_path / "lib").resolve())
+    # Source checkouts are not installed, so PYTHONPATH must point at src/.
+    assert entry["env"]["PYTHONPATH"].endswith("src")
 
-    # Custom library
-    custom_lib = Path("D:/Custom/Library")
-    cfg_custom = build_mcp_config(library_path=custom_lib, python_path="C:\\Python\\python.exe")
-    args = cfg_custom["mcpServers"]["darspack"]["args"]
-    assert args[0] == "-m"
-    assert args[1] == "darspack.mcp"
-    assert "Custom" in args[2]
+
+def test_build_opencode_config_shape(tmp_path):
+    from darspack.mcp.prompt import build_opencode_config
+
+    cfg = build_opencode_config(python_path="C:\\Python\\python.exe", library_path=tmp_path / "lib")
+    entry = cfg["mcp"]["servers"]["darspack"]
+    assert entry["type"] == "local"
+    assert entry["command"][:3] == ["C:\\Python\\python.exe", "-m", "darspack.mcp"]
+    assert entry["environment"]["PYTHONPATH"].endswith("src")
+    # The old prompt put an `mcpServers` block in front of OpenCode users,
+    # which OpenCode v2 silently ignores.
+    assert "mcpServers" not in cfg
+
+
+def test_resolve_launch_frozen_uses_bundled_exe(tmp_path, monkeypatch):
+    from darspack.mcp.launch import SERVER_EXE_NAME, resolve_launch
+
+    gui_exe = tmp_path / "DarsPack.exe"
+    gui_exe.write_bytes(b"")
+    server_exe = tmp_path / SERVER_EXE_NAME
+    server_exe.write_bytes(b"")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(gui_exe))
+    monkeypatch.setattr(sys, "argv", [str(gui_exe)])
+
+    launch = resolve_launch(library_path=tmp_path / "lib")
+    assert launch.mode == "frozen"
+    assert launch.command == str(server_exe)
+    assert launch.args == ["--library", str((tmp_path / "lib").resolve())]
+    assert launch.env == {}  # frozen build resolves its own package
+    assert launch.available
+
+
+def test_resolve_launch_frozen_without_server_exe_is_explicit(tmp_path, monkeypatch):
+    from darspack.mcp.prompt import build_agent_prompt
+    from darspack.mcp.launch import resolve_launch
+
+    gui_exe = tmp_path / "DarsPack.exe"
+    gui_exe.write_bytes(b"")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(gui_exe))
+    monkeypatch.setattr(sys, "argv", [str(gui_exe)])
+
+    launch = resolve_launch(library_path=tmp_path / "lib")
+    assert launch.mode == "unavailable"
+    assert not launch.available
+    # Never hand out a config that would just launch the GUI again.
+    assert "DarsPack.exe" in launch.note
+
+    prompt = build_agent_prompt(library_path=tmp_path / "lib")
+    assert "DarsPackMcp.exe" in prompt
+    assert "mcpServers" not in prompt
 
 
 def test_build_agent_prompt():
@@ -307,8 +357,9 @@ def test_build_agent_prompt():
 
     prompt = build_agent_prompt(library_path="D:/School/Lib", python_path="C:\\Python314\\python.exe")
     assert "# Connect to DarsPack MCP Server" in prompt
-    assert "C:/Python314/python.exe" in prompt
+    assert "C:\\Python314\\python.exe" in prompt
     assert "claude mcp add darspack" in prompt
+    assert "opencode.cmd mcp add darspack" in prompt
     assert "OpenCode" in prompt
     assert "Antigravity" in prompt
     assert "Hermes" in prompt
@@ -316,4 +367,169 @@ def test_build_agent_prompt():
     assert "darspack_list_subjects" in prompt
     assert "darspack_classify_file" in prompt
     assert "Flag, never touch" in prompt
+    # The agent is told how to verify the command before trusting it.
+    assert "--selftest" in prompt
+    assert "--print-config" in prompt
+    assert "tool_count" in prompt
+    # Headless promise, so nobody expects a window.
+    assert "does **not** open" in prompt
+
+
+def test_initialize_negotiates_protocol_and_sends_instructions(mcp_server):
+    from darspack.mcp.server import SUPPORTED_PROTOCOL_VERSIONS
+
+    for version in SUPPORTED_PROTOCOL_VERSIONS:
+        resp = mcp_server.handle_request({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": version, "capabilities": {}},
+        })
+        assert resp["result"]["protocolVersion"] == version
+
+    resp = mcp_server.handle_request({
+        "jsonrpc": "2.0", "id": 2, "method": "initialize",
+        "params": {"protocolVersion": "1999-01-01", "capabilities": {}},
+    })
+    assert resp["result"]["protocolVersion"] == "2025-06-18"
+    assert "darspack_get_stats" in resp["result"]["instructions"]
+    # We advertise tools only; empty resource capabilities make clients probe.
+    assert "resources" not in resp["result"]["capabilities"]
+
+
+def test_optional_methods_answer_instead_of_erroring(mcp_server):
+    for method, key in (
+        ("resources/list", "resources"),
+        ("resources/templates/list", "resourceTemplates"),
+        ("prompts/list", "prompts"),
+    ):
+        resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 7, "method": method})
+        assert resp["result"][key] == []
+    assert mcp_server.handle_request({"jsonrpc": "2.0", "id": 8, "method": "logging/setLevel", "params": {"level": "info"}})["result"] == {}
+    assert mcp_server.handle_request({"jsonrpc": "2.0", "id": 9, "method": "ping"})["result"] == {}
+    # Unknown methods still get a proper JSON-RPC error.
+    env = mcp_server.handle_request({"jsonrpc": "2.0", "id": 10, "method": "nope/nope"})
+    assert env["error"]["code"] == -32601
+
+
+def test_notifications_and_batches(mcp_server):
+    assert mcp_server.handle_request({"jsonrpc": "2.0", "method": "notifications/initialized"}) is None
+    batch = mcp_server.handle_request([
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "ping"},
+    ])
+    assert [item["id"] for item in batch] == [1, 2]
+
+
+def test_tools_list_marks_read_only_tools(mcp_server):
+    resp = mcp_server.handle_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+    by_name = {tool["name"]: tool for tool in resp["result"]["tools"]}
+    assert by_name["darspack_search_files"]["annotations"] == {"readOnlyHint": True}
+    assert by_name["darspack_get_stats"]["annotations"] == {"readOnlyHint": True}
+    assert "annotations" not in by_name["darspack_classify_file"]
+
+
+def test_selftest_report_is_side_effect_free(tmp_path):
+    from darspack.mcp.server import build_selftest_report
+
+    library = tmp_path / "does_not_exist"
+    report, code = build_selftest_report(library)
+    assert code == 0
+    assert report["ok"] is True
+    assert report["tool_count"] == 16
+    assert len(report["tools"]) == 16
+    assert report["library_exists"] is False
+    # A health check must not create the library it inspects.
+    assert not library.exists()
+
+
+def test_main_selftest_exit_code(capsysbinary, tmp_path):
+    from darspack.mcp.server import main
+
+    code = main(["--selftest", "--library", str(tmp_path / "lib")])
+    out = capsysbinary.readouterr().out.decode("utf-8")
+    report = json.loads(out)
+    assert code == 0
+    assert report["ok"] is True
+    assert report["library"] == str((tmp_path / "lib").resolve())
+
+
+def test_main_print_config_for_agents(capsysbinary, tmp_path):
+    from darspack.mcp.server import main
+
+    code = main(["--print-config", "--library", str(tmp_path / "lib")])
+    out = capsysbinary.readouterr().out.decode("utf-8")
+    config = json.loads(out)
+    assert code == 0
+    entry = config["mcpServers"]["darspack"]
+    assert entry["args"][-1] == str((tmp_path / "lib").resolve())
+
+    code = main(["--print-config", "--format", "opencode", "--library", str(tmp_path / "lib")])
+    out = capsysbinary.readouterr().out.decode("utf-8")
+    config = json.loads(out)
+    assert code == 0
+    assert config["mcp"]["servers"]["darspack"]["type"] == "local"
+
+
+def test_mcp_import_does_not_load_qt():
+    """The server runs inside an agent: importing it must not pull in Qt."""
+    from darspack.mcp.launch import resolve_launch
+
+    env = dict(os.environ)
+    env.update(resolve_launch(library_path=Path.cwd() / "unused").env)
+    probe = (
+        "import sys, darspack.mcp; "
+        "print('PySide6' in sys.modules, 'darspack.ui' in sys.modules)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True, text=True, env=env, timeout=180,
+        cwd=str(Path(__file__).resolve().parent),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False False"
+
+
+def test_stdio_handshake_end_to_end(tmp_path):
+    """What an MCP client actually does: spawn, initialize, list, call."""
+    from darspack.mcp.launch import resolve_launch
+
+    launch = resolve_launch(library_path=tmp_path / "lib", python_path=sys.executable)
+    env = dict(os.environ)
+    env.update(launch.env)
+    proc = subprocess.Popen(
+        launch.argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+
+    def send(payload):
+        proc.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
+        proc.stdin.flush()
+
+    def recv():
+        line = proc.stdout.readline()
+        assert line, proc.stderr.read().decode("utf-8", "replace")
+        return json.loads(line.decode("utf-8"))
+
+    try:
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                         "clientInfo": {"name": "pytest", "version": "1"}}})
+        init = recv()
+        assert init["result"]["serverInfo"]["name"] == "darspack-mcp"
+        assert init["result"]["protocolVersion"] == "2025-06-18"
+
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        assert len(recv()["result"]["tools"]) == 16
+
+        send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+              "params": {"name": "darspack_get_stats", "arguments": {}}})
+        stats = json.loads(recv()["result"]["content"][0]["text"])
+        assert stats["file_count"] == 0
+    finally:
+        proc.stdin.close()
+        assert proc.wait(timeout=60) == 0
 

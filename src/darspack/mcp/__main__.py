@@ -1,10 +1,14 @@
-"""CLI entrypoint to run the DarsPack MCP server:
+"""CLI entrypoint to run the DarsPack MCP server.
 
-python -m darspack.mcp
+    python -m darspack.mcp                 # serve over stdio
+    python -m darspack.mcp --selftest      # health check, exit 0/1
+    python -m darspack.mcp --library PATH  # explicit library folder
+
+The same code path is used by the bundled ``DarsPackMcp.exe``.
 """
 import sys
-from .server import run_stdio_server
+
+from .server import main
 
 if __name__ == "__main__":
-    library_path = sys.argv[1] if len(sys.argv) > 1 else None
-    run_stdio_server(library_path)
+    sys.exit(main())

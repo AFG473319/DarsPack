@@ -99,9 +99,14 @@ def test_help_dialog_structure_and_tabs(qapp):
     assert hasattr(dlg, "btn_copy_mcp_prompt")
     assert hasattr(dlg, "btn_copy_mcp_json")
     assert hasattr(dlg, "btn_copy_mcp_cli")
+    assert hasattr(dlg, "btn_copy_mcp_cli_opencode")
     assert "Connect to DarsPack MCP Server" in dlg._mcp_prompt
     assert "darspack.mcp" in dlg._mcp_prompt
     assert "mcpServers" in dlg._mcp_json_str
+    # The generated config must point at the headless server, never the GUI.
+    assert "--library" in dlg._mcp_json_str
+    assert "--selftest" in dlg._mcp_prompt
+    assert "opencode.cmd mcp add darspack" in dlg._opencode_cli_cmd
 
     # Test copy prompt button
     dlg.btn_copy_mcp_prompt.click()

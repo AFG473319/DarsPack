@@ -3149,7 +3149,12 @@ class HelpDialog(QDialog):
         return widget
 
     def _build_mcp_tab(self) -> QWidget:
-        from ..mcp.prompt import build_agent_prompt, build_mcp_config
+        from ..mcp.launch import (
+            build_mcp_config,
+            config_json,
+            resolve_launch,
+        )
+        from ..mcp.prompt import build_agent_prompt
 
         widget = QWidget()
         vbox = QVBoxLayout(widget)
@@ -3157,12 +3162,16 @@ class HelpDialog(QDialog):
         vbox.setSpacing(10)
 
         library_path = self.settings.get("library")
+        self._mcp_launch = resolve_launch(library_path)
         self._mcp_prompt = build_agent_prompt(library_path)
         mcp_config = build_mcp_config(library_path)
-        self._mcp_json_str = json.dumps(mcp_config, indent=2, ensure_ascii=False)
-        py_exe = mcp_config["mcpServers"]["darspack"]["command"]
-        args_str = " ".join(mcp_config["mcpServers"]["darspack"]["args"])
-        self._claude_cli_cmd = f'claude mcp add darspack -- "{py_exe}" {args_str}'
+        self._mcp_json_str = config_json(mcp_config)
+        self._claude_cli_cmd = (
+            f"claude mcp add darspack -- {self._mcp_launch.command_line()}"
+        )
+        self._opencode_cli_cmd = (
+            f"opencode.cmd mcp add darspack -- {self._mcp_launch.command_line()}"
+        )
 
         # 1. Overview Card
         intro_card = QFrame()
@@ -3188,6 +3197,17 @@ class HelpDialog(QDialog):
         text_box.addWidget(desc_lbl)
         intro_lay.addLayout(text_box, 1)
         vbox.addWidget(intro_card)
+
+        headless_lbl = QLabel(tr("help_mcp_headless_note"))
+        headless_lbl.setObjectName("DialogHint")
+        headless_lbl.setWordWrap(True)
+        vbox.addWidget(headless_lbl)
+
+        if not self._mcp_launch.available:
+            warn_lbl = QLabel(tr("help_mcp_unavailable"))
+            warn_lbl.setWordWrap(True)
+            warn_lbl.setStyleSheet(f"color: {theme.PALETTE['danger']};")
+            vbox.addWidget(warn_lbl)
 
         # 2. 1-Click Agent Setup Card
         auto_card = QFrame()
@@ -3257,43 +3277,52 @@ class HelpDialog(QDialog):
         man_heading = QLabel(f"<b>{tr('help_mcp_manual_heading')}</b>")
         manual_lay.addWidget(man_heading)
 
-        # Claude Code command
-        cli_lbl = QLabel(f"<small>{tr('help_mcp_cli_heading')}</small>")
-        cli_lbl.setObjectName("DialogHint")
-        manual_lay.addWidget(cli_lbl)
+        def add_cli_row(heading_key: str, command: str) -> QPushButton:
+            """One read-only command line plus its own copy button."""
+            lbl = QLabel(f"<small>{tr(heading_key)}</small>")
+            lbl.setObjectName("DialogHint")
+            manual_lay.addWidget(lbl)
 
-        cli_row = QHBoxLayout()
-        cli_input = QLineEdit(self._claude_cli_cmd)
-        cli_input.setObjectName("McpCliInput")
-        cli_input.setLayoutDirection(Qt.LeftToRight)
-        cli_input.setReadOnly(True)
-        cli_input.setToolTip(self._claude_cli_cmd)
-        cli_input.setCursorPosition(0)
-        cli_input.setStyleSheet(
-            f"QLineEdit#McpCliInput {{ background: #141720; color: {theme.PALETTE['text']}; "
-            f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
-            f"font-family: Consolas, monospace; font-size: 12px; padding: 6px 10px; }}"
+            row = QHBoxLayout()
+            field = QLineEdit(command)
+            field.setObjectName("McpCliInput")
+            field.setLayoutDirection(Qt.LeftToRight)
+            field.setReadOnly(True)
+            field.setToolTip(command)
+            field.setCursorPosition(0)
+            field.setStyleSheet(
+                f"QLineEdit#McpCliInput {{ background: #141720; color: {theme.PALETTE['text']}; "
+                f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
+                f"font-family: Consolas, monospace; font-size: 12px; padding: 6px 10px; }}"
+            )
+            row.addWidget(field, 1)
+
+            btn = QPushButton()
+            btn.setObjectName("Secondary")
+            btn.setFixedSize(36, 36)
+            btn.setToolTip("کپی دستور" if i18n.language() == "fa" else "Copy command")
+            btn.setIcon(icons.icon("copy", theme.PALETTE["text"], 15))
+
+            def on_copy():
+                cb = QApplication.clipboard()
+                if cb:
+                    cb.setText(command)
+                btn.setIcon(icons.icon("check", theme.PALETTE["success"], 15))
+                QTimer.singleShot(
+                    2500,
+                    self,
+                    lambda: btn.setIcon(icons.icon("copy", theme.PALETTE["text"], 15)),
+                )
+
+            btn.clicked.connect(on_copy)
+            row.addWidget(btn)
+            manual_lay.addLayout(row)
+            return btn
+
+        self.btn_copy_mcp_cli = add_cli_row("help_mcp_cli_heading", self._claude_cli_cmd)
+        self.btn_copy_mcp_cli_opencode = add_cli_row(
+            "help_mcp_cli_heading_opencode", self._opencode_cli_cmd
         )
-        cli_row.addWidget(cli_input, 1)
-
-        self.btn_copy_mcp_cli = QPushButton()
-        self.btn_copy_mcp_cli.setObjectName("Secondary")
-        self.btn_copy_mcp_cli.setFixedSize(36, 36)
-        self.btn_copy_mcp_cli.setToolTip(
-            "کپی دستور" if i18n.language() == "fa" else "Copy command"
-        )
-        self.btn_copy_mcp_cli.setIcon(icons.icon("copy", theme.PALETTE["text"], 15))
-
-        def on_copy_cli():
-            cb = QApplication.clipboard()
-            if cb:
-                cb.setText(self._claude_cli_cmd)
-            self.btn_copy_mcp_cli.setIcon(icons.icon("check", theme.PALETTE["success"], 15))
-            QTimer.singleShot(2500, self, lambda: self.btn_copy_mcp_cli.setIcon(icons.icon("copy", theme.PALETTE["text"], 15)))
-
-        self.btn_copy_mcp_cli.clicked.connect(on_copy_cli)
-        cli_row.addWidget(self.btn_copy_mcp_cli)
-        manual_lay.addLayout(cli_row)
 
         # JSON config
         json_lbl_row = QHBoxLayout()
