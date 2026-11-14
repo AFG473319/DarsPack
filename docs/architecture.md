@@ -45,7 +45,8 @@ src/darspack/
 │   ├── sync.py           # manifest/diff logic shared with packaging                 
 │   └── client/           # static RTL HTML/CSS/JS + PWA manifest/icons — no build step
 ├── mcp/                  # Model Context Protocol stdio server for AI agents
-│   ├── server.py         # JSON-RPC 2.0 / MCP tool dispatch & handlers
+│   ├── server.py         # JSON-RPC 2.0 / MCP tool dispatch, CLI (--selftest, --print-config)
+│   ├── launch.py         # resolves a launch command that works (frozen exe vs. source)
 │   ├── extractor.py      # zero-dependency text & PDF stream preview extractor
 │   └── prompt.py         # 1-click AI agent connection prompt & MCP config builder
 └── i18n.py               # fa/en string dictionaries (plain dicts, no Qt Linguist)
