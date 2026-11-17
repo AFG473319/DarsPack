@@ -13,7 +13,10 @@
 ;
 ; Build: installer\build-installer.bat (needs Inno Setup 6 — see
 ; docs/dependencies.md). Output: dist\DarsPack-Setup.exe (gitignored).
-; Bump AppVersion together with src/darspack/__init__.py __version__.
+; Bump MyAppVersion together with src/darspack/__init__.py __version__:
+; AppVersion here must be numeric-only (Inno requirement), so a beta
+; suffix (e.g. 0.2.2-beta.1) lives in the git tag / release name only —
+; scripts/check_release_tag.py enforces the pairing before publishing.
 ;
 ; [Setup]
 ; AppId is a stable GUID (generate once, never change after first
@@ -24,8 +27,8 @@
 [Setup]
 AppId={{15da954e-9bf3-4804-85db-fe556307e417}
 AppName=DarsPack
-AppVersion=0.2.1
-;VersionInfoVersion=0.2.1
+AppVersion={#MyAppVersion}
+;VersionInfoVersion={#MyAppVersion}
 AppPublisher=DarsPack
 DefaultDirName={localappdata}\Programs\DarsPack
 DefaultGroupName=DarsPack

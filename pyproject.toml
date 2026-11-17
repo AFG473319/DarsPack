@@ -1,10 +1,16 @@
 [project]
 name = "darspack"
-version = "0.1.0"
+# The version lives in ONE place: __version__ in src/darspack/__init__.py —
+# the same string the UI shows and release tags must match
+# (scripts/check_release_tag.py enforces the pairing).
+dynamic = ["version"]
 description = "Offline-first, Persian-first organizer for school materials (درس‌پک)"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.12"
 dependencies = ["jdatetime>=5.0"]
+
+[tool.setuptools.dynamic]
+version = { attr = "darspack.__version__" }
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
