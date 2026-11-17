@@ -14,7 +14,10 @@ snapshot points at those names, so a restore must replace catalog.db
 AND the whole files/ folder together. An earlier build filed members
 as 'NNN - name'; a restore then left every copied file unreferenced,
 and the next startup's orphan sweep deleted them - total data loss.
-Fixed 2026-11-17; see tests/test_backup.py.
+Fixed 2026-11-17 for NEW backups (stored_names=True); for backups made
+BEFORE that day, Library.sweep_orphans()'s rescue pass re-homes the
+friendly-labelled copies by SHA-256 on the next open, so the manual
+restore below is safe for them too. See tests/test_backup.py.
 """
 from __future__ import annotations
 
@@ -39,9 +42,10 @@ _RESTORE_GUIDE = """بازگردانی پشتیبان درس‌پک — راهن
 کاتالوگ‌اند (مثل 000001.pdf)، نه نام‌های نمایشی. catalog.db داخل پشتیبان به
 همین نام‌ها اشاره می‌کند. بنابراین باید catalog.db و کل پوشه‌ی files/ را با هم
 جایگزین کنید. اگر فایل‌ها را با نام دیگری کپی کنید، کاتالوگ آنها را نمی‌شناسد.
-هنگام باز شدن برنامه، پاکسازی فایل‌های بی‌صاحب آنها را حذف می‌کند و بررسی
-سلامت، ردیف‌های کاتالوگ را گم‌شده علامت‌گذاری می‌کند (از دست رفتن
-جزوه‌ها).
+هیچ‌چیز پاک نمی‌شود: در نخستین باز شدن برنامه، هر فایلی که محتوای آن (اثر
+انگشت SHA-256) با ردیفی از کاتالوگ که فایلش گم شده هم‌خوانی دارد، سر جای خود
+برمی‌گردد؛ فقط محتوای بی‌صاحب پاکسازی می‌شود. بررسی سلامت نیز ردیف‌های
+گم‌شده را علامت‌گذاری می‌کند.
 
 بازگردانی (گام‌به‌گام):
   1. برنامه‌ی DarsPack را کاملاً ببندید.

@@ -11,7 +11,7 @@ from darspack.core.backup import backup_filename, backup_library
 from darspack.core.hashing import sha256_file
 from darspack.core.importer import import_file
 from darspack.core.library import Library
-from darspack.core.manifest import verify_package
+from darspack.core.manifest import safe_name, verify_package
 
 
 @pytest.fixture()
@@ -152,3 +152,52 @@ def test_restore_from_backup_survives_startup_sweep(tmp_path,
             assert row["available"] == 1
             assert path.stat().st_size == size
             assert sha256_file(path) == digest
+
+
+def test_restore_of_legacy_backup_survives_startup_sweep(tmp_path,
+                                                         library_with_files):
+    """Regression for backups made before 2026-11-17: members were filed
+    as friendly «NNN - name» labels while catalog.db points at stored
+    names, so the documented restore used to lose every file to the
+    startup sweep. The rescue pass must re-home them by SHA-256 instead."""
+    legacy = tmp_path / "legacy-lib"
+    (legacy / "files").mkdir(parents=True)
+    with Library(library_with_files) as lib:
+        shutil.copy2(lib.db_path, legacy / "catalog.db")
+        expected = {
+            r["id"]: (r["stored_name"], r["original_name"], r["sha256"])
+            for r in lib.conn.execute("SELECT * FROM files")
+        }
+    # reproduce the legacy export: copies under «NNN - name», in id order
+    for i, fid in enumerate(sorted(expected), start=1):
+        stored, original, _ = expected[fid]
+        shutil.copy2(library_with_files / "files" / stored,
+                     legacy / "files" / f"{i:03d} - {safe_name(original)}")
+    friendly = {p.name for p in (legacy / "files").iterdir()}
+    assert len(friendly) == len(expected)      # the bad state is on disk
+
+    with Library(legacy) as lib:              # open runs rescue + sweep
+        rows = {r["id"]: r for r in lib.conn.execute("SELECT * FROM files")}
+        assert len(rows) == len(expected)
+        for fid, (stored, _, digest) in expected.items():
+            path = lib.files_dir / stored
+            assert path.is_file(), f"legacy file was deleted: {stored}"
+            assert sha256_file(path) == digest
+            assert rows[fid]["available"] == 1
+        # the friendly labels are gone (renamed into place, not duplicated)
+        assert {p.name for p in lib.files_dir.iterdir() if p.is_file()} == {
+            stored for stored, _, _ in expected.values()}
+
+
+def test_sweep_still_removes_unknown_content(tmp_path):
+    """The rescue must not hoard junk: a file matching no catalog row
+    (e.g. an interrupted tmp copy) is still swept on open."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "جزوه.pdf"
+        src.write_bytes(b"real content")
+        import_file(lib, src)
+    junk = tmp_path / "lib" / "files" / "tmp_partial"
+    junk.write_bytes(b"interrupted copy")
+    with Library(tmp_path / "lib") as lib:
+        assert not junk.exists()
+        assert (lib.files_dir / "000001.pdf").is_file()

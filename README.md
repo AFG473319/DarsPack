@@ -4,7 +4,7 @@
 
 DarsPack (درس‌پک) helps Iranian middle-school students keep their class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) in one findable place. It is a Windows desktop app that also serves a phone-friendly web client over local Wi-Fi. Persian-first RTL interface with an English toggle.
 
-> Status: **working v0.1** — core engine, brand RTL desktop UI, LAN phone client, and the Windows build are implemented and covered by 332 automated tests; see `docs/limitations.md` for known limitations.
+> Status: **working v0.1** — core engine, brand RTL desktop UI, LAN phone client, and the Windows build are implemented and covered by 403 automated tests; see `docs/limitations.md` for known limitations.
 
 ## What works
 
@@ -34,7 +34,6 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 | `docs/limitations.md` | Known limitations and measured performance on the target laptop |
 | `docs/feedback-setup.md` | Optional online feedback endpoint setup |
 | `docs/mcp.md` | Model Context Protocol (MCP) server configuration for AI agents |
-***REMOVED***
 | `eval/benchmark-plan.md` | Controlled benchmark: find-time, duplicate/conflict detection accuracy, package verification |
 | `installer/` | PyInstaller spec + one-command build script (`build.bat`) |
 

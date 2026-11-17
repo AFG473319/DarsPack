@@ -107,6 +107,13 @@ class Library:
         Two kinds of leftovers can exist after a crash: tmp_* copies made
         before the atomic rename, and a numbered file whose row rolled
         back. Both are safe to delete — the catalog is the source of truth.
+
+        Nothing is deleted before a rescue pass (see _rescue_unknowns):
+        an unknown file whose SHA-256 matches a catalog row that lost its
+        own file is renamed into place instead of swept. This is what
+        makes a backup made before 2026-11-17 (members filed under
+        friendly «NNN - name» labels) safe to restore with the guide's
+        manual steps.
         """
         if self.conn is None:
             for p in self.files_dir.glob("tmp_*"):
@@ -114,9 +121,57 @@ class Library:
             return
         known = {r["stored_name"] for r in self.conn.execute(
             "SELECT stored_name FROM files")}
-        for p in self.files_dir.iterdir():
-            if p.is_file() and p.name not in known:
-                p.unlink(missing_ok=True)
+        unknown = [p for p in self.files_dir.iterdir()
+                   if p.is_file() and p.name not in known]
+        if unknown:
+            self._rescue_unknowns(unknown)
+            unknown = [p for p in unknown if p.is_file()]
+        for p in unknown:
+            p.unlink(missing_ok=True)
+
+    def _rescue_unknowns(self, paths) -> int:
+        """Rename files the catalog doesn't know into rows that lost their file.
+
+        A full-library backup made before 2026-11-17 filed its members
+        under friendly display labels («001 - جزوه.pdf»), while the
+        catalog.db snapshot inside the same ZIP still points at the
+        internal stored names (files/000001.pdf). Restoring such a backup
+        per its own guide copies files no row knows by name — and this
+        sweep then erased every one of them on the next open (data loss).
+        The fix for NEW backups (stored_names=True in export_package)
+        shipped the same day; this pass makes the OLD backups safe too.
+
+        Match by SHA-256 — the content's fingerprint, not the name. An
+        unknown file whose hash equals a catalog row whose own file is
+        missing is renamed to that row's stored name; anything with no
+        such row is left for the sweep. One hash rescues at most one row,
+        so duplicate rows (identical content) each need their own copy.
+        """
+        missing: dict[str, list[str]] = {}
+        for row in self.conn.execute(
+                "SELECT stored_name, sha256 FROM files"):
+            if (self.files_dir / row["stored_name"]).exists():
+                continue
+            missing.setdefault(row["sha256"], []).append(row["stored_name"])
+        if not missing:
+            return 0                        # nothing is lost → nothing to rescue
+        rescued = 0
+        for p in paths:
+            try:
+                digest = sha256_file(p)
+            except OSError:                 # unreadable: not rescuable today
+                continue
+            stored_names = missing.get(digest)
+            if not stored_names:
+                continue                    # nobody is waiting for this content
+            stored_name = stored_names.pop(0)
+            if not stored_names:
+                del missing[digest]
+            p.rename(self.files_dir / stored_name)   # same folder: atomic
+            rescued += 1
+            with self.conn:
+                db.log(self.conn, "rescue", f"{p.name} → {stored_name}")
+        return rescued
 
     def stored_path(self, row) -> Path:
         """Absolute path of a catalog row's file inside the library."""
