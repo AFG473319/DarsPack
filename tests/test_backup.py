@@ -1,4 +1,6 @@
 """Tests for the one-click full-library backup (پشتیبان‌گیری, B2)."""
+import json
+import shutil
 import sqlite3
 import zipfile
 from datetime import date
@@ -6,6 +8,7 @@ from datetime import date
 import pytest
 
 from darspack.core.backup import backup_filename, backup_library
+from darspack.core.hashing import sha256_file
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.manifest import verify_package
@@ -93,3 +96,59 @@ def test_backup_is_wal_safe(library_with_files, tmp_path):
     finally:
         check.close()
     assert "تازه.pdf" in names
+
+
+def test_backup_files_keep_catalog_stored_names(tmp_path, library_with_files):
+    """The backup's files/ must use the catalog's own stored names, not
+    friendly «NNN - name» labels: the catalog.db in the same ZIP points at
+    those names, so a restore must be able to line the two up."""
+    out = tmp_path / "names.zip"
+    with Library(library_with_files) as lib:
+        stored = {r["stored_name"] for r in lib.conn.execute(
+            "SELECT stored_name FROM files")}
+        backup_library(lib, out)
+    assert len(stored) == 2
+    with zipfile.ZipFile(out) as zf:
+        file_members = {n for n in zf.namelist() if n.startswith("files/")}
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    assert file_members == {f"files/{s}" for s in stored}
+    assert {e["path"] for e in manifest["files"]} == file_members
+    assert verify_package(out).ok
+
+
+def test_restore_from_backup_survives_startup_sweep(tmp_path,
+                                                    library_with_files):
+    """Regression for the reported data loss: following the documented
+    restore (replace catalog.db AND the whole files/ folder) must survive
+    the next open's orphan sweep + health check, with every lesson intact."""
+    out = tmp_path / "restore.zip"
+    with Library(library_with_files) as lib:
+        expected = {
+            r["stored_name"]: (r["size_bytes"], r["sha256"])
+            for r in lib.conn.execute("SELECT * FROM files")
+        }
+        backup_library(lib, out)
+
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(out) as zf:
+        zf.extractall(extracted)
+
+    # Simulate the guide: a fresh library root gets the backup's catalog.db
+    # and the whole files/ folder copied in, with the app closed.
+    restored = tmp_path / "restored-lib"
+    (restored / "files").mkdir(parents=True)
+    shutil.copy2(extracted / "catalog.db", restored / "catalog.db")
+    for member in (extracted / "files").iterdir():
+        shutil.copy2(member, restored / "files" / member.name)
+    assert {p.name for p in (restored / "files").iterdir()} == set(expected)
+
+    with Library(restored) as lib:            # open runs sweep + health check
+        rows = lib.conn.execute("SELECT * FROM files").fetchall()
+        assert len(rows) == len(expected)
+        for row in rows:
+            size, digest = expected[row["stored_name"]]
+            path = lib.files_dir / row["stored_name"]
+            assert path.is_file(), f"restored file was deleted: {path.name}"
+            assert row["available"] == 1
+            assert path.stat().st_size == size
+            assert sha256_file(path) == digest

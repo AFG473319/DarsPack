@@ -68,16 +68,28 @@ def _fetch_entry(conn, file_id: int) -> dict:
     }
 
 
-def export_package(conn, files_dir, file_ids, out_path, progress=None) -> dict:
+def export_package(conn, files_dir, file_ids, out_path, progress=None,
+                   stored_names: bool = False) -> dict:
     """Write a درس‌پک ZIP for the given catalog ids. Returns package info."""
+    # By default each member is filed under a friendly «NNN - name» label,
+    # which keeps a shipped package browsable. A full-library backup passes
+    # stored_names=True: it keeps the catalog's own internal names
+    # (files/000001.pdf) instead. That matters because the backup ALSO carries
+    # a catalog.db snapshot whose rows point at those stored names — with
+    # friendly labels a restore leaves the copied files unreferenced, and the
+    # next startup's orphan sweep deletes them (data loss). Fixed 2026-11-17.
     entries = [_fetch_entry(conn, fid) for fid in file_ids]
     manifest = {"format": FORMAT, "version": VERSION, "created": _now(),
                 "files": entries}
     out_path = Path(out_path)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for i, entry in enumerate(manifest["files"], start=1):
-            arc = f"files/{i:03d} - {safe_name(entry['name'])}"
-            zf.write(Path(files_dir) / entry.pop("stored_name"), arc)
+            stored = entry.pop("stored_name")
+            if stored_names:
+                arc = f"files/{stored}"
+            else:
+                arc = f"files/{i:03d} - {safe_name(entry['name'])}"
+            zf.write(Path(files_dir) / stored, arc)
             entry["path"] = arc
             if progress is not None:
                 progress(i, len(entries))
