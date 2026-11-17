@@ -43,6 +43,9 @@ jobs:
     timeout-minutes: 30
     env:
       TAG: ${{ github.ref_name }}
+      # Windows runners default to cp1252 consoles; UTF-8 mode keeps
+      # non-ASCII output (↔, —, Persian) safe in Python steps.
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v5
 

@@ -104,7 +104,19 @@ def check(tag: str, app_version: str, iss_version: str) -> list[str]:
     return problems
 
 
+def _force_utf8_output() -> None:
+    """GitHub Actions Windows runners (and many real Windows consoles) use a
+    legacy codepage (cp1252) for stdout. Without reconfiguring, printing the
+    ↔ / — in our messages raises UnicodeEncodeError — which on run 44144483339
+    killed this script AFTER the check had already passed. errors="replace"
+    keeps a hostile console from ever crashing the gate."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str]) -> int:
+    _force_utf8_output()
     if len(argv) != 2:
         print("usage: python scripts/check_release_tag.py v0.2.2-beta.1",
               file=sys.stderr)
