@@ -3,7 +3,6 @@
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 # Run in offscreen mode
@@ -16,16 +15,13 @@ if str(SRC_DIR) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QTabWidget
+from PySide6.QtWidgets import QTabWidget
 
 from darspack import i18n
 from darspack.core import db
 from darspack.core.dedup import duplicate_groups, version_conflicts, rename_hints
-from darspack.core.library import Library
-from darspack.core.importer import import_file
 from darspack.core.manifest import VerifyReport
-from darspack.ui import dialogs, theme
+from darspack.ui import dialogs
 from darspack.ui.dialogs import library_stats
 from scripts.app_harness import AppDriver, SandboxEnvironment, ensure_qapp
 
@@ -40,7 +36,7 @@ def generate_all_screenshots(out_dir: Path):
     out_dir.mkdir(parents=True, exist_ok=True)
     for stale in out_dir.glob("*.png"):
         stale.unlink()
-    app = ensure_qapp()
+    ensure_qapp()   # QApplication must exist before any widget is built
 
     sandbox = SandboxEnvironment(count=8)
     driver = AppDriver(sandbox)

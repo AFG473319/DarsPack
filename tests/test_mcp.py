@@ -6,8 +6,6 @@ import subprocess
 import sys
 import pytest
 
-from darspack.core.library import Library
-from darspack.core.importer import import_file
 from darspack.mcp.server import DarsPackMcpServer
 from darspack.mcp.extractor import extract_preview
 

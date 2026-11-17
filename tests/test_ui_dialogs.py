@@ -323,7 +323,7 @@ def test_duplicates_dialog_jump_searches_first_name(qapp):
     builds its list items."""
     from types import SimpleNamespace
 
-    from PySide6.QtWidgets import QListWidget, QListWidgetItem, QLineEdit, QWidget
+    from PySide6.QtWidgets import QListWidgetItem, QLineEdit, QWidget
 
     from darspack.ui.dialogs import DuplicatesDialog
     parent = QWidget()
@@ -474,7 +474,7 @@ def test_activity_dialog_empty_log_message(tmp_path, qapp):
         lib.conn.execute("DELETE FROM activity_log")   # drop seed_subjects row
         lib.conn.commit()
         dlg = ActivityDialog(None, lib)
-        texts = [l.text() for l in dlg.findChildren(QLabel)]
+        texts = [lbl.text() for lbl in dlg.findChildren(QLabel)]
         assert any("هنوز فعالیتی ثبت نشده" in t for t in texts)
         assert not dlg.findChildren(QTableWidget) or \
             dlg.findChildren(QTableWidget)[0].rowCount() == 0
@@ -614,8 +614,8 @@ def test_share_dialog_live_refresh(tmp_path, qapp):
         import_file(lib, src)
         dlg._check_files()
         assert refreshes == [1]
-        label = [l for l in dlg.findChildren(QLabel)
-                 if "فایل جدید" in l.text()]
+        label = [lbl for lbl in dlg.findChildren(QLabel)
+                 if "فایل جدید" in lbl.text()]
         assert label                                # «۱ فایل جدید…» shown
         dlg._poll_timer.stop()
         dlg.deleteLater()

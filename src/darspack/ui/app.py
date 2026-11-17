@@ -15,7 +15,6 @@ from PySide6.QtWidgets import QApplication
 
 from .. import APP_NAME, asset_path
 from .. import i18n
-from ..core.library import Library
 from . import theme
 
 DEFAULT_LIBRARY = Path.home() / "Documents" / "DarsPackLibrary"

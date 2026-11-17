@@ -130,7 +130,6 @@ def test_duplicate_groups_wasted_bytes_and_detail(conn):
 
 @pytest.fixture()
 def conn(tmp_path):
-    import sqlite3
     from darspack.core import db
     c = db.connect(tmp_path / "catalog.db")
     db.init_schema(c)

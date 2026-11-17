@@ -199,7 +199,6 @@ def test_learned_hint_fires_only_at_two_hits_and_only_when_list_misses():
 
 
 def test_learn_hint_round_trip_through_the_table(tmp_path):
-    import sqlite3
     from darspack.core import db
     from darspack.core.suggest import forget_hint, learn_hint, load_hints, suggest
     conn = db.connect(tmp_path / "h.db")

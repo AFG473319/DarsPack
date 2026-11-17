@@ -21,18 +21,17 @@ from PySide6.QtWidgets import (
     QProgressBar,
 
     QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
-    QMessageBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMessageBox,
     QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget,
     QTableWidget, QTabWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
     QWidget,
 )
 
-from .. import __version__, asset_path, i18n
+from .. import asset_path, i18n
 from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
-from .workers import FeedbackPoster, ImportWorker
+from .workers import FeedbackPoster
 from .smooth_scroll import enable_smooth_scroll
 from .delegates import FileNameDelegate, FileNameLabel, KeycapDelegate, KindBadgeDelegate
 from . import icons, theme
@@ -1746,8 +1745,8 @@ class ShareDialog(QDialog):
                 cb.setText(text)
             btn.setText(tr("copied_done"))
             btn.setIcon(icons.icon("check", theme.PALETTE["success"], 14))
-            QTimer.singleShot(1800, btn, lambda b=btn, l=orig_label, i=orig_icon: (
-                b.setText(l),
+            QTimer.singleShot(1800, btn, lambda b=btn, lbl=orig_label, i=orig_icon: (
+                b.setText(lbl),
                 b.setIcon(icons.icon(i, theme.PALETTE["text"], 14)),
             ))
 

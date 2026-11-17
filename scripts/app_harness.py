@@ -427,13 +427,13 @@ def main():
         if args.port:
             server.port = args.port
         urls = server.start()
-        print(f"==================================================")
-        print(f"DarsPack Sandbox LAN Server running!")
+        print("==================================================")
+        print("DarsPack Sandbox LAN Server running!")
         print(f"URLs: {', '.join(urls)}")
         print(f"Local URL: http://127.0.0.1:{server.port}/")
         print(f"PIN: {server.pin}")
-        print(f"Press Ctrl+C to terminate.")
-        print(f"==================================================")
+        print("Press Ctrl+C to terminate.")
+        print("==================================================")
         try:
             while True:
                 time.sleep(1)

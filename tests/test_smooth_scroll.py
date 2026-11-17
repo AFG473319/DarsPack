@@ -6,12 +6,11 @@ from PySide6.QtCore import QAbstractAnimation, QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QListWidget,
     QTableWidget,
 )
 
-from darspack.ui.smooth_scroll import SmoothScroller, enable_smooth_scroll
+from darspack.ui.smooth_scroll import enable_smooth_scroll
 
 
 def make_wheel_event(

@@ -1,8 +1,6 @@
 """Tests for user onboarding, welcome tour, help center dialog, and empty state guidance."""
 import json
-from pathlib import Path
 import pytest
-from PySide6.QtCore import Qt
 
 from darspack import i18n
 from darspack.core.importer import import_file

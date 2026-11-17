@@ -19,7 +19,7 @@ from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+    QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QStatusBar, QTableWidget, QTableWidgetItem,
     QToolButton, QToolTip, QVBoxLayout, QWidget,
@@ -860,7 +860,6 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
         from .delegates import KIND_BADGES
-        from ..core.normalize import persian_digits
 
         cols = 3  # 3 responsive columns
         for idx, row in enumerate(self.last_rows):

@@ -254,7 +254,7 @@ def test_package_import_round_trips_metadata(tmp_path):
     # the receiver extracts files/ to a temp dir and imports with metas —
     # exactly what the package-import dialog will do
     with Library(tmp_path / "receiver") as receiver:
-        import tempfile, shutil
+        import tempfile
         with tempfile.TemporaryDirectory() as td:
             with zipfile.ZipFile(out) as zf:
                 zf.extractall(td)

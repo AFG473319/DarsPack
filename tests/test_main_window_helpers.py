@@ -680,7 +680,7 @@ def test_header_click_sorts_table(tmp_path, qapp):
 
 def test_drag_and_drop_import(tmp_path, qapp, monkeypatch):
     """Dragging and dropping local files onto MainWindow or table viewport triggers run_import_worker."""
-    from PySide6.QtCore import QMimeData, QUrl, QPointF, Qt, QEvent
+    from PySide6.QtCore import QMimeData, QUrl, QPointF, Qt
     from PySide6.QtGui import QDragEnterEvent, QDropEvent
 
     win = mw_module.MainWindow(tmp_path / "lib",

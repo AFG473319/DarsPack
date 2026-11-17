@@ -13,7 +13,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable
 
 from ..core import db
 from ..core.backup import backup_library, backup_filename
@@ -23,7 +22,7 @@ from ..core.library import Library
 from ..core.manifest import export_package, verify_package
 from ..core.normalize import match_key
 from ..core.search import search
-from ..core.suggest import suggest, learn_hint, DEFAULT_SUBJECTS
+from ..core.suggest import suggest, learn_hint
 from .extractor import extract_preview
 
 DEFAULT_LIBRARY_PATH = Path.home() / "Documents" / "DarsPackLibrary"

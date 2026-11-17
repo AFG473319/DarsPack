@@ -1,6 +1,5 @@
 """Tests for Jalali school-year boundaries (سال تحصیلی)."""
 import jdatetime
-import pytest
 
 from darspack.core.schoolyear import current_school_year, school_year
 

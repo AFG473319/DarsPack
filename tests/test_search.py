@@ -2,7 +2,6 @@
 import pytest
 
 from darspack.core import db
-from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.normalize import match_key
 from darspack.core.search import search

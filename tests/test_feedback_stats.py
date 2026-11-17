@@ -378,7 +378,6 @@ def test_real_network_failure_then_retry_success(tmp_path, qapp, fake_boxes):
     offers «ارسال دوباره», the queued entry is re-POSTed without
     duplicating the local line, and success empties the queue."""
     import http.server
-    import json
     import threading
 
     from darspack.ui.dialogs import FeedbackDialog, load_pending
