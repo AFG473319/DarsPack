@@ -1,0 +1,36 @@
+# Ruff lint configuration — deliberately gentle.
+#
+# The selected rule groups catch real bugs only (syntax errors, undefined
+# names, unused imports/variables, shadowed builtins) and do NOT impose a
+# formatting style on handwritten code — the codebase predates the linter
+# and a big style churn would bury real history. Rules can be tightened
+# later; failing rules are fixed, never blanket-ignored, so a clean run
+# stays meaningful.
+#
+# Used by CI (see .github/workflows/ci.yml) and locally: `ruff check .`
+target-version = "py312"   # matches pyproject requires-python
+line-length = 120          # not enforced (E501 not selected); reference for future formatters
+
+extend-exclude = [
+    "build",            # PyInstaller intermediates (copies of project files)
+    "dist",             # build output
+    "eval/_generated",  # generated benchmark testsets
+]
+
+[lint]
+# E4  - trivial pycodestyle (trailing whitespace, blank-line noise)
+# E7  - statement-level problems (`def` after code, ambiguous `l` name, ...)
+# E9  - syntax errors and stray bytes — the file would not even import
+# F   - pyflakes: undefined names, unused imports/variables, f-string bugs
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# installer/darspack.spec is a PyInstaller spec: `Analysis`, `PYZ`, `EXE`,
+# `COLLECT` are injected into its namespace by PyInstaller, not imported.
+"installer/darspack.spec" = ["F821"]
+# These files import after a deliberate bootstrap step (putting src/ on
+# sys.path, or creating the QApplication) — E402 is intentional there.
+"tests/conftest.py" = ["E402"]
+"tests/test_main_window_helpers.py" = ["E402"]
+"scripts/app_harness.py" = ["E402"]
+"scripts/capture_all_pages.py" = ["E402"]

@@ -5,6 +5,12 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# Coverage reports (produced locally by pytest-cov; CI publishes them as artifacts)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 # Build outputs (root only — installer/darspack.spec is a tracked, hand-written spec)
 build/
 dist/

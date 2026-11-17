@@ -1,0 +1,10 @@
+# Everything needed to develop, test and build DarsPack.
+# CI installs this one file (see .github/workflows/ci.yml).
+-r requirements.txt
+
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.17.5
+
+# Packaging (installer/build.bat expects pyinstaller on .venv's Scripts/)
+pyinstaller==6.22.3

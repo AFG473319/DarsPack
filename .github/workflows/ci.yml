@@ -1,0 +1,144 @@
+# DarsPack CI — runs on every push to main, every pull request, and on
+# demand (Actions tab → Run workflow).
+#
+# Four jobs:
+#   test    — the pytest suite on both supported Python versions
+#             (3.12 = declared floor, 3.14 = development machine), Qt offscreen.
+#   lint    — ruff with a deliberately gentle, bug-catching ruleset (ruff.toml).
+#   build   — the real Windows build (PyInstaller onedir + Inno Setup
+#             installer), uploaded as downloadable artifacts.
+#   hygiene — fails if any file that must stay out of git ever gets committed.
+#             The list of guarded paths lives in the repo secret
+#             GUARDED_PATHS (newline-separated), so this file itself
+#             reveals nothing about what is guarded.
+#
+# Public repository: Windows runners are free for public repos.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run the test suite (Qt offscreen)
+        env:
+          # conftest.py sets this too; explicit here so CI logs are unambiguous
+          QT_QPA_PLATFORM: offscreen
+        run: >
+          python -m pytest -q
+          --cov=darspack
+          --cov-report=term-missing:skip-covered
+          --cov-report=xml:coverage.xml
+
+      - name: Upload the coverage report
+        if: matrix.python-version == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python-3.14
+          path: coverage.xml
+          retention-days: 14
+          if-no-files-found: error
+
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install ruff (keep the pin in sync with requirements-dev.txt)
+        run: python -m pip install ruff==0.17.5
+
+      - name: Ruff check
+        run: ruff check .
+
+  build:
+    name: Windows build (exe + installer)
+    needs: [test, lint]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # installer/build.bat runs .venv\Scripts\pyinstaller, so CI creates
+      # the same layout a developer has after `python -m venv .venv`.
+      - name: Create the .venv the build scripts expect
+        run: python -m venv .venv
+
+      - name: Install dependencies into the venv
+        run: .venv/Scripts/python -m pip install -r requirements-dev.txt
+
+      - name: Build the portable app folder (PyInstaller onedir)
+        shell: cmd
+        run: installer\build.bat
+
+      - name: Build the installer (Inno Setup, preinstalled on the runner)
+        shell: cmd
+        run: installer\build-installer.bat
+
+      - name: Zip the portable folder
+        shell: pwsh
+        run: Compress-Archive -Path dist/DarsPack -DestinationPath dist/DarsPack-windows.zip
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarsPack-windows
+          path: |
+            dist/DarsPack-windows.zip
+            dist/DarsPack-Setup.exe
+          retention-days: 14
+          if-no-files-found: error
+
+  hygiene:
+    name: private-files guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GUARD_NAMES: ${{ secrets.GUARDED_PATHS }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fail if any guarded path is tracked by git
+        shell: bash
+        run: bash scripts/check_hygiene.sh

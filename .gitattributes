@@ -1,0 +1,6 @@
+# Line-ending policy: scripts and CI configs must stay LF so bash on any
+# machine (including CI) never sees CRLF artifacts. Batch files keep their
+# existing on-disk form (cmd.exe tolerates both).
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

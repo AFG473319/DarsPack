@@ -1,5 +1,7 @@
 # DarsPack — درس‌پک
 
+[![CI](https://github.com/AFG473319/DarsPack/actions/workflows/ci.yml/badge.svg)](https://github.com/AFG473319/DarsPack/actions/workflows/ci.yml)
+
 **An offline-first, Persian-first organizer for school materials.**
 
 DarsPack (درس‌پک) helps Iranian middle-school students keep their class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) in one findable place. It is a Windows desktop app that also serves a phone-friendly web client over local Wi-Fi. Persian-first RTL interface with an English toggle.
@@ -34,8 +36,17 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 | `docs/limitations.md` | Known limitations and measured performance on the target laptop |
 | `docs/feedback-setup.md` | Optional online feedback endpoint setup |
 | `docs/mcp.md` | Model Context Protocol (MCP) server configuration for AI agents |
+| `docs/ci.md` | CI checks and the tag-driven release process (GitHub Actions) |
 | `eval/benchmark-plan.md` | Controlled benchmark: find-time, duplicate/conflict detection accuracy, package verification |
 | `installer/` | PyInstaller spec + one-command build script (`build.bat`) |
+
+## Releases
+
+Ready-to-install builds are published on the [GitHub Releases](https://github.com/AFG473319/DarsPack/releases) page:
+
+- **Latest** — the current stable release, `DarsPack-Setup.exe` (per-user installer, no admin needed) and a portable zip.
+- **Pre-release** — beta builds for testing (`vX.Y.Z-beta.N`); they never take the Latest badge.
+- Every release ships `SHA256SUMS.txt` — verify your download before running it.
 
 ## Run and build
 
@@ -43,7 +54,7 @@ From source (Python 3.12+, SQLite and the packages in `docs/dependencies.md`):
 
 ```
 python -m venv .venv
-.venv/Scripts/pip install PySide6-Essentials jdatetime qrcode pytest
+.venv/Scripts/pip install -r requirements-dev.txt
 .venv/Scripts/pip install -e .          # or add src/ to PYTHONPATH
 .venv/Scripts/python -m darspack
 ```
