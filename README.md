@@ -1,12 +1,37 @@
 # DarsPack — درس‌پک
 
 [![CI](https://github.com/AFG473319/DarsPack/actions/workflows/ci.yml/badge.svg)](https://github.com/AFG473319/DarsPack/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/AFG473319/DarsPack)](https://github.com/AFG473319/DarsPack/releases)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
 
-**An offline-first, Persian-first organizer for school materials.**
+**All your school files — notes, sample exams and worksheets — in one findable place. Offline-first, Persian-first, no account, no internet needed.**
 
-DarsPack (درس‌پک) helps Iranian middle-school students keep their class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) in one findable place. It is a Windows desktop app that also serves a phone-friendly web client over local Wi-Fi. Persian-first RTL interface with an English toggle.
+**همه‌ی فایل‌های درسی‌ات — جزوه، نمونه‌سوال و کاربرگ — در یک جای مرتب و قابل جست‌وجو. آفلاین، فارسی‌اول، بدون نیاز به حساب کاربری یا اینترنت.**
 
-> Status: **working v0.1** — core engine, brand RTL desktop UI, LAN phone client, and the Windows build are implemented and covered by 403 automated tests; see `docs/limitations.md` for known limitations.
+DarsPack (درس‌پک) is a Windows desktop app for Iranian middle-school students. It keeps class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) organized by subject, chapter and kind — and it can serve a phone-friendly web client over your local Wi-Fi, so you can reach your library from your phone at home.
+
+> ⭐ If DarsPack looks useful to you, a star helps other students and parents find it.
+
+![DarsPack main window — Persian RTL library view](docs/screenshots/main-window.png)
+
+## Download — دانلود
+
+Ready-to-install builds are on the [GitHub Releases](https://github.com/AFG473319/DarsPack/releases) page:
+
+- **Latest** — `DarsPack-Setup.exe` (per-user installer, no admin needed) or a portable zip
+- **Pre-release** — beta builds for testing (`vX.Y.Z-beta.N`)
+- Every release ships `SHA256SUMS.txt` — verify your download before running it
+
+نسخه‌ی آماده‌ی نصب را از صفحه‌ی [Releases](https://github.com/AFG473319/DarsPack/releases) بگیرید: فایل `DarsPack-Setup.exe` را نصب کنید؛ نیازی به دسترسی مدیر (admin) نیست.
+
+> Status: **working v0.1** — core engine, RTL desktop UI, LAN phone client and the Windows build are implemented and covered by 403 automated tests. See `docs/limitations.md` for known limitations.
+
+## Who it's for
+
+- **Students** who keep getting lost in folders full of PDFs named `final2.pdf`
+- **Parents** who want their child's school materials backed up in one portable package
+- **Teachers** who share notes and sample exams and want a class set that stays verifiable and complete
 
 ## What works
 
@@ -18,6 +43,25 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 - Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, inline viewing for PDFs/images/text, download, multi-file upload) with a web-app manifest for «Add to Home screen».
 - **Built-in Model Context Protocol (MCP) server & 1-click AI integration**: Connect AI agents (Claude Code, OpenCode, Antigravity, Cursor, Hermes, OpenClaw) directly to the library. The server runs as a separate headless process (`DarsPackMcp.exe`) — no window, no network — and the in-app Help Center (F1) offers a 1-click prompt generator plus a `--selftest` health check.
 - Persian-first dark RTL UI with the bundled Vazirmatn typeface, one consistent icon set, a compact app bar and toolbar, kind badges, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
+
+---
+
+## درس‌پک چیست؟ (فارسی)
+
+درس‌پک یک برنامه‌ی ویندوزی برای دانش‌آموزان دوره‌ی متوسطه است که فایل‌های درسی — جزوه، نمونه‌سوال و کاربرگ — را بر اساس درس، فصل و نوع فایل مرتب می‌کند تا همیشه سریع پیدا شوند.
+
+- **کاملاً آفلاین:** اینترنت لازم نیست؛ کتابخانه روی خودِ کامپیوتر شماست.
+- **جست‌وجوی فارسی واقعی:** «فصل ۳» و «فصل 3» یک نتیجه می‌دهند و حروف عربی و فارسی (ی/ي، ک/ك) درست تشخیص داده می‌شوند.
+- **بدون حذف خودکار:** فایل‌های تکراری یا نسخه‌های متفاوت فقط علامت زده می‌شوند؛ تصمیم همیشه با شماست.
+- **قابل حمل:** از کتابخانه‌تان یک بسته‌ی «درس‌پک» (ZIP) بسازید و روی هر کامپیوتری — حتی بدون نصب درس‌پک — کامل و سالم بودنش را بررسی کنید.
+- **دسترسی با گوشی:** اگر بخواهید، می‌توانید روی همان وای‌فای خانه با گوشی هم به کتابخانه دسترسی داشته باشید؛ این قابلیت اختیاری است و با رمز (PIN) محافظت می‌شود.
+- **رابط کاربری فارسی و راست‌چین** با فونت وزیرمتن و امکان تغییر زبان به انگلیسی.
+
+دانلود: از صفحه‌ی [Releases](https://github.com/AFG473319/DarsPack/releases) فایل `DarsPack-Setup.exe` را بگیرید و نصب کنید.
+
+اگر درس‌پک برایتان مفید بود، با یک ستاره ⭐ در گیت‌هاب به دیده شدنش توسط دانش‌آموزان و والدین دیگر کمک می‌کنید.
+
+---
 
 ## Key ideas
 
@@ -39,14 +83,6 @@ DarsPack (درس‌پک) helps Iranian middle-school students keep their class n
 | `docs/ci.md` | CI checks and the tag-driven release process (GitHub Actions) |
 | `eval/benchmark-plan.md` | Controlled benchmark: find-time, duplicate/conflict detection accuracy, package verification |
 | `installer/` | PyInstaller spec + one-command build script (`build.bat`) |
-
-## Releases
-
-Ready-to-install builds are published on the [GitHub Releases](https://github.com/AFG473319/DarsPack/releases) page:
-
-- **Latest** — the current stable release, `DarsPack-Setup.exe` (per-user installer, no admin needed) and a portable zip.
-- **Pre-release** — beta builds for testing (`vX.Y.Z-beta.N`); they never take the Latest badge.
-- Every release ships `SHA256SUMS.txt` — verify your download before running it.
 
 ## Run and build
 
