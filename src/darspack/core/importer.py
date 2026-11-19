@@ -1,10 +1,14 @@
 """Import pipeline (وارد کردن فایل): copy into the library and catalog it.
 
-Per file: hash the source → duplicate check → copy to a tmp name →
-atomic rename → single DB transaction. If anything fails before the
-commit, the row rolls back and the leftover tmp file is swept the next
-time the library opens. An identical hash already in the library is
-*reported and skipped* — the user can override with keep_duplicate
+Per file: hash the source → duplicate check (one short transaction) →
+copy to a tmp name (outside any transaction) → one short transaction
+that re-checks the duplicate, inserts the row, renames atomically and
+updates stored_name. The slow work — hashing and copying — never holds
+SQLite's write lock, so a big import can no longer starve a concurrent
+phone upload (H1). If anything fails before the commit, the row rolls
+back and the leftover tmp file is swept the next time the library
+opens. An identical hash already in the library is *reported and
+skipped* — the user can override with keep_duplicate
 («با وجود این نگه دار»); nothing is ever overwritten.
 """
 from __future__ import annotations
@@ -12,6 +16,8 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import shutil
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +43,46 @@ class ImportResult:
 
 def _now() -> str:
     return _dt.datetime.now().isoformat(timespec="seconds")
+
+
+@contextmanager
+def _write_tx(conn):
+    """One short write transaction that takes the lock up front.
+
+    BEGIN IMMEDIATE (not the default deferred BEGIN) so the duplicate
+    re-check and the INSERT that follows it are atomic against other
+    writers — a second importer can no longer slip between the check
+    and the insert (M2). If the caller already holds a transaction the
+    lock is already held, so the block just runs inside it — a nested
+    BEGIN would raise.
+    """
+    if conn.in_transaction:
+        yield
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _duplicate_result(conn, sha, size, shown_name, prefill, src):
+    """The duplicate path, run inside the caller's short transaction:
+    record the skip (E5 stats) and report the twin by name (C4)."""
+    dup = conn.execute(
+        "SELECT id, original_name FROM files WHERE sha256=?", (sha,)
+    ).fetchone()
+    if not dup:
+        return None
+    conn.execute(
+        """INSERT INTO import_skips(ts, sha256, size_bytes, original_name)
+           VALUES (?,?,?,?)""", (_now(), sha, size, shown_name))
+    return ImportResult(
+        "duplicate",
+        f"«{shown_name}» تکرارِ «{dup['original_name']}» است",
+        path=src, existing_id=dup["id"], prefill=prefill)
 
 
 def import_file(lib, src, meta: dict | None = None,
@@ -75,45 +121,56 @@ def import_file(lib, src, meta: dict | None = None,
         prefill = {"subject": meta.get("subject"),
                    "tags": list(meta.get("tags") or [])}
 
-    with conn:  # one transaction — everything commits, or nothing does
-        dup = conn.execute(
-            "SELECT id, original_name FROM files WHERE sha256=?", (sha,)
-        ).fetchone()
-        if dup and not keep_duplicate:
-            # Remember what the skip saved (E5 stats): bytes that never
-            # entered the library. History, not a running counter — the
-            # number stays explainable and auditable.
-            conn.execute(
-                """INSERT INTO import_skips(ts, sha256, size_bytes, original_name)
-                   VALUES (?,?,?,?)""", (_now(), sha, size, shown_name))
-            # Name the twin (C4): «از قبل در کتابخانه هست» without the
-            # name is a dead end; naming it answers «این همانی که...؟»
-            # and teaches the R3 story (same content, different names).
-            return ImportResult(
-                "duplicate",
-                f"«{shown_name}» تکرارِ «{dup['original_name']}» است",
-                path=src, existing_id=dup["id"], prefill=prefill)
+    # H1: the copy used to run INSIDE the write transaction, so a big
+    # file held the lock for the whole copy and a concurrent phone
+    # upload failed with "database is locked". The slow work is now
+    # split around two short transactions; only the second one —
+    # insert + rename + stored_name update — runs next to the copy.
+    if not keep_duplicate:
+        # Fast pre-check: skip copying a file we already have. The
+        # check inside the transaction below is the authoritative one
+        # — this only avoids wasted copies.
+        with _write_tx(conn):
+            dup_result = _duplicate_result(
+                conn, sha, size, shown_name, prefill, src)
+            if dup_result is not None:
+                return dup_result
 
-        cur = conn.execute(
-            """INSERT INTO files(stored_name, original_name, name_norm,
-               size_bytes, sha256, imported_at, subject_id, chapter,
-               lesson, school_year, kind)
-               VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (shown_name, match_key(shown_name), size, sha, _now(),
-             subject_id,
-             meta.get("chapter", suggestion["chapter"]),
-             meta.get("lesson", suggestion["lesson"]),
-             meta.get("school_year", current_school_year()),
-             kind))
-        file_id = cur.lastrowid
+    # Copy outside any transaction. The name is random — the file id
+    # only exists after the INSERT — and a crash leaves a tmp_* file
+    # the next library open sweeps, exactly as before.
+    tmp = lib.files_dir / f"tmp_{uuid.uuid4().hex}{src.suffix}"
+    shutil.copy2(src, tmp)
+    try:
+        with _write_tx(conn):
+            # Authoritative re-check (M2): another importer may have
+            # landed the same content while we were copying.
+            if not keep_duplicate:
+                dup_result = _duplicate_result(
+                    conn, sha, size, shown_name, prefill, src)
+                if dup_result is not None:
+                    return dup_result
 
-        tmp = lib.files_dir / f"tmp_{file_id}{src.suffix}"
-        shutil.copy2(src, tmp)
-        final = lib.files_dir / f"{file_id:06d}{src.suffix}"
-        os.replace(tmp, final)  # atomic rename on the same volume
-        conn.execute("UPDATE files SET stored_name=? WHERE id=?",
-                     (final.name, file_id))
-        db.log(conn, "import", f"{shown_name} → {final.name}")
+            cur = conn.execute(
+                """INSERT INTO files(stored_name, original_name, name_norm,
+                   size_bytes, sha256, imported_at, subject_id, chapter,
+                   lesson, school_year, kind)
+                   VALUES ('', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (shown_name, match_key(shown_name), size, sha, _now(),
+                 subject_id,
+                 meta.get("chapter", suggestion["chapter"]),
+                 meta.get("lesson", suggestion["lesson"]),
+                 meta.get("school_year", current_school_year()),
+                 kind))
+            file_id = cur.lastrowid
+
+            final = lib.files_dir / f"{file_id:06d}{src.suffix}"
+            os.replace(tmp, final)  # atomic rename on the same volume
+            conn.execute("UPDATE files SET stored_name=? WHERE id=?",
+                         (final.name, file_id))
+            db.log(conn, "import", f"{shown_name} → {final.name}")
+    finally:
+        tmp.unlink(missing_ok=True)
     return ImportResult("imported", f"«{shown_name}» وارد شد",
                         path=src, file_id=file_id, prefill=prefill)
 

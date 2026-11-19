@@ -31,7 +31,7 @@ from .. import asset_path, i18n
 from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
-from .workers import FeedbackPoster
+from .workers import FeedbackPoster, PackageWorker
 from .smooth_scroll import enable_smooth_scroll
 from .delegates import FileNameDelegate, FileNameLabel, KeycapDelegate, KindBadgeDelegate
 from . import icons, theme
@@ -863,15 +863,30 @@ class ExportDialog(QDialog):
             self, tr("export_title"), default, "ZIP (*.zip)")
         if not path:
             return
-        lib = self.parent_window.lib
-        try:
-            info = manifest_core.export_package(
-                lib.conn, lib.files_dir, file_ids, path)
-            with lib.conn:
-                db.log(lib.conn, "export", f"{info['count']} files → {path}")
-        except OSError as exc:
-            QMessageBox.critical(self, tr("export_title"), str(exc))
+        # M24: zipping runs in a worker — the old direct call froze the
+        # whole window on a big package, with no progress and no cancel.
+        self._pkg_worker = PackageWorker(
+            str(self.parent_window.lib.root), "export", path, file_ids,
+            parent=self)
+        progress = PackageProgressDialog(self, tr("export_title"),
+                                         tr("pkg_exporting"))
+        self._pkg_worker.progress.connect(progress.set_progress)
+        self._pkg_worker.done.connect(
+            lambda result: self._export_finished(progress, result, path))
+        self._pkg_worker.start()
+        progress.exec()
+
+    def _export_finished(self, progress, result: dict, path: str) -> None:
+        progress.accept()
+        if result.get("cancelled"):
+            return            # stay open so the user can retry
+        if "error" in result:
+            QMessageBox.critical(self, tr("export_title"), result["error"])
             return
+        info = result["info"]
+        lib = self.parent_window.lib
+        with lib.conn:
+            db.log(lib.conn, "export", f"{info['count']} files → {path}")
         QMessageBox.information(
             self, tr("export_title"),
             tr("export_done").format(num(info["count"]), info["manifest_sha256"][:16]))
@@ -894,6 +909,14 @@ class ClassifyDialog(QDialog):
         super().__init__(parent)
         self.lib = lib
         self.setWindowTitle(tr("classify_title"))
+        # M22: an id may have vanished between the import and this dialog
+        # (second instance, or a phone delete while sharing) — drop the
+        # missing ones instead of crashing on a None row below. If all
+        # are gone the dialog simply shows an empty table.
+        file_ids = [fid for fid in file_ids
+                    if lib.conn.execute(
+                        "SELECT 1 FROM files WHERE id=?",
+                        (fid,)).fetchone() is not None]
         self.resize(1120, max(360, min(580, 230 + len(file_ids) * 46)))
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
@@ -1314,6 +1337,11 @@ class MetadataDialog(QDialog):
                FROM files f
                LEFT JOIN subjects s ON s.id = f.subject_id
                WHERE f.id=?""", (file_id,)).fetchone()
+        if self.row is None:
+            # M22: fail fast with a clear error instead of crashing on
+            # self.row["..."] below. Callers check first (MainWindow.
+            # edit_metadata) and show "no longer in the library".
+            raise ValueError(f"File id {file_id} not found in catalog")
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
@@ -1760,11 +1788,20 @@ class ShareDialog(QDialog):
         caption.setObjectName("DialogHint")
         caption.setAlignment(Qt.AlignCenter)
         layout.addWidget(caption)
-        pin_label = QLabel(persian_digits(str(server.pin)))
+        # M23: the phone only accepts Latin digits (the server compares
+        # with hmac.compare_digest against its Latin-digit PIN), so show
+        # exactly what must be typed — Persian digits read off the screen
+        # used to fail with a bare "wrong PIN".
+        pin_label = QLabel(str(server.pin))
         pin_label.setObjectName("PinDigits")
         pin_label.setAlignment(Qt.AlignCenter)
+        pin_label.setLayoutDirection(Qt.LeftToRight)
         pin_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(pin_label)
+        pin_hint = QLabel(tr("share_pin_hint"))
+        pin_hint.setObjectName("DialogHint")
+        pin_hint.setAlignment(Qt.AlignCenter)
+        layout.addWidget(pin_hint)
         copy_pin = QPushButton(tr("copy_pin"))
         copy_pin.setObjectName("Secondary")
         copy_pin.setIcon(icons.icon("copy", theme.PALETTE["text"], 14))
@@ -2199,6 +2236,46 @@ class StatsProgressDialog(QDialog):
     def _cancel(self) -> None:
         parent = self.parent()
         worker = getattr(parent, "_stats_worker", None)
+        if worker is not None:
+            worker.cancel()
+        self.reject()
+
+
+class PackageProgressDialog(QDialog):
+    """Progress + cancel for package verify/export (M24).
+
+    The work runs in a PackageWorker; the dialog shows the current
+    file and a determinate bar when the worker knows the total
+    (export), or an indeterminate bar when it doesn't (verify).
+    Modelled on StatsProgressDialog.
+    """
+
+    def __init__(self, parent, title: str, label: str):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        layout = QVBoxLayout(self)
+        self._label = QLabel(label)
+        self._label.setWordWrap(True)
+        layout.addWidget(self._label)
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 0)          # indeterminate until a total arrives
+        layout.addWidget(self._bar)
+        cancel = QPushButton(tr("cancel"))
+        cancel.setObjectName("Secondary")
+        cancel.clicked.connect(self._cancel)
+        layout.addWidget(cancel)
+        polish_dialog(self, 420)
+
+    def set_progress(self, done: int, total: int, name: str) -> None:
+        if total > 0:
+            self._bar.setRange(0, total)
+            self._bar.setValue(done)
+        if name:
+            self._label.setText(name)
+
+    def _cancel(self) -> None:
+        parent = self.parent()
+        worker = getattr(parent, "_pkg_worker", None)
         if worker is not None:
             worker.cancel()
         self.reject()
@@ -2763,8 +2840,27 @@ class ExamPackDialog(QDialog):
         if not path:
             return
 
-        info = manifest_core.export_package(
-            self.lib.conn, self.lib.files_dir, ids, path)
+        # M24: zipping runs in a worker — the old direct call froze the
+        # whole window on a big package, with no progress and no cancel.
+        self._pkg_worker = PackageWorker(
+            str(self.lib.root), "export", path, ids, parent=self)
+        progress = PackageProgressDialog(self, tr("exam_pack_title"),
+                                         tr("pkg_exporting"))
+        self._pkg_worker.progress.connect(progress.set_progress)
+        self._pkg_worker.done.connect(
+            lambda result: self._create_finished(progress, result, path))
+        self._pkg_worker.start()
+        progress.exec()
+
+    def _create_finished(self, progress, result: dict, path: str) -> None:
+        progress.accept()
+        if result.get("cancelled"):
+            return            # stay open so the user can retry
+        if "error" in result:
+            QMessageBox.critical(self, tr("exam_pack_title"),
+                                 result["error"])
+            return
+        info = result["info"]
         with self.lib.conn:
             db.log(self.lib.conn, "exam_pack", f"{info['count']} files -> {path}")
         QMessageBox.information(

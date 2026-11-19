@@ -302,3 +302,85 @@ def test_import_paths_empty(lib, tmp_path):
     empty_dir.mkdir()
     assert import_paths(lib, []) == []
     assert import_paths(lib, [empty_dir]) == []
+
+# --- H1: the copy must not hold the write lock ---------------------------
+
+def test_copy_does_not_hold_the_write_lock(lib, sample, monkeypatch):
+    """H1: while the file copy runs, another connection can still write —
+    this is the phone-upload case: a second writer used to fail with
+    'database is locked' because the copy ran inside the transaction.
+    The copy is faked slow (1 s); the probe connection only waits 0.5 s,
+    so it only succeeds if no lock is held during the copy."""
+    import sqlite3
+    import time
+    import darspack.core.importer as importer
+    src = sample("slow.pdf", b"y" * 4096)
+    real_copy2 = importer.shutil.copy2
+    wrote = []
+
+    def slow_copy(s, d, *a, **k):
+        time.sleep(1.0)  # a big file's copy takes real time
+        other = sqlite3.connect(str(lib.db_path), timeout=0.5)
+        try:
+            other.execute(
+                "INSERT INTO activity_log(ts, action, detail)"
+                " VALUES ('t', 'probe', 'x')")
+            other.commit()
+            wrote.append(True)
+        finally:
+            other.close()
+        return real_copy2(s, d, *a, **k)
+
+    monkeypatch.setattr(importer.shutil, "copy2", slow_copy)
+    r = import_file(lib, src)
+    assert r.status == "imported"
+    assert wrote == [True]
+
+
+def test_concurrent_same_content_imports_yield_one_row(tmp_path, monkeypatch):
+    """M2: two imports of the same content at the same moment must not
+    create two rows — one wins, the other reports duplicate. The copy
+    is faked slow so both threads are inside the import at once."""
+    import threading
+    import time
+    import darspack.core.importer as importer
+    root = tmp_path / "lib"
+    a = tmp_path / "a.pdf"
+    a.write_bytes(b"same-content")
+    b = tmp_path / "b.pdf"
+    b.write_bytes(b"same-content")
+    lib_a = Library(root).open()
+    lib_b = Library(root).open()
+    real_copy2 = importer.shutil.copy2
+
+    def slow_copy(s, d, *a, **k):
+        time.sleep(0.05)  # widen the race: both threads copy at once
+        return real_copy2(s, d, *a, **k)
+
+    monkeypatch.setattr(importer.shutil, "copy2", slow_copy)
+    barrier = threading.Barrier(2)
+    results, errors = [], []
+
+    def worker(lib, src):
+        try:
+            barrier.wait(timeout=10)
+            results.append(import_file(lib, src))
+        except Exception as exc:  # noqa: BLE001 — collected, asserted below
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker, args=(lib_a, a))
+    t2 = threading.Thread(target=worker, args=(lib_b, b))
+    try:
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+        assert not t1.is_alive() and not t2.is_alive()
+    finally:
+        lib_a.close()
+        lib_b.close()
+    assert errors == []
+    assert sorted(r.status for r in results) == ["duplicate", "imported"]
+    with Library(root) as lib:
+        count = lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
+    assert count == 1

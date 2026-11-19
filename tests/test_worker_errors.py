@@ -128,3 +128,45 @@ def test_catastrophic_failure_still_reports_and_logs(tmp_path, monkeypatch):
     log = (tmp_path / "lib" / "error.log").read_text(encoding="utf-8")
     assert "import crashed" in log
     assert "RuntimeError" in log
+
+
+def test_import_worker_cancel_stops_between_files(tmp_path, monkeypatch):
+    """M21: cancel() stops the worker after the current file; done still
+    fires (the window relies on that to close cleanly mid-import)."""
+    import darspack.ui.workers as workers_mod
+    from PySide6.QtCore import QCoreApplication
+
+    from darspack.ui.workers import ImportWorker
+
+    folder = tmp_path / "from"
+    folder.mkdir()
+    for i in range(5):
+        (folder / f"f{i}.pdf").write_bytes(b"x")
+
+    real_import = workers_mod.import_file
+
+    def slow_import(lib, path, **kwargs):
+        time.sleep(0.4)
+        return real_import(lib, path, **kwargs)
+
+    monkeypatch.setattr(workers_mod, "import_file", slow_import)
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    received, progress = [], []
+    worker = ImportWorker(str(tmp_path / "lib"), [folder])
+    worker.progress.connect(lambda d, t, n: progress.append((d, t, n)))
+    worker.done.connect(lambda *args: received.append(args))
+    worker.start()
+    deadline = time.time() + 30
+    while not progress and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    worker.cancel()          # lands while the first file is still copying
+    while not received and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    worker.wait(5000)
+    assert received, "done never emitted after cancel"
+    imported, duplicates, errors, messages, new_ids = received[0]
+    assert imported < 5, "cancel did not stop the import"
+    assert imported >= 1, "the file in flight should still finish"

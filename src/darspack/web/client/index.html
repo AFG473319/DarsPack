@@ -614,6 +614,13 @@ async function upload() {
           lastMsg = 'حجم فایل بیش از حد مجاز (۲۰۰ مگابایت) است.';
           continue;
         }
+        if (res.status === 503 && res.data && res.data.error === 'busy') {
+          // H1: the library was busy with another import — nothing was
+          // lost, the file just needs one more try.
+          errCount++;
+          lastMsg = 'سرور مشغول است — لحظه‌ای دیگر دوباره امتحان کنید.';
+          continue;
+        }
         if (res.status < 200 || res.status >= 300) {
           errCount++;
           lastMsg = 'ارسال نشد — دوباره امتحان کنید.';

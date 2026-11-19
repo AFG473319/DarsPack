@@ -223,3 +223,10 @@ setTimeout(() => {{
         capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.strip().splitlines()[-1])
+
+def test_client_shows_try_again_message_when_server_is_busy():
+    """H1: a 503 {"error": "busy"} upload answer must reach the user as
+    a 'try again in a moment' message, not the generic failure text."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "error === 'busy'" in html
+    assert "سرور مشغول است" in html
