@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DarsPack
+Comment=Offline-first, Persian-first organizer for school materials
+Exec=@INSTALL_DIR@/DarsPack
+Icon=@INSTALL_DIR@/darspack.png
+Terminal=false
+Categories=Education;Office;
+StartupWMClass=DarsPack
+Keywords=school;study;persian;درس‌پک;

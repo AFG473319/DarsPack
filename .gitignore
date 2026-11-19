@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+.venv-linux/
 *.egg-info/
 
 # Coverage reports (produced locally by pytest-cov; CI publishes them as artifacts)

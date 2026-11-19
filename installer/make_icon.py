@@ -1,6 +1,6 @@
 """Build the DarsPack icon assets from the two SVG masters.
 
-    .venv\\Scripts\\python.exe installer\\make_icon.py
+    python installer/make_icon.py
 
 Why a hand-written ICO packer instead of Pillow: PySide6 is already in
 the stack, and the ICO container is a 6-byte header plus one 16-byte

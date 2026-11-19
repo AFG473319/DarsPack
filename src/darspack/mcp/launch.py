@@ -9,9 +9,10 @@ DarsPack actually runs:
 1. **Source checkout** - ``darspack`` lives in ``src/`` and is not
    installed, so Python answers ``ModuleNotFoundError: No module named
    'darspack'``.  The command needs ``src/`` on ``PYTHONPATH``.
-2. **Packaged app** - ``sys.executable`` is ``DarsPack.exe``, so the
-   "command" started the desktop GUI (Qt, a window, heavy) instead of a
-   stdio server, and the agent never got a reply.
+2. **Packaged app** - ``sys.executable`` is the GUI exe (``DarsPack.exe``
+   on Windows, ``DarsPack`` on Linux), so the "command" started the
+   desktop GUI (Qt, a window, heavy) instead of a stdio server, and the
+   agent never got a reply.
 
 Both cases are resolved here, once, so the copied prompt, the JSON
 snippets and the Help Center all describe the same working command.
@@ -23,13 +24,16 @@ import json
 from pathlib import Path
 import sys
 
+from ..paths import default_library_path, server_exe_name
+
 #: Console executable produced by ``installer/darspack.spec`` next to the
 #: GUI exe.  It bundles only ``darspack.core`` + ``darspack.mcp`` (no Qt),
 #: so an agent that starts it gets a small stdio process, never a window.
-SERVER_EXE_NAME = "DarsPackMcp.exe"
+#: ``DarsPackMcp.exe`` on Windows, ``DarsPackMcp`` on Linux.
+SERVER_EXE_NAME = server_exe_name()
 
 #: Default location of the library, mirrors ``server.DEFAULT_LIBRARY_PATH``.
-DEFAULT_LIBRARY_PATH = Path.home() / "Documents" / "DarsPackLibrary"
+DEFAULT_LIBRARY_PATH = default_library_path()
 
 
 @dataclass(frozen=True)
@@ -53,7 +57,8 @@ class McpLaunch:
         return [self.command, *self.args]
 
     def command_line(self) -> str:
-        """Single copy-pasteable line for a terminal (quoted for Windows)."""
+        """Single copy-pasteable line for a terminal (quoted when a part
+        contains spaces)."""
         return " ".join(_quote(part) for part in self.argv)
 
     def selftest_line(self) -> str:
@@ -111,7 +116,7 @@ def _package_parent() -> Path | None:
 
 
 def _find_server_exe() -> Path | None:
-    """Locate ``DarsPackMcp.exe`` inside a frozen (installed) build."""
+    """Locate the server executable inside a frozen (installed) build."""
     candidates: list[Path] = []
     exe = getattr(sys, "executable", "") or ""
     if exe:
