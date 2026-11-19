@@ -485,7 +485,11 @@ class FeedbackDialog(QDialog):
         dialog can therefore never accidentally open the modal."""
         if not self._pending_prompted:
             self._pending_prompted = True
-            QTimer.singleShot(0, self._maybe_prompt_pending)
+            # Pass the dialog as the timer's context object so the timer
+            # is cancelled if the dialog is destroyed before it fires.
+            # A parentless singleShot holds the bound method and would
+            # call into the deleted C++ object.
+            QTimer.singleShot(0, self, self._maybe_prompt_pending)
         super().showEvent(event)
 
     def _toggle_star(self, n: int) -> None:
@@ -1550,7 +1554,10 @@ class BulkEditDialog(QDialog):
         from PySide6.QtCore import QEvent
         if event.type() == QEvent.FocusIn and isinstance(obj, QLineEdit):
             if obj.text() == tr("bulk_none"):
-                QTimer.singleShot(0, obj.selectAll)
+                # Pass the line edit as the timer's context object so
+                # the timer is cancelled if the dialog is destroyed
+                # before it fires (same hazard as above).
+                QTimer.singleShot(0, obj, obj.selectAll)
         return super().eventFilter(obj, event)
 
     def _changes(self) -> tuple[list, list]:

@@ -27,9 +27,37 @@ from darspack.core.library import Library
 
 @pytest.fixture(scope="session")
 def qapp():
-    """The one QApplication for the whole test run (offscreen)."""
+    """The one QApplication for the whole test run (offscreen).
+
+    Teardown destroys every Qt object while the interpreter is still
+    fully alive. Thousands of widgets (dialogs, main windows) are
+    created during the run; left alive, they are only destroyed by
+    PySide's shutdown cleanup during interpreter finalization, where
+    deleting them segfaults or corrupts the heap about one run in
+    three (CI 3.12/3.14, local malloc_consolidate abort). Draining the
+    event loop and deleting the top-level widgets, any stray worker
+    thread and the application itself here, before pytest finishes,
+    removes the whole crash class.
+    """
+    import gc
+
+    from PySide6.QtCore import QEvent, QThread
     from PySide6.QtWidgets import QApplication
-    return QApplication.instance() or QApplication([])
+
+    import shiboken6
+
+    app = QApplication.instance() or QApplication([])
+    yield app
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+    for widget in list(app.topLevelWidgets()):
+        widget.deleteLater()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+    for thread in [o for o in gc.get_objects() if isinstance(o, QThread)]:
+        if thread is not QThread.currentThread() and thread.isRunning():
+            thread.wait(5000)
+    shiboken6.delete(app)
 
 
 @pytest.fixture()
