@@ -7,6 +7,7 @@ SettingsDialog._save must reject a library path that is a file and must
 offer to create a missing folder.
 """
 import json
+import sys
 
 import pytest
 from PySide6.QtWidgets import QMessageBox
@@ -97,6 +98,66 @@ def test_load_settings_recovers_library_from_truncated_json(
     settings, _, damaged = load_settings()
     assert damaged is True  # the file is still corrupt
     assert settings["library"] == str(custom)  # ...but the library is found
+
+
+def test_decode_json_string_loose_keeps_raw_windows_path():
+    # A raw Windows path is not valid JSON (\\U, \\T are not escapes),
+    # but the recovery must keep it literally instead of giving up —
+    # and its \\r / \\t sequences are folder names, not JSON escapes.
+    from darspack.ui.app import _decode_json_string_loose
+    raw = r"C:\Users\runneradmin\AppData\Local\Temp\custom-lib"
+    assert _decode_json_string_loose(raw) == raw
+    # when every escape happens to be valid JSON, strict decoding wins
+    # a properly escaped path still decodes the same way
+    assert _decode_json_string_loose(r"C:\\Users\\runneradmin") == (
+        r"C:\Users\runneradmin")
+    assert _decode_json_string_loose(r"a\nb") == "a\nb"
+    assert _decode_json_string_loose(r"\u0041") == "A"
+
+
+def test_recover_library_path_keeps_raw_windows_backslashes(monkeypatch):
+    # The Windows CI failure: a truncated settings.json holding a raw
+    # "C:\\Users\\..." path recovered to the default library instead.
+    from pathlib import Path as _Path
+
+    from darspack.ui.app import _recover_library_path
+    monkeypatch.setattr(
+        _Path, "is_dir",
+        lambda self: str(self) == r"C:\Users\runneradmin\custom-lib")
+    recovered = _recover_library_path(
+        r'{"library": "C:\Users\runneradmin\custom-lib", "font_size": 10')
+    assert recovered == _Path(r"C:\Users\runneradmin\custom-lib")
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="backslash is a path separator on Windows")
+def test_load_settings_recovers_library_with_backslash_in_name(
+        app_default, tmp_path):
+    # Same failure mode, end to end on POSIX: the raw backslash in the
+    # truncated file must not lose the library.
+    weird = tmp_path / "we\\ird-lib"
+    weird.mkdir()
+    _write_settings(app_default / "settings.json",
+                    '{"library": "' + str(weird) + '", "font_size": 10')
+    settings, _, damaged = load_settings()
+    assert damaged is True
+    assert settings["library"] == str(weird)
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="backslash is a path separator on Windows")
+def test_load_settings_recovers_library_with_escape_like_backslash(
+        app_default, tmp_path):
+    # Backslash + "n" is a valid JSON escape, so strict decoding turns
+    # this folder name into a newline — only the raw text is a real
+    # folder, and the recovery must try that too.
+    tricky = tmp_path / r"a\nb-lib"
+    tricky.mkdir()
+    _write_settings(app_default / "settings.json",
+                    '{"library": "' + str(tricky) + '", "font_size": 10')
+    settings, _, damaged = load_settings()
+    assert damaged is True
+    assert settings["library"] == str(tricky)
 
 
 def test_load_settings_missing_file_is_fresh(app_default):

@@ -100,25 +100,45 @@ def sanitize_settings(settings: dict) -> tuple[dict, bool]:
 _LIBRARY_RE = re.compile(r'"library"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
+def _decode_json_string_loose(raw: str) -> str:
+    """Decode a JSON string body, tolerating invalid escapes.
+
+    A settings file written by json.dumps escapes Windows backslashes
+    and decodes strictly. But a damaged file can hold a raw Windows
+    path, with single backslashes, whose escape-like sequences are
+    not valid JSON escapes, so strict decoding fails. In that case
+    the value is returned exactly as written: decoding its backslash
+    sequences as JSON escapes would corrupt the path (a folder name
+    starting with "r" is not a carriage return).
+    """
+    try:
+        return json.loads(f'"{raw}"')
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
 def _recover_library_path(raw_text: str) -> Path | None:
     """Best-effort recovery of the library path from a damaged settings.json.
 
     A file truncated mid-write usually still holds the "library" line;
     if that path is a real folder, the user's library is found instead
-    of silently opening an empty default one (H5). Returns None when
-    nothing usable can be recovered.
+    of silently opening an empty default one (H5). Both readings of
+    the value are tried: the strictly decoded one (a properly escaped
+    path) and the raw text as written (a raw Windows path, whose
+    backslash sequences are not valid JSON escapes). The first one
+    that is a real folder wins. Returns None when nothing usable
+    can be recovered.
     """
     match = _LIBRARY_RE.search(raw_text)
     if not match:
         return None
-    try:
-        value = json.loads(f'"{match.group(1)}"')
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(value, str) or not value.strip():
-        return None
-    path = Path(value)
-    return path if path.is_dir() else None
+    raw_value = match.group(1)
+    for value in (_decode_json_string_loose(raw_value), raw_value):
+        if value.strip():
+            path = Path(value)
+            if path.is_dir():
+                return path
+    return None
 
 
 def load_settings() -> tuple[dict, Path, bool]:
