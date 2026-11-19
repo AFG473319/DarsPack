@@ -335,6 +335,26 @@ def test_upload_crash_leaves_nothing_in_library_root(server, monkeypatch):
     assert not list(Path(tempfile.gettempdir()).glob("darspack-upload-*"))
 
 
+def test_busy_upload_returns_503_busy_json(server, monkeypatch):
+    """H1: when the import fails because the database is locked, the
+    phone gets a 503 JSON answer it can show ("try again in a moment")
+    — not a dropped request. Only lock errors get this treatment; any
+    other importer crash still drops the request (see the test above)."""
+    import sqlite3
+    share, lib = server
+    import darspack.core.importer as importer_module
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(importer_module, "import_file", locked)
+    status, body = _post(
+        f"http://127.0.0.1:{share.port}"
+        f"/api/upload?name={urllib.parse.quote('مشغول.pdf')}"
+        f"&pin={share.pin}", b"content")
+    assert status == 503
+    assert body == {"error": "busy"}
+
+
 def test_local_ips_are_valid():
     import ipaddress
     for ip in local_ips():
