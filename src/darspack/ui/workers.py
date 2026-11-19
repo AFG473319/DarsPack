@@ -54,6 +54,16 @@ class ImportWorker(QThread):
         self.meta_base = Path(meta_base) if meta_base else None
         self.cleanup_dir = Path(cleanup_dir) if cleanup_dir else None
         self.result_prefills: dict = {}      # file_id → {"subject", "tags"}
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Ask the worker to stop after the file it is currently on.
+
+        Closing the window while an import runs must never destroy a
+        running QThread (Qt aborts the process). The flag is checked
+        between files; `done` still fires, so the UI never hangs.
+        """
+        self._cancelled = True
 
     def run(self) -> None:
         imported = duplicates = errors = 0
@@ -64,6 +74,8 @@ class ImportWorker(QThread):
             lib = Library(self.library_root).open()
             files = list(iter_files(self.paths))
             for i, path in enumerate(files, start=1):
+                if self._cancelled:
+                    break
                 self.progress.emit(i, len(files), path.name)
                 try:
                     result = import_file(lib, path,
@@ -117,6 +129,88 @@ class ImportWorker(QThread):
                         f"import crashed\n{traceback.format_exc()}\n")
         except OSError:
             pass
+
+
+class _PackageCancelled(Exception):
+    """Raised from the progress callback to stop verify/export cleanly."""
+
+
+class PackageWorker(QThread):
+    """Verify or export a درس‌پک off the UI thread (M24).
+
+    manifest's verify/export already accept a `progress` callback —
+    this worker drives it from the callback, so Cancel works without
+    terminating the thread: the callback raises _PackageCancelled, the
+    ZIP context manager closes cleanly, and a partial export ZIP is
+    deleted before `done` fires. `done` carries one dict:
+    {"kind", "report"} for a verify, {"kind", "info"} for an export,
+    {"cancelled": True}, or {"error": str}.
+    """
+
+    progress = Signal(int, int, str)   # done, total, current file name
+    done = Signal(object)
+
+    def __init__(self, library_root, kind: str, path, file_ids=None,
+                 parent=None):
+        super().__init__(parent)
+        self.library_root = library_root
+        self.kind = kind
+        self.path = str(path)
+        self.file_ids = list(file_ids or [])
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def _check_cancelled(self) -> None:
+        if self._cancelled:
+            raise _PackageCancelled()
+
+    def _verify_progress(self, name: str, _arc: str = "") -> None:
+        # verify_package calls progress(name, arc) per manifest entry
+        self._check_cancelled()
+        self.progress.emit(0, 0, name)   # total unknown → indeterminate bar
+
+    def _export_progress(self, done: int, total: int) -> None:
+        self._check_cancelled()
+        self.progress.emit(done, total, "")
+
+    def run(self) -> None:
+        from ..core import manifest as manifest_core
+
+        lib = None
+        try:
+            if self.kind == "verify":
+                report = manifest_core.verify_package(
+                    self.path, progress=self._verify_progress)
+                self.done.emit({"kind": "verify", "report": report})
+            else:
+                lib = Library(self.library_root).open()
+                info = manifest_core.export_package(
+                    lib.conn, lib.files_dir, self.file_ids, self.path,
+                    progress=self._export_progress)
+                self.done.emit({"kind": "export", "info": info})
+        except _PackageCancelled:
+            self._discard_partial()
+            self.done.emit({"cancelled": True})
+        except Exception as exc:
+            self._discard_partial()
+            self.done.emit({"error": f"{exc.__class__.__name__}: {exc}"})
+        finally:
+            if lib is not None:
+                try:
+                    lib.close()
+                except Exception:
+                    pass
+
+    def _discard_partial(self) -> None:
+        """A cancelled/failed export must not leave a half-written ZIP
+        that looks like a real package."""
+        if self.kind == "export":
+            try:
+                Path(self.path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 class StatsWorker(QThread):

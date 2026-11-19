@@ -9,9 +9,9 @@ import json
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTranslator
+from PySide6.QtCore import QLockFile, Qt, QTranslator
 from PySide6.QtGui import QFont, QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .. import APP_NAME, asset_path
 from .. import i18n
@@ -104,11 +104,36 @@ def _install_excepthook() -> None:
     sys.excepthook = hook
 
 
+def acquire_instance_lock(library: Path) -> QLockFile | None:
+    """One running copy per library (M20).
+
+    Double-clicking the desktop icon twice used to open two windows on
+    the same SQLite library: edits in one were invisible in the other
+    until a manual refresh, and one window could delete a file the
+    other still showed. The lock file lives in the library folder, so
+    each library gets its own guard. A stale lock (a crashed run) is
+    released automatically — QLockFile checks that the owning process
+    is still alive. Returns the lock to hold, or None if another copy
+    already holds it. The caller must keep the returned object alive
+    for the whole session; destroying it releases the lock.
+    """
+    lock = QLockFile(str(library / ".darspack.lock"))
+    # tryLock() takes a timeout in ms — 0 means "don't wait at all".
+    return lock if lock.tryLock(0) else None
+
+
 def run() -> None:
     settings, settings_path = load_settings()
     i18n.set_language(settings.get("language", "fa"))
 
     app = QApplication(sys.argv)
+    # M20: a second copy shows a message and exits instead of opening
+    # a second window on the same library.
+    lock = acquire_instance_lock(Path(settings["library"]))
+    if lock is None:
+        QMessageBox.information(None, APP_NAME, i18n.tr("already_running"))
+        return
+    app._instance_lock = lock           # held until the app quits
     if i18n.language() == "fa":
         app._fa_translator = PersianTranslator(app)
         app.installTranslator(app._fa_translator)
