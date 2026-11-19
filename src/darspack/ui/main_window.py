@@ -1145,7 +1145,9 @@ class MainWindow(QMainWindow):
             self._welcome_checked = True
             if (self.settings.get("show_welcome", True) and
                 os.environ.get("QT_QPA_PLATFORM") != "offscreen"):
-                QTimer.singleShot(200, self.open_welcome_tour)
+                # Pass the window as the timer's context object so the
+                # timer is cancelled if the window is destroyed first.
+                QTimer.singleShot(200, self, self.open_welcome_tour)
 
     def _apply_dark_titlebar(self) -> None:
         """Apply native Windows 11 Immersive Dark Mode and Mica backdrop."""
