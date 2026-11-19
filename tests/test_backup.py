@@ -201,3 +201,139 @@ def test_sweep_still_removes_unknown_content(tmp_path):
     with Library(tmp_path / "lib") as lib:
         assert not junk.exists()
         assert (lib.files_dir / "000001.pdf").is_file()
+
+
+def test_backup_filename_second_same_day_gets_suffix(tmp_path):
+    """M14: the date-only name is kept when free, but a counter suffix
+    appears when that day's backup already exists."""
+    day = date(2026, 10, 25)
+    assert backup_filename(day, directory=tmp_path) == \
+        "darspack-backup-1405-08-03.zip"
+    (tmp_path / "darspack-backup-1405-08-03.zip").write_bytes(b"first")
+    assert backup_filename(day, directory=tmp_path) == \
+        "darspack-backup-1405-08-03-2.zip"
+    (tmp_path / "darspack-backup-1405-08-03-2.zip").write_bytes(b"second")
+    assert backup_filename(day, directory=tmp_path) == \
+        "darspack-backup-1405-08-03-3.zip"
+    # without a directory the plain date-only name is unchanged
+    assert backup_filename(day) == "darspack-backup-1405-08-03.zip"
+
+
+def test_second_backup_same_day_does_not_overwrite(tmp_path,
+                                                   library_with_files):
+    """M14 end-to-end: two backups on the same day keep both ZIPs, and
+    both verify."""
+    day = date(2026, 10, 25)
+    first = tmp_path / backup_filename(day, directory=tmp_path)
+    with Library(library_with_files) as lib:
+        backup_library(lib, first)
+    second = tmp_path / backup_filename(day, directory=tmp_path)
+    assert second != first
+    assert second.name == "darspack-backup-1405-08-03-2.zip"
+    with Library(library_with_files) as lib:
+        backup_library(lib, second)
+    assert first.is_file() and second.is_file()
+    assert verify_package(first).ok
+    assert verify_package(second).ok
+
+
+def test_backup_skips_missing_file(tmp_path, library_with_files):
+    """M4: a catalogued file whose disk copy is gone must not abort the
+    backup — it is skipped, counted by name, and the ZIP still verifies."""
+    with Library(library_with_files) as lib:
+        doomed = lib.conn.execute(
+            "SELECT stored_name, original_name FROM files"
+            " ORDER BY id").fetchone()
+        (lib.files_dir / doomed["stored_name"]).unlink()
+    out = tmp_path / "missing.zip"
+    with Library(library_with_files) as lib:
+        info = backup_library(lib, out)
+    assert info["count"] == 1
+    assert info["missing_count"] == 1
+    assert info["missing"] == [doomed["original_name"]]
+    assert verify_package(out).ok
+    with zipfile.ZipFile(out) as zf:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        inner = tmp_path / "inner.db"
+        inner.write_bytes(zf.read("catalog.db"))
+    assert len(manifest["files"]) == 1
+    # the snapshot is still the honest point-in-time catalog: both rows,
+    # so a restore + health check can flag the missing one
+    check = sqlite3.connect(inner)
+    try:
+        assert check.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 2
+    finally:
+        check.close()
+
+
+def test_plain_export_still_raises_on_missing_file(tmp_path,
+                                                   library_with_files):
+    """The skip is backup-only: a plain package export still fails loudly
+    on a missing file instead of silently shipping a short package."""
+    from darspack.core.manifest import export_package
+    with Library(library_with_files) as lib:
+        stored = lib.conn.execute(
+            "SELECT stored_name FROM files ORDER BY id").fetchone()[0]
+        (lib.files_dir / stored).unlink()
+        ids = [r["id"] for r in lib.conn.execute("SELECT id FROM files")]
+        with pytest.raises(FileNotFoundError):
+            export_package(lib.conn, lib.files_dir, ids, tmp_path / "pkg.zip")
+
+
+def test_backup_failure_keeps_existing_file_and_leaves_no_partial(
+        tmp_path, library_with_files, monkeypatch):
+    """M4: if the export fails mid-way, the destination is untouched and
+    no half-written ZIP is left behind."""
+    import darspack.core.backup as backup_mod
+
+    out = tmp_path / "backup.zip"
+    out.write_bytes(b"previous good backup")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk full (simulated)")
+
+    monkeypatch.setattr(backup_mod, "export_package", boom)
+    with Library(library_with_files) as lib:
+        with pytest.raises(RuntimeError):
+            backup_library(lib, out)
+    assert out.read_bytes() == b"previous good backup"
+    assert list(tmp_path.glob("*.tmp.zip")) == []
+
+
+def test_backup_snapshot_and_manifest_agree_point_in_time(
+        tmp_path, library_with_files, monkeypatch):
+    """M3: a file imported while the backup runs must appear in NEITHER
+    half — the snapshot is taken first and the file list is read from it.
+    (Under the old order the snapshot, taken after the export, would
+    list the new file while the manifest would not.)"""
+    import darspack.core.backup as backup_mod
+    from darspack.core.manifest import export_package as real_export
+
+    out = tmp_path / "point-in-time.zip"
+    live = {}
+
+    def wrapped(conn, files_dir, ids, out_path, **kwargs):
+        # Simulate a phone upload landing mid-backup, on the LIVE library.
+        src = tmp_path / "mid-backup.pdf"
+        src.write_bytes(b"arrived during backup")
+        import_file(live["lib"], src)
+        return real_export(conn, files_dir, ids, out_path, **kwargs)
+
+    monkeypatch.setattr(backup_mod, "export_package", wrapped)
+    with Library(library_with_files) as lib:
+        live["lib"] = lib
+        info = backup_library(lib, out)
+    assert info["count"] == 2
+    with zipfile.ZipFile(out) as zf:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        inner = tmp_path / "inner.db"
+        inner.write_bytes(zf.read("catalog.db"))
+    check = sqlite3.connect(inner)
+    try:
+        names = {r[0] for r in check.execute(
+            "SELECT original_name FROM files")}
+    finally:
+        check.close()
+    assert names == {"جزوه ریاضی.pdf", "کاربرگ علوم.pdf"}
+    assert {e["name"] for e in manifest["files"]} == names
+    assert "mid-backup.pdf" not in names

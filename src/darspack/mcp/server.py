@@ -567,7 +567,7 @@ class DarsPackMcpServer:
     def tool_backup_library(self, args: dict) -> dict:
         out_dir = Path(args.get("output_dir") or (Path.home() / "Documents"))
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_dir / backup_filename()
+        out_file = out_dir / backup_filename(directory=out_dir)
         info = backup_library(self.lib, out_file)
         with self.lib.conn:
             db.log(self.lib.conn, "mcp_backup", f"snapshot saved to {out_file.name}")
@@ -575,6 +575,8 @@ class DarsPackMcpServer:
             "status": "success",
             "path": str(out_file),
             "file_count": info["count"],
+            "missing_count": info.get("missing_count", 0),
+            "missing": info.get("missing", []),
         }
 
     def tool_get_stats(self, args: dict) -> dict:

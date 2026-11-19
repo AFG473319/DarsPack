@@ -69,8 +69,16 @@ def _fetch_entry(conn, file_id: int) -> dict:
 
 
 def export_package(conn, files_dir, file_ids, out_path, progress=None,
-                   stored_names: bool = False) -> dict:
-    """Write a درس‌پک ZIP for the given catalog ids. Returns package info."""
+                   stored_names: bool = False, skip_missing: bool = False) -> dict:
+    """Write a درس‌پک ZIP for the given catalog ids. Returns package info.
+
+    With skip_missing=True (the backup path), a catalogued file whose disk
+    copy is gone is skipped instead of aborting the whole export: it is
+    left out of the manifest and reported in the returned ``missing`` list
+    (with ``missing_count``), so the ZIP that comes out is complete and
+    verifiable. With skip_missing=False (the default, plain package
+    export) a missing file still raises FileNotFoundError as before.
+    """
     # By default each member is filed under a friendly «NNN - name» label,
     # which keeps a shipped package browsable. A full-library backup passes
     # stored_names=True: it keeps the catalog's own internal names
@@ -80,27 +88,41 @@ def export_package(conn, files_dir, file_ids, out_path, progress=None,
     # next startup's orphan sweep deletes them (data loss). Fixed 2026-11-17.
     entries = [_fetch_entry(conn, fid) for fid in file_ids]
     manifest = {"format": FORMAT, "version": VERSION, "created": _now(),
-                "files": entries}
+                "files": []}
     out_path = Path(out_path)
+    missing: list[str] = []
+    kept = 0
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, entry in enumerate(manifest["files"], start=1):
+        for entry in entries:
             stored = entry.pop("stored_name")
+            src = Path(files_dir) / stored
+            if not src.is_file():
+                if skip_missing:
+                    missing.append(entry["name"])
+                    continue
+                raise FileNotFoundError(
+                    f"file missing on disk: {src} "
+                    f"(catalogued as {entry['name']!r})")
+            kept += 1
             if stored_names:
                 arc = f"files/{stored}"
             else:
-                arc = f"files/{i:03d} - {safe_name(entry['name'])}"
-            zf.write(Path(files_dir) / stored, arc)
+                arc = f"files/{kept:03d} - {safe_name(entry['name'])}"
+            zf.write(src, arc)
             entry["path"] = arc
+            manifest["files"].append(entry)
             if progress is not None:
-                progress(i, len(entries))
+                progress(kept, len(entries))
         manifest_bytes = json.dumps(
             manifest, ensure_ascii=False, indent=2).encode("utf-8")
         zf.writestr("manifest.json", manifest_bytes)
         zf.writestr("index.html", make_index_html(manifest).encode("utf-8"))
     return {
         "path": str(out_path),
-        "count": len(entries),
+        "count": len(manifest["files"]),
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "missing": missing,
+        "missing_count": len(missing),
     }
 
 
