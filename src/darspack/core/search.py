@@ -91,20 +91,20 @@ def _tokens(key: str) -> list[dict]:
     return out[:MAX_TOKENS]
 
 
-def search(conn, query: str = "", subject_id: int | None = None,
-           kind: str | None = None, school_year: str | None = None,
-           limit: int = 200, unclassified_only: bool = False) -> list:
-    """Return catalog rows matching the query and optional filters.
+def _build_where(query: str = "", subject_id: int | None = None,
+                 kind: str | None = None, school_year: str | None = None,
+                 unclassified_only: bool = False):
+    """Shared WHERE builder for search() and search_total().
 
-    unclassified_only=True lists files still missing their subject —
-    the "finish your catalog" view (categorizing is the app's main job).
+    Returns (where_sql, params, tokens). The params carry no :limit or
+    :prefix — the row query adds those itself — so the same WHERE can
+    feed both the paged SELECT and the COUNT(*).
     """
     tokens = _tokens(match_key(query))
     params = {
         "subject_id": subject_id,
         "kind": kind,
         "school_year": school_year,
-        "limit": limit,
     }
 
     where_parts = []
@@ -125,6 +125,23 @@ def search(conn, query: str = "", subject_id: int | None = None,
     if school_year is not None:
         where_parts.append("f.school_year = :school_year")
 
+    if not where_parts:     # also covers the fresh-catalog case
+        where_parts = ["1"]
+    return "\n  AND ".join(where_parts), params, tokens
+
+
+def search(conn, query: str = "", subject_id: int | None = None,
+           kind: str | None = None, school_year: str | None = None,
+           limit: int = 200, unclassified_only: bool = False) -> list:
+    """Return catalog rows matching the query and optional filters.
+
+    unclassified_only=True lists files still missing their subject —
+    the "finish your catalog" view (categorizing is the app's main job).
+    """
+    where, params, tokens = _build_where(
+        query, subject_id, kind, school_year, unclassified_only)
+    params["limit"] = limit
+
     if tokens:
         # Prefix rank on the FIRST token only — later tokens are filters,
         # not ranking signals (same rule as before multi-token search).
@@ -132,11 +149,26 @@ def search(conn, query: str = "", subject_id: int | None = None,
         rank = "CASE WHEN f.name_norm LIKE :prefix ESCAPE '/' THEN 0 ELSE 1 END"
     else:
         rank = "0"          # empty query lists everything, newest first
-    if not where_parts:     # also covers the fresh-catalog case
-        where_parts = ["1"]
 
-    sql = _BASE_SQL.format(rank=rank, where="\n  AND ".join(where_parts))
+    sql = _BASE_SQL.format(rank=rank, where=where)
     return conn.execute(sql, params).fetchall()
+
+
+def search_total(conn, query: str = "", subject_id: int | None = None,
+                 kind: str | None = None, school_year: str | None = None,
+                 unclassified_only: bool = False) -> int:
+    """How many catalog rows match the same filters search() would apply.
+
+    M30: the phone client caps its page at SEARCH_LIMIT rows, so it needs
+    the real total to say "showing X of Y" instead of presenting the cap
+    as the whole library.
+    """
+    where, params, _tokens = _build_where(
+        query, subject_id, kind, school_year, unclassified_only)
+    sql = ("SELECT COUNT(*) c FROM files f "
+           "LEFT JOIN subjects s ON s.id = f.subject_id "
+           f"WHERE {where}")
+    return conn.execute(sql, params).fetchone()["c"]
 
 
 def unclassified_count(conn) -> int:

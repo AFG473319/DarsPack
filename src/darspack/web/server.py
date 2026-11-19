@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
 import tempfile
@@ -61,6 +62,66 @@ else:
 MAX_UPLOAD = 200 * 1024 * 1024          # 200 MB — bigger files via USB
 LOCKOUT_SECONDS = 30
 MAX_FAILS = 5
+SEARCH_LIMIT = 300          # phone search page (M30: the API also reports
+                            # the total, so the cap is never shown as "all")
+SHARE_TTL_SECONDS = 30 * 60  # H2: sharing stops by itself after 30 min —
+                            # a PIN left alive overnight is a PIN left on
+                            # the school network
+_DISK_RESERVE = 10 * 1024 * 1024   # M10: keep 10 MB free besides the
+                            # upload itself (temp staging + catalog growth).
+                            # Deliberately small: a big reserve would refuse
+                            # every upload on a nearly-full scratch disk
+                            # (the test tmpfs is only 512 MB) even for a
+                            # tiny file — the check must catch a *full*
+                            # disk, not a merely busy one.
+
+# M10: never let a phone upload an executable or script into the library —
+# a classmate taps "download" once and runs it. School files are documents,
+# images and archives; code has no business here. Checked on the suffix
+# only (a double extension like "notes.pdf.exe" is still .exe).
+_BLOCKED_UPLOAD_EXTS = frozenset({
+    ".exe", ".dll", ".sys", ".drv", ".com", ".scr", ".cpl", ".ocx",
+    ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".vbs", ".vbe", ".js",
+    ".jse", ".wsf", ".wsh", ".hta", ".msi", ".msp", ".msm", ".apk",
+    ".appx", ".appxbundle", ".msix", ".msixbundle", ".gadget", ".jar",
+    ".py", ".pyw", ".pyc", ".sh", ".bash", ".zsh", ".pl", ".rb", ".php",
+    ".reg", ".inf", ".lnk", ".pif", ".application", ".scf", ".sct",
+})
+
+
+_RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)$")
+
+
+def _parse_range(header: str, size: int) -> tuple[int, int] | None:
+    """Parse a single-byte-range header (M11: download resume).
+
+    Returns (start, end) inclusive, or None when the range is
+    unsatisfiable or not a single range. Suffix ranges ("bytes=-500",
+    the last 500 bytes) and open ranges ("bytes=500-") are supported;
+    multi-range requests are not — the caller answers 416 for them.
+    """
+    if "," in header:
+        return None
+    m = _RANGE_RE.match(header.strip())
+    if m is None or size <= 0:
+        return None
+    first, last = m.group(1), m.group(2)
+    if first == "" and last == "":
+        return None
+    if first == "":
+        n = int(last)
+        if n <= 0:
+            return None
+        start, end = max(0, size - n), size - 1
+    elif last == "":
+        start, end = int(first), size - 1
+    else:
+        start, end = int(first), int(last)
+        if end < start:
+            return None
+    if start >= size:
+        return None
+    return start, min(end, size - 1)
 
 # D2: extensions served inline (the phone browser shows them instead of
 # forcing a download), with a FIXED Content-Type. mimetypes.guess_type is
@@ -117,8 +178,23 @@ class ShareServer:
         self._stopping = False
         self._fails: dict[str, list] = {}   # ip → [timestamps]
         self._fails_lock = threading.Lock()
+        self._stop_lock = threading.Lock()  # stop() runs from the UI thread
+        # AND the TTL timer — both must not interleave server_close()
+        self._ttl_timer: threading.Timer | None = None
 
-    def start(self) -> list[str]:
+    def rotate_pin(self) -> str:
+        """H2: a fresh random PIN — every link carrying the old one stops
+        working at once. Also clears the per-IP lockout counters, so a
+        classmate locked out by typos is not stuck behind the old PIN."""
+        self.pin = f"{secrets.randbelow(1_000_000):06d}"
+        with self._fails_lock:
+            self._fails.clear()
+        return self.pin
+
+    def is_running(self) -> bool:
+        return self._httpd is not None
+
+    def start(self, ttl_seconds: float | None = None) -> list[str]:
         self._stopping = False
         handler = _make_handler(self)
         self._httpd = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
@@ -136,15 +212,37 @@ class ShareServer:
             target=self._httpd.serve_forever,
             kwargs={"poll_interval": 0.05}, daemon=True)
         self._thread.start()
+        # H2: sharing ends by itself. A timer (not the UI) fires stop();
+        # the share dialog's poll notices the server is gone and closes.
+        ttl = SHARE_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+        if ttl and ttl > 0:
+            self._ttl_timer = threading.Timer(ttl, self._auto_stop)
+            self._ttl_timer.daemon = True
+            self._ttl_timer.start()
         return [f"http://{ip}:{self.port}/" for ip in local_ips()]
 
+    def _auto_stop(self) -> None:
+        """H2: the TTL firing — stop() is idempotent, so the UI path that
+        also stops on dialog close stays safe."""
+        self.stop()
+
     def stop(self) -> None:
-        if self._httpd is not None:
+        with self._stop_lock:
+            if self._httpd is None:
+                return
+            if self._ttl_timer is not None:
+                self._ttl_timer.cancel()
+                self._ttl_timer = None
             self._stopping = True
             self._httpd.shutdown()
-            idle_closer = getattr(self, "_close_idle_connections", None)
-            if idle_closer is not None:
-                idle_closer()
+            # M12: shut down every live connection — idle ones AND the
+            # ones mid-transfer — so a blocked read/write unblocks now
+            # instead of server_close() waiting out the whole transfer.
+            # (The old code only closed idle connections, which is why
+            # stopping mid-download still froze the UI.)
+            closer = getattr(self, "_close_all_connections", None)
+            if closer is not None:
+                closer()
             self._httpd.server_close()
             self._httpd = None
             closer = getattr(self, "_close_libraries", None)
@@ -186,6 +284,8 @@ def _make_handler(server: ShareServer):
     registry: list[Library] = []
     registry_lock = threading.Lock()
     idle_conns: set[socket.socket] = set()
+    all_conns: set[socket.socket] = set()   # M12: every live connection,
+    # idle or mid-transfer — stop() shuts them all down at once
 
     def _library() -> Library:
         lib = getattr(local, "library", None)
@@ -205,7 +305,21 @@ def _make_handler(server: ShareServer):
             except OSError:
                 pass
 
-    def _close_all() -> None:
+    def _close_all_conns() -> None:
+        # M12: unblock in-flight reads/writes too — a download whose phone
+        # stopped reading, or an upload waiting for the next chunk, would
+        # otherwise keep server_close() (and the UI) waiting for the
+        # socket timeout. A shut-down socket makes the handler's read /
+        # write fail at once; the handler treats that as "client gone".
+        with registry_lock:
+            conns = list(all_conns)
+        for conn in conns:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def _close_all_libs() -> None:
         import sqlite3 as _sq
         with registry_lock:
             for lib in registry:
@@ -216,7 +330,8 @@ def _make_handler(server: ShareServer):
             registry.clear()
 
     server._close_idle_connections = _close_idle
-    server._close_libraries = _close_all
+    server._close_all_connections = _close_all_conns
+    server._close_libraries = _close_all_libs
 
     class Handler(BaseHTTPRequestHandler):
         # HTTP/1.1 keep-alive (F1): a phone reuses one connection for its
@@ -231,8 +346,15 @@ def _make_handler(server: ShareServer):
             pass
 
         def handle_one_request(self) -> None:
+            if server._stopping:
+                # M12: a request that arrived after stop() began must not
+                # start new work (an upload, a download) that stop() then
+                # has to wait out — the socket just closes.
+                self.close_connection = True
+                return
             with registry_lock:
                 idle_conns.add(self.connection)
+                all_conns.add(self.connection)
             try:
                 super().handle_one_request()
             except (TimeoutError, ConnectionError, OSError):
@@ -240,6 +362,7 @@ def _make_handler(server: ShareServer):
             finally:
                 with registry_lock:
                     idle_conns.discard(self.connection)
+                    all_conns.discard(self.connection)
             if server._stopping:
                 self.close_connection = True
 
@@ -301,23 +424,36 @@ def _make_handler(server: ShareServer):
                     self._json(catalog_manifest(_library().conn))
             elif route == "/api/search":
                 if self._pin_ok():
-                    from ..core.search import search
+                    from ..core.search import search, search_total
                     # C6: the API honors the filters it documents —
                     # subject_id / kind / unclassified pass straight
                     # through to search()
+                    q = (query.get("q") or [""])[0]
+                    subject_id = _int_param(query, "subject_id")
+                    kind = (query.get("kind") or [None])[0] or None
+                    unclassified = _flag_param(query, "unclassified")
                     rows = search(
-                        _library().conn, (query.get("q") or [""])[0],
-                        subject_id=_int_param(query, "subject_id"),
-                        kind=(query.get("kind") or [None])[0] or None,
-                        unclassified_only=_flag_param(query, "unclassified"),
-                        limit=300)
+                        _library().conn, q,
+                        subject_id=subject_id, kind=kind,
+                        unclassified_only=unclassified,
+                        limit=SEARCH_LIMIT)
+                    # M30: the page is capped at SEARCH_LIMIT rows — also
+                    # report the real total, so the phone says "showing
+                    # 300 of 1,240" instead of "300 files" as if that
+                    # were the whole library.
+                    total = search_total(
+                        _library().conn, q,
+                        subject_id=subject_id, kind=kind,
+                        unclassified_only=unclassified)
                     self._json({"files": [
                         {"id": r["id"], "name": r["original_name"],
                          "subject": r["subject_name"],
                          "chapter": r["chapter"], "lesson": r["lesson"],
                          "kind": r["kind"],
                          "size": r["size_bytes"],
-                         "available": bool(r["available"])} for r in rows]})
+                         "available": bool(r["available"])} for r in rows],
+                        "total": total,
+                        "truncated": total > len(rows)})
             elif route == "/api/subjects":
                 if self._pin_ok():
                     # D1: the phone's filter chips — one SQL for every
@@ -357,6 +493,13 @@ def _make_handler(server: ShareServer):
                 urllib.parse.urlparse(self.path).query)
             name = (query.get("name") or ["upload.bin"])[0]
             name = Path(name).name or "upload.bin"       # strip any path part
+            # M10: executables and scripts never reach the library — a
+            # classmate taps "download" once and runs it. Checked before
+            # the body is read, so the rejected bytes never arrive.
+            if Path(name).suffix.lower() in _BLOCKED_UPLOAD_EXTS:
+                self.close_connection = True   # body (partly) unread
+                self._json({"error": "type"}, 415)
+                return
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -364,6 +507,14 @@ def _make_handler(server: ShareServer):
             if not 0 < length <= MAX_UPLOAD:
                 self.close_connection = True   # body (partly) unread
                 self._json({"error": "size"}, 413)
+                return
+            # M10: a full disk must fail fast with a clear error, not
+            # halfway through the copy — the staging temp plus the final
+            # copy both need room, on top of a reserve for the catalog.
+            free = shutil.disk_usage(server.library_root).free
+            if free < length + _DISK_RESERVE:
+                self.close_connection = True   # body (partly) unread
+                self._json({"error": "space"}, 507)
                 return
             # B4: the upload is staged in the OS temp folder, never in the
             # library root — a crash between create and import leaves at
@@ -393,6 +544,11 @@ def _make_handler(server: ShareServer):
                 with os.fdopen(fd, "wb") as f:
                     remaining = length
                     while remaining:
+                        if server._stopping:
+                            # M12: sharing was stopped mid-upload — stop
+                            # reading now; the partial temp file is removed
+                            # by the finally below, nothing is imported.
+                            break
                         chunk = self.rfile.read(min(1 << 20, remaining))
                         if not chunk:
                             break
@@ -478,7 +634,25 @@ def _make_handler(server: ShareServer):
             if not path.is_file():
                 self._json({"error": "file missing"}, 404)
                 return
-            self.send_response(200)
+            size = path.stat().st_size
+            # M11: a phone on flaky school Wi-Fi resumes a failed download
+            # instead of restarting from zero. Single ranges only — a
+            # multi-range or out-of-range request gets 416, per RFC 9110.
+            start, end = 0, size - 1
+            status = 200
+            range_header = self.headers.get("Range")
+            if range_header is not None:
+                parsed = _parse_range(range_header, size)
+                if parsed is None:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                start, end = parsed
+                status = 206
+            length = end - start + 1
+            self.send_response(status)
             name = urllib.parse.quote(row["original_name"])
             # D2: whitelist extensions open INSIDE the phone browser (a
             # classmate checks a جزوه without leaving the app); everything
@@ -499,10 +673,33 @@ def _make_handler(server: ShareServer):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Disposition",
                              f"{disposition}; filename*=UTF-8''{name}")
-            self.send_header("Content-Length", str(path.stat().st_size))
+            self.send_header("Accept-Ranges", "bytes")
+            if status == 206:
+                self.send_header("Content-Range",
+                                 f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Length", str(length))
             self.end_headers()
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    self.wfile.write(chunk)
+            try:
+                with open(path, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        if server._stopping:
+                            # M12: sharing was stopped mid-download — stop
+                            # sending; the client just sees a cut-off
+                            # download it can resume with Range.
+                            break
+                        chunk = f.read(min(1 << 20, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                # M11: the phone went away mid-download (walked out of
+                # Wi-Fi range, closed the tab) — that is normal here, not
+                # a crash: swallow it and let the handler close quietly.
+                pass
+            if server._stopping:
+                self.close_connection = True
 
     return Handler

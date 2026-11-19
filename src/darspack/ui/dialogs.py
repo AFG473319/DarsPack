@@ -1700,6 +1700,7 @@ class ShareDialog(QDialog):
 
     def __init__(self, parent, server, urls: list, on_close):
         super().__init__(parent)
+        self.server = server
         self.on_close = on_close
         self._closed_notified = False
         self.setWindowTitle(tr("share_title"))
@@ -1752,7 +1753,29 @@ class ShareDialog(QDialog):
 
         copy_pin.clicked.connect(
             lambda: _copy_with_feedback(copy_pin, str(server.pin), tr("copy_pin"), "copy"))
-        layout.addWidget(copy_pin, 0, Qt.AlignCenter)
+        # H2: a fresh PIN on demand — the old one stops working at once,
+        # so a link a classmate forwarded (or a stranger sniffed) dies.
+        # The copy button reads server.pin at click time, so it follows
+        # the rotation for free; only the big label needs refreshing.
+        new_pin_btn = QPushButton(tr("new_pin"))
+        new_pin_btn.setObjectName("Secondary")
+        new_pin_btn.setIcon(icons.icon("refresh-cw", theme.PALETTE["text"], 14))
+
+        def _rotate_pin() -> None:
+            server.rotate_pin()
+            pin_label.setText(persian_digits(str(server.pin)))
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "info_bar_label"):
+                parent.info_bar_label.setText(
+                    tr("infobar_share_active").format(pin=num(server.pin)))
+
+        new_pin_btn.clicked.connect(_rotate_pin)
+        pin_row = QHBoxLayout()
+        pin_row.addStretch(1)
+        pin_row.addWidget(copy_pin)
+        pin_row.addWidget(new_pin_btn)
+        pin_row.addStretch(1)
+        layout.addLayout(pin_row)
 
         urls_lbl = QLabel(tr("share_urls"))
         urls_lbl.setWordWrap(True)
@@ -1866,6 +1889,12 @@ class ShareDialog(QDialog):
 
     def _check_files(self) -> None:
         """D4: refresh the owner window when the file count changed."""
+        if not self.server.is_running():
+            # H2: the TTL auto-stop ended sharing under us — the dialog
+            # IS the session, so close it; on_close stops the server
+            # (idempotent) and clears the banner.
+            self.accept()
+            return
         parent = self.parent()
         count = self._count_files()
         if count < 0 or parent is None:

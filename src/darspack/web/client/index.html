@@ -281,7 +281,7 @@
     <div id="neterr" class="neterr" role="alert"></div>
     <div id="list"></div>
     <div class="upload-card">
-      <label id="uplabel" for="up" class="upload-btn">افزودن فایل… <span>(چند فایل هم می‌شود)</span></label>
+      <label id="uplabel" for="up" class="upload-btn">افزودن فایل… <span>(چند فایل هم می‌شود · هر فایل تا ۲۰۰ مگابایت)</span></label>
       <input type="file" id="up" multiple onchange="upload()">
       <div id="upprog" class="upload-progress-wrap"><div id="upbar" class="upload-progress-bar"></div></div>
       <p id="upstatus" aria-live="polite"></p>
@@ -294,6 +294,12 @@
 // ReferenceError: the PIN button did nothing, 2026-10-24).
 const $ = id => document.getElementById(id);
 let timer = null;
+let searchSeq = 0;             // M29: every search gets a number — a slow
+                               // earlier reply must never overwrite a newer
+                               // one's list (out-of-order responses)
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;  // L1: same limit as the
+                               // server (MAX_UPLOAD) — checked before the
+                               // upload even starts
 let subjectFilter = null;      // null = همه; 'u' = بدون درس; else subject id
 let subjects = [];             // from /api/subjects: {id, name, count}
 let unclassified = 0;
@@ -477,8 +483,14 @@ function metaLine(f) {
 const downloadIcon = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
 const eyeIcon = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>';
 
-function render(rows) {
-  $('status').textContent = faNum(rows.length) + ' فایل';
+function render(rows, total, truncated) {
+  const shown = rows.length;
+  const all = typeof total === 'number' ? total : shown;
+  // M30: the API caps the page — say "showing 300 of 1,240" instead of
+  // presenting the cap as the whole library.
+  $('status').textContent = truncated
+    ? 'نمایش ' + faNum(shown) + ' از ' + faNum(all) + ' فایل'
+    : faNum(all) + ' فایل';
   if (!rows.length) {
     const hasFilter = Boolean(($('q').value || '').trim() || subjectFilter !== null);
     $('list').innerHTML = hasFilter
@@ -514,13 +526,25 @@ function render(rows) {
 }
 
 async function search() {
+  const mySeq = ++searchSeq;
   $('neterr').style.display = 'none';
   $('neterr').textContent = '';
   let url = '/api/search?q=' + encodeURIComponent($('q').value);
   if (subjectFilter === 'u') url += '&unclassified=1';
   else if (subjectFilter !== null) url += '&subject_id=' + subjectFilter;
-  const res = await api(url);
-  render((await res.json()).files);
+  let res;
+  try {
+    res = await api(url);
+  } catch (e) {
+    // M29: a superseded search must not own the UI — the newer search
+    // will show (or hide) the error itself. Re-throw otherwise, so the
+    // callers' handleLoadError / PIN handling still run.
+    if (mySeq !== searchSeq) return;
+    throw e;
+  }
+  const data = await res.json();
+  if (mySeq !== searchSeq) return;   // M29: stale response — ignore it
+  render(data.files, data.total, data.truncated);
 }
 
 async function loadSubjects() {
@@ -589,6 +613,13 @@ async function upload() {
   try {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
+      // L1: never start uploading a file the server will refuse — say so
+      // now instead of after minutes on slow Wi-Fi.
+      if (file.size > MAX_UPLOAD_BYTES) {
+        errCount++;
+        lastMsg = 'حجم فایل بیش از حد مجاز (۲۰۰ مگابایت) است.';
+        continue;
+      }
       $('upbar').style.width = '0%';
       $('upstatus').textContent =
         `در حال ارسال ${faNum(i + 1)} از ${faNum(files.length)}: ${file.name}`;
@@ -612,6 +643,16 @@ async function upload() {
         if (res.status === 413) {
           errCount++;
           lastMsg = 'حجم فایل بیش از حد مجاز (۲۰۰ مگابایت) است.';
+          continue;
+        }
+        if (res.status === 415) {
+          errCount++;
+          lastMsg = 'این نوع فایل برای اشتراک مجاز نیست (فایل اجرایی).';
+          continue;
+        }
+        if (res.status === 507) {
+          errCount++;
+          lastMsg = 'روی رایانه فضای خالی کافی نیست.';
           continue;
         }
         if (res.status < 200 || res.status >= 300) {
