@@ -2,8 +2,6 @@
 import sys
 from pathlib import Path
 
-import pytest
-
 from darspack.mcp.launch import SERVER_EXE_NAME
 from darspack.paths import (
     app_exe_name,
@@ -12,6 +10,16 @@ from darspack.paths import (
     server_exe_name,
     user_documents_dir,
 )
+
+
+def _set_home(monkeypatch, home):
+    """Point Path.home() at *home*.
+
+    Setting the HOME env var is not enough: on Windows, Path.home()
+    ignores HOME and reads USERPROFILE instead, so the tests would see
+    the real home directory. Mocking Path.home works on every platform.
+    """
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path(home)))
 
 
 def test_exe_names_follow_platform(monkeypatch):
@@ -30,7 +38,7 @@ def test_default_library_uses_xdg_data_home_without_documents(
 ):
     """No ~/Documents and no user-dirs.dirs: XDG_DATA_HOME wins."""
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     assert default_library_path() == tmp_path / "xdg-data" / "DarsPackLibrary"
 
@@ -38,14 +46,14 @@ def test_default_library_uses_xdg_data_home_without_documents(
 def test_default_library_prefers_existing_documents(tmp_path, monkeypatch):
     """A Linux desktop with ~/Documents keeps the Windows layout."""
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     (tmp_path / "Documents").mkdir()
     assert default_library_path() == tmp_path / "Documents" / "DarsPackLibrary"
 
 
 def test_default_library_respects_xdg_documents_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _set_home(monkeypatch, tmp_path)
     cfg = tmp_path / ".config"
     cfg.mkdir()
     (cfg / "user-dirs.dirs").write_text(
@@ -57,7 +65,7 @@ def test_default_library_respects_xdg_documents_dir(tmp_path, monkeypatch):
 
 def test_default_library_is_windows_documents_on_windows(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("HOME", str(Path("/home/someone")))
+    _set_home(monkeypatch, Path("/home/someone"))
     # On Windows the documents folder is ~/Documents, XDG is ignored.
     assert default_library_path() == Path("/home/someone") / "Documents" / "DarsPackLibrary"
 
