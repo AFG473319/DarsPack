@@ -1545,10 +1545,25 @@ class MainWindow(QMainWindow):
             self.refresh()
 
     def open_settings(self) -> None:
+        old_library = self.settings.get("library")
         if dialogs.SettingsDialog(self, self.settings,
                                   self.settings_path).exec():
             from .app import apply_font_size
             apply_font_size(self.settings)
+            if self.settings.get("library") != old_library:
+                self._offer_restart_for_library_change()
+
+    def _offer_restart_for_library_change(self) -> None:
+        """The library folder only takes effect after a restart (H6):
+        offer to restart now instead of leaving the user wondering why
+        nothing changed."""
+        answer = QMessageBox.question(
+            self, APP_NAME, tr("settings_restart_now"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            from PySide6.QtCore import QProcess
+            QProcess.startDetached(sys.executable, sys.argv)
+            QApplication.quit()
 
     def open_help_dialog(self) -> None:
         dialogs.HelpDialog(self, self.settings, self.settings_path).exec()

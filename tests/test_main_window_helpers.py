@@ -8,6 +8,9 @@ date). These cases pin the correct conversion, the Nowruz year boundary
 and the never-crash fallback. No Qt objects needed — but importing the
 module pulls in PySide6, so conftest's offscreen env applies.
 """
+import os
+import time
+
 from darspack.ui.main_window import chapter_lesson_display, human_size, jalali_date, TableSortItem
 
 
@@ -560,6 +563,9 @@ def test_sweep_never_touches_the_trash(tmp_path):
         trash = lib.files_dir / ".trash"
         trash.mkdir(exist_ok=True)
         (lib.files_dir / "tmp_009.pdf").write_bytes(b"leftover")
+        # the tmp copy must be stale for the sweep to touch it
+        old = time.time() - 3600
+        os.utime(lib.files_dir / "tmp_009.pdf", (old, old))
         import shutil
         shutil.move(str(lib.stored_path(
             lib.conn.execute("SELECT * FROM files").fetchone())),
