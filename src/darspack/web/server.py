@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -403,8 +404,21 @@ def _make_handler(server: ShareServer):
                     self._json({"error": "incomplete"}, 400)
                     return
                 from ..core.importer import import_file
-                result = import_file(_library(), tmp, display_name=name,
-                                     meta=meta or None)
+                try:
+                    result = import_file(_library(), tmp, display_name=name,
+                                         meta=meta or None)
+                except sqlite3.OperationalError as exc:
+                    # H1: another writer (a big desktop import, a second
+                    # phone) held the lock past the 5 s busy timeout.
+                    # Answer JSON so the phone can say "try again in a
+                    # moment" instead of dropping the connection. Only
+                    # lock errors get this treatment — anything else
+                    # re-raises and keeps the old dropped-request
+                    # behaviour (see test_upload_crash_leaves_nothing_…).
+                    if "locked" not in str(exc) and "busy" not in str(exc):
+                        raise
+                    self._json({"error": "busy"}, 503)
+                    return
             finally:
                 tmp.unlink(missing_ok=True)
             reply = {"status": result.status, "message": result.message_fa}

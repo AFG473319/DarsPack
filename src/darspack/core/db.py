@@ -153,10 +153,16 @@ def get_or_create(conn: sqlite3.Connection, table: str, name: str) -> int | None
     key = match_key(name)
     if not key:
         return None
+    # M2: SELECT-then-INSERT raced — two threads creating the same
+    # subject at once both passed the SELECT, and the second INSERT died
+    # with IntegrityError. INSERT OR IGNORE makes the insert itself
+    # atomic against the UNIQUE backstop, and the SELECT afterwards
+    # returns the row whichever thread won. (If the winner has not
+    # committed yet the row is invisible and None comes back — callers
+    # treat that as "not created yet", never as a crash.)
+    conn.execute(
+        f"INSERT OR IGNORE INTO {table}(name, normalized) VALUES (?,?)",
+        (name.strip(), key))
     row = conn.execute(
         f"SELECT id FROM {table} WHERE normalized=?", (key,)).fetchone()
-    if row is not None:
-        return row["id"]
-    cur = conn.execute(
-        f"INSERT INTO {table}(name, normalized) VALUES (?,?)", (name.strip(), key))
-    return cur.lastrowid
+    return row["id"] if row is not None else None
