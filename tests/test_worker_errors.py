@@ -17,6 +17,22 @@ from darspack.core.importer import import_paths
 from darspack.core.library import Library
 
 
+def _flush_worker(worker, qapp):
+    """Drain anything the finished worker left in the event queue and
+    delete the thread object while the app is still alive. A queued
+    delivery or deferred delete that outlives the test is processed
+    after the worker's Python wrapper is gone — the access-violation
+    crash class documented in test_ui_dialogs (and the heap corruption
+    the Python 3.14 CI job died on)."""
+    from PySide6.QtCore import QEvent
+
+    qapp.processEvents()
+    if not worker.isRunning():
+        worker.deleteLater()
+    qapp.sendPostedEvents(None, QEvent.DeferredDelete)
+    qapp.processEvents()
+
+
 @pytest.fixture()
 def batch(tmp_path, monkeypatch):
     """A folder: two good files + one that fails like a locked file."""
@@ -49,21 +65,19 @@ def test_batch_import_survives_a_bad_file(tmp_path, batch):
         assert count == 2
 
 
-def test_import_worker_always_emits_done(tmp_path, batch):
-    from PySide6.QtCore import QCoreApplication
-
+def test_import_worker_always_emits_done(tmp_path, batch, qapp):
     from darspack.ui.workers import ImportWorker
 
-    app = QCoreApplication.instance() or QCoreApplication([])
     received = []
     worker = ImportWorker(str(tmp_path / "lib"), [batch], keep_duplicates=True)
     worker.done.connect(lambda *args: received.append(args))
     worker.start()
     deadline = time.time() + 30
     while not received and time.time() < deadline:
-        app.processEvents()
+        qapp.processEvents()
         time.sleep(0.02)
     worker.wait(5000)
+    _flush_worker(worker, qapp)
     assert received, "done never emitted — the UI would hang on 'importing'"
     imported, duplicates, errors, messages, new_ids = received[0]
     assert (imported, duplicates, errors) == (2, 0, 1)
@@ -71,10 +85,8 @@ def test_import_worker_always_emits_done(tmp_path, batch):
     assert len(new_ids) == 2            # ids for the classification dialog
 
 
-def test_import_worker_reports_progress(tmp_path):
+def test_import_worker_reports_progress(tmp_path, qapp):
     """The UI progress contract: (1, total, name) then (2, total, name)."""
-    from PySide6.QtCore import QCoreApplication
-
     from darspack.ui.workers import ImportWorker
 
     folder = tmp_path / "from"
@@ -82,7 +94,6 @@ def test_import_worker_reports_progress(tmp_path):
     (folder / "one.pdf").write_bytes(b"1")
     (folder / "two.pdf").write_bytes(b"2")
 
-    app = QCoreApplication.instance() or QCoreApplication([])
     progress, received = [], []
     worker = ImportWorker(str(tmp_path / "lib"), [folder])
     worker.progress.connect(lambda d, t, n: progress.append((d, t, n)))
@@ -90,18 +101,26 @@ def test_import_worker_reports_progress(tmp_path):
     worker.start()
     deadline = time.time() + 30
     while not (received and len(progress) >= 2) and time.time() < deadline:
-        app.processEvents()
+        qapp.processEvents()
         time.sleep(0.02)
     worker.wait(5000)
+    _flush_worker(worker, qapp)
     # iter_files sorts, so one.pdf is imported first
     assert progress[:2] == [(1, 2, "one.pdf"), (2, 2, "two.pdf")]
 
 
-def test_catastrophic_failure_still_reports_and_logs(tmp_path, monkeypatch):
+def test_catastrophic_failure_still_reports_and_logs(tmp_path, monkeypatch, qapp):
     """If even opening the library dies, `done` must still fire — and the
-    windowed exe needs the traceback in error.log (it has no console)."""
+    windowed exe needs the traceback in error.log (it has no console).
+
+    Uses the session-scoped `qapp` fixture: creating a throwaway
+    QCoreApplication per test and destroying it before a QApplication
+    exists in the same process corrupts the heap on Python 3.14
+    (access violation in the CI 3.14 job; heap corruption under
+    PYTHONMALLOC=debug locally). One shared QApplication for the
+    whole run, as conftest.py prescribes.
+    """
     import darspack.ui.workers as workers_mod
-    from PySide6.QtCore import QCoreApplication
 
     from darspack.ui.workers import ImportWorker
 
@@ -111,16 +130,16 @@ def test_catastrophic_failure_still_reports_and_logs(tmp_path, monkeypatch):
         raise RuntimeError("disk gone")
     monkeypatch.setattr(workers_mod.Library, "open", boom)
 
-    app = QCoreApplication.instance() or QCoreApplication([])
     received = []
     worker = ImportWorker(str(tmp_path / "lib"), [tmp_path])
     worker.done.connect(lambda *args: received.append(args))
     worker.start()
     deadline = time.time() + 30
     while not received and time.time() < deadline:
-        app.processEvents()
+        qapp.processEvents()
         time.sleep(0.02)
     worker.wait(5000)
+    _flush_worker(worker, qapp)
     assert received, "done never emitted on a catastrophic failure"
     imported, duplicates, errors, messages, new_ids = received[0]
     assert (imported, duplicates, errors) == (0, 0, 1)
@@ -128,3 +147,44 @@ def test_catastrophic_failure_still_reports_and_logs(tmp_path, monkeypatch):
     log = (tmp_path / "lib" / "error.log").read_text(encoding="utf-8")
     assert "import crashed" in log
     assert "RuntimeError" in log
+
+
+def test_import_worker_cancel_stops_between_files(tmp_path, monkeypatch, qapp):
+    """M21: cancel() stops the worker after the current file; done still
+    fires (the window relies on that to close cleanly mid-import)."""
+    import darspack.ui.workers as workers_mod
+
+    from darspack.ui.workers import ImportWorker
+
+    folder = tmp_path / "from"
+    folder.mkdir()
+    for i in range(5):
+        (folder / f"f{i}.pdf").write_bytes(b"x")
+
+    real_import = workers_mod.import_file
+
+    def slow_import(lib, path, **kwargs):
+        time.sleep(0.4)
+        return real_import(lib, path, **kwargs)
+
+    monkeypatch.setattr(workers_mod, "import_file", slow_import)
+
+    received, progress = [], []
+    worker = ImportWorker(str(tmp_path / "lib"), [folder])
+    worker.progress.connect(lambda d, t, n: progress.append((d, t, n)))
+    worker.done.connect(lambda *args: received.append(args))
+    worker.start()
+    deadline = time.time() + 30
+    while not progress and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.02)
+    worker.cancel()          # lands while the first file is still copying
+    while not received and time.time() < deadline:
+        qapp.processEvents()
+        time.sleep(0.02)
+    worker.wait(5000)
+    _flush_worker(worker, qapp)
+    assert received, "done never emitted after cancel"
+    imported, duplicates, errors, messages, new_ids = received[0]
+    assert imported < 5, "cancel did not stop the import"
+    assert imported >= 1, "the file in flight should still finish"

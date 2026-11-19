@@ -8,6 +8,9 @@ date). These cases pin the correct conversion, the Nowruz year boundary
 and the never-crash fallback. No Qt objects needed — but importing the
 module pulls in PySide6, so conftest's offscreen env applies.
 """
+import os
+import time
+
 from darspack.ui.main_window import chapter_lesson_display, human_size, jalali_date, TableSortItem
 
 
@@ -560,6 +563,9 @@ def test_sweep_never_touches_the_trash(tmp_path):
         trash = lib.files_dir / ".trash"
         trash.mkdir(exist_ok=True)
         (lib.files_dir / "tmp_009.pdf").write_bytes(b"leftover")
+        # the tmp copy must be stale for the sweep to touch it
+        old = time.time() - 3600
+        os.utime(lib.files_dir / "tmp_009.pdf", (old, old))
         import shutil
         shutil.move(str(lib.stored_path(
             lib.conn.execute("SELECT * FROM files").fetchone())),
@@ -918,3 +924,138 @@ def test_localized_search_context_menu_with_translator_is_popup_and_dismissible(
 
 
 
+
+
+# --- M21/M22/M27: close mid-import, stale rows, partial bulk delete -------
+
+
+def test_close_during_import_waits_for_worker(tmp_path, qapp, monkeypatch):
+    """M21: closing the window mid-import waits for the worker instead
+    of destroying a running QThread (Qt aborts the process) — and no
+    import-finished popup appears on the closing window."""
+    import time
+
+    import darspack.ui.workers as workers_mod
+    from PySide6.QtWidgets import QApplication
+
+    with Library(tmp_path / "lib") as lib:
+        folder = tmp_path / "from"
+        folder.mkdir()
+        (folder / "big.pdf").write_bytes(b"x")
+        real_import = workers_mod.import_file
+
+        def slow_import(lib_, path, **kwargs):
+            time.sleep(1.5)
+            return real_import(lib_, path, **kwargs)
+
+        monkeypatch.setattr(workers_mod, "import_file", slow_import)
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            win.show()
+            win.run_import_worker([folder])
+            deadline = time.time() + 10
+            while not win._worker.isRunning() and time.time() < deadline:
+                qapp.processEvents()
+                time.sleep(0.02)
+            assert win._worker.isRunning()
+            win.close()
+            assert not win._worker.isRunning()
+            qapp.processEvents()
+            assert QApplication.activeModalWidget() is None
+        finally:
+            win.lib.close()
+
+
+def test_open_selected_file_missing_row_shows_message(tmp_path, qapp):
+    """M22: opening a file whose row vanished (deleted by another
+    instance while the table was showing it) shows a status message
+    and refreshes instead of crashing on a None row."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "a.pdf"
+        src.write_bytes(b"a")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            win.refresh()
+            win.table.setCurrentCell(0, 0)
+            with lib.conn:
+                lib.conn.execute("DELETE FROM files WHERE id=?", (fid,))
+            win.open_selected_file()   # must not raise
+            assert "دیگر در کتابخانه نیست" in win.statusBar().currentMessage()
+        finally:
+            win.lib.close()
+
+
+def test_edit_metadata_missing_row_shows_message(tmp_path, qapp):
+    """M22: editing a file whose row vanished shows a status message
+    instead of crashing inside MetadataDialog."""
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "a.pdf"
+        src.write_bytes(b"a")
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            win.refresh()
+            win.table.selectRow(0)
+            with lib.conn:
+                lib.conn.execute("DELETE FROM files WHERE id=?", (fid,))
+            win.edit_metadata()        # must not raise
+            assert "دیگر در کتابخانه نیست" in win.statusBar().currentMessage()
+        finally:
+            win.lib.close()
+
+
+def test_bulk_delete_partial_failure_reports_split(tmp_path, qapp, monkeypatch):
+    """M27: one locked file must not abort the whole bulk delete — the
+    rest still moves to trash and the status bar reports the split."""
+    from PySide6.QtWidgets import QMessageBox
+
+    with Library(tmp_path / "lib") as lib:
+        for name in ("a.pdf", "b.pdf"):
+            src = tmp_path / name
+            src.write_bytes(name.encode())
+            import_file(lib, src)
+        ids = [r["id"] for r in lib.conn.execute(
+            "SELECT id FROM files ORDER BY id")]
+
+        win = mw_module.MainWindow(lib.root,
+                                   {"language": "fa", "font_size": 10,
+                                    "library": str(lib.root)},
+                                   tmp_path / "settings.json")
+        try:
+            monkeypatch.setattr(
+                QMessageBox, "question",
+                staticmethod(lambda *a, **k: QMessageBox.Yes))
+            real_move = win.lib.move_to_trash
+
+            def flaky_move(fid):
+                if fid == ids[1]:
+                    raise PermissionError("file open in another program")
+                return real_move(fid)
+
+            monkeypatch.setattr(win.lib, "move_to_trash", flaky_move)
+            win.delete_files(ids)
+
+            assert lib.conn.execute(
+                "SELECT COUNT(*) c FROM files").fetchone()["c"] == 1
+            trash = lib.files_dir / ".trash"
+            trashed = list(trash.iterdir())
+            assert len(trashed) == 1
+            assert trashed[0].read_bytes() == b"a.pdf"
+            assert "منتقل نشد" in win.statusBar().currentMessage()
+        finally:
+            win.lib.close()

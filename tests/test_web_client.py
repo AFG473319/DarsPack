@@ -362,8 +362,7 @@ setTimeout(() => {
     assert _status({"files": [row], "total": 5, "truncated": True}) == "نمایش ۱ از ۵ فایل"
     assert _status({"files": [row], "total": 1, "truncated": False}) == "۱ فایل"
 
-
-@pytest.mark.skipif(shutil.which("node") is None,
+    @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node not installed — oversized-upload check skipped")
 def test_client_refuses_oversized_file_before_upload(tmp_path):
     """L1, behaviour: a 300 MB file never reaches fetch — the phone says
@@ -421,3 +420,11 @@ setTimeout(() => {   // let the boot search settle first
     small = _upload(1024)
     assert small["uploadCalls"] == 1
     assert small["status"] == "ارسال شد."
+
+    
+    def test_client_shows_try_again_message_when_server_is_busy():
+    """H1: a 503 {"error": "busy"} upload answer must reach the user as
+    a 'try again in a moment' message, not the generic failure text."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "error === 'busy'" in html
+    assert "سرور مشغول است" in html

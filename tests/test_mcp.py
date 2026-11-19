@@ -531,3 +531,203 @@ def test_stdio_handshake_end_to_end(tmp_path):
         proc.stdin.close()
         assert proc.wait(timeout=60) == 0
 
+
+# --- Regression tests for the 2026-11-19 review (C1, M9, M13, M15, M16) ---
+
+_REQ_ID = [1000]
+
+
+def _call_tool(mcp_server, name, arguments):
+    """Call one MCP tool and return the parsed JSON payload."""
+    _REQ_ID[0] += 1
+    resp = mcp_server.handle_request({
+        "jsonrpc": "2.0", "id": _REQ_ID[0], "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    })
+    return json.loads(resp["result"]["content"][0]["text"])
+
+
+def _import_sample(mcp_server, tmp_path, name, content=None):
+    f = tmp_path / name
+    # Default content is unique per file name: identical bytes would be a
+    # duplicate import instead of a fresh file.
+    f.write_text(content if content is not None else f"متن نمونه برای آزمون {name}",
+                 encoding="utf-8")
+    res = _call_tool(mcp_server, "darspack_import_file", {"path": str(f)})
+    assert res["status"] == "imported"
+    return res["file_id"]
+
+
+def _subject_names(mcp_server):
+    return [s["name"] for s in _call_tool(mcp_server, "darspack_list_subjects", {})["subjects"]]
+
+
+def test_classify_preserves_chapter_lesson_when_only_subject_given(mcp_server, tmp_path):
+    """C1: classifying by subject only must not wipe chapter/lesson."""
+    fid = _import_sample(mcp_server, tmp_path, "ch3.txt")
+    res = _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": fid, "subject": "ریاضی", "chapter": 3, "lesson": 2, "kind": "جزوه",
+    })
+    assert res["status"] == "success"
+
+    # Second classify: subject only, no chapter/lesson keys at all.
+    res = _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": fid, "subject": "علوم تجربی",
+    })
+    assert res["status"] == "success"
+    assert res["chapter"] == 3
+    assert res["lesson"] == 2
+
+    found = _call_tool(mcp_server, "darspack_search_files", {"subject": "علوم تجربی"})
+    assert len(found["results"]) == 1
+    assert found["results"][0]["chapter"] == 3
+    assert found["results"][0]["lesson"] == 2
+
+
+def test_classify_missing_file_creates_no_subject(mcp_server):
+    """M16: a failed classify must not leave a junk subject behind."""
+    res = _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": 99999, "subject": "موضوع تازه و اشتباه",
+    })
+    assert "error" in res
+    assert "موضوع تازه و اشتباه" not in _subject_names(mcp_server)
+
+
+def test_classify_empty_subject_rejected_and_keeps_subject(mcp_server, tmp_path):
+    """M16: an empty subject must not silently unclassify the file."""
+    fid = _import_sample(mcp_server, tmp_path, "keep.txt")
+    _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": fid, "subject": "ریاضی", "chapter": 3,
+    })
+
+    for bad_subject in ("", "   "):
+        res = _call_tool(mcp_server, "darspack_classify_file", {
+            "file_id": fid, "subject": bad_subject,
+        })
+        assert "error" in res
+
+    found = _call_tool(mcp_server, "darspack_search_files", {"subject": "ریاضی"})
+    assert len(found["results"]) == 1
+    assert found["results"][0]["chapter"] == 3
+
+
+def test_classify_chapter_lesson_range_validated(mcp_server, tmp_path):
+    """C1: chapter/lesson must be integers in 1..40 (schema promise)."""
+    fid = _import_sample(mcp_server, tmp_path, "range.txt")
+    _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": fid, "subject": "ریاضی", "chapter": 3, "lesson": 2,
+    })
+
+    for bad in ({"chapter": 0}, {"chapter": 41}, {"lesson": 0}, {"lesson": 99},
+                {"chapter": "3"}, {"lesson": 2.5}):
+        args = {"file_id": fid, "subject": "ریاضی"}
+        args.update(bad)
+        res = _call_tool(mcp_server, "darspack_classify_file", args)
+        assert "error" in res, bad
+
+    # Boundaries are accepted, and the stored values survive the bad calls.
+    res = _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": fid, "subject": "ریاضی", "chapter": 40, "lesson": 1,
+    })
+    assert res["status"] == "success"
+    assert res["chapter"] == 40
+    assert res["lesson"] == 1
+
+
+def test_search_unknown_subject_returns_empty_with_note(mcp_server, tmp_path):
+    """M9: a subject filter that matches nothing must not search everything."""
+    fid = _import_sample(mcp_server, tmp_path, "math.txt")
+    _call_tool(mcp_server, "darspack_classify_file", {
+        "file_id": fid, "subject": "ریاضی",
+    })
+
+    res = _call_tool(mcp_server, "darspack_search_files", {
+        "query": "", "subject": "موضوعی که وجود ندارد",
+    })
+    assert res["results"] == []
+    assert res["note"] == "subject not found"
+
+    # The matching subject still finds the file.
+    res = _call_tool(mcp_server, "darspack_search_files", {"subject": "ریاضی"})
+    assert len(res["results"]) == 1
+
+
+def test_batch_classify_survives_bad_item(mcp_server, tmp_path):
+    """M13: one bad item must not abort the whole batch."""
+    fid1 = _import_sample(mcp_server, tmp_path, "b1.txt")
+    fid2 = _import_sample(mcp_server, tmp_path, "b2.txt")
+
+    res = _call_tool(mcp_server, "darspack_batch_classify", {"items": [
+        {"file_id": fid1, "subject": "ریاضی"},
+        {"file_id": fid2},  # missing subject
+        {"file_id": 99999, "subject": "ریاضی"},  # missing file
+        "not-an-object",
+        {"file_id": fid2, "subject": "علوم تجربی", "chapter": 5},
+    ]})
+    assert res["processed"] == 5
+    assert res["results"][0]["status"] == "success"
+    assert "error" in res["results"][1]
+    assert "error" in res["results"][2]
+    assert "error" in res["results"][3]
+    assert res["results"][4]["status"] == "success"
+
+    # The good items actually took effect despite the bad ones.
+    found = _call_tool(mcp_server, "darspack_search_files", {"subject": "علوم تجربی"})
+    assert len(found["results"]) == 1
+    assert found["results"][0]["chapter"] == 5
+
+
+def test_limit_and_max_chars_clamped(mcp_server, tmp_path):
+    """M15: negative/huge limit and max_chars must be clamped, not trusted."""
+    from darspack.mcp.server import _clamp_int
+
+    assert _clamp_int(-1, 20, 1, 200) == 1
+    assert _clamp_int(0, 20, 1, 200) == 1
+    assert _clamp_int(500, 20, 1, 200) == 200
+    assert _clamp_int("abc", 20, 1, 200) == 20
+    assert _clamp_int(None, 20, 1, 200) == 20
+    assert _clamp_int(999999, 1500, 100, 10000) == 10000
+    assert _clamp_int(5, 1500, 100, 10000) == 100
+
+    fids = [_import_sample(mcp_server, tmp_path, f"f{i}.txt", content=f"file {i} " + "x" * 50) for i in range(3)]
+    assert len(fids) == 3
+    # A negative limit used to mean "unlimited" in SQLite (LIMIT -1);
+    # now it clamps to the 1..200 range instead.
+    res = _call_tool(mcp_server, "darspack_search_files", {"limit": -1})
+    assert len(res["results"]) == 1
+    res = _call_tool(mcp_server, "darspack_search_files", {"limit": 0})
+    assert len(res["results"]) == 1
+    res = _call_tool(mcp_server, "darspack_search_files", {"limit": 2})
+    assert len(res["results"]) == 2
+    res = _call_tool(mcp_server, "darspack_search_files", {"limit": 500})
+    assert len(res["results"]) == 3
+
+    # Preview clamps: a huge max_chars cannot dump more than 10_000 chars.
+    fid = _import_sample(mcp_server, tmp_path, "big2.txt", content="متن طولانی " * 3000)
+    preview = _call_tool(mcp_server, "darspack_preview_file", {
+        "file_id": fid, "max_chars": 999999,
+    })
+    assert len(preview["preview"]) <= 10000 + len("\n... [truncated]")
+    # A tiny max_chars is raised to the 100-char floor.
+    preview = _call_tool(mcp_server, "darspack_preview_file", {
+        "file_id": fid, "max_chars": 5,
+    })
+    assert len(preview["preview"]) <= 100 + len("\n... [truncated]")
+
+
+def test_preview_large_pdf_does_not_read_whole_file(tmp_path):
+    """M15: the PDF extractor must stop reading after MAX_PDF_BYTES."""
+    import zlib
+
+    from darspack.mcp.extractor import MAX_PDF_BYTES, extract_preview
+
+    stream = b"stream\n" + zlib.compress(b"(Hello from the stream) Tj") + b"\nendstream"
+
+    small = tmp_path / "small.pdf"
+    small.write_bytes(b"%PDF-1.4\n" + stream)
+    assert "Hello from the stream" in extract_preview(small)
+
+    # Same stream, but buried past the read cap behind 9 MiB of padding.
+    big = tmp_path / "big.pdf"
+    big.write_bytes(b"A" * (MAX_PDF_BYTES + 1024 * 1024) + stream)
+    assert "Hello from the stream" not in extract_preview(big)
