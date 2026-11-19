@@ -1144,7 +1144,9 @@ class MainWindow(QMainWindow):
             self._welcome_checked = True
             if (self.settings.get("show_welcome", True) and
                 os.environ.get("QT_QPA_PLATFORM") != "offscreen"):
-                QTimer.singleShot(200, self.open_welcome_tour)
+                # Pass the window as the timer's context object so the
+                # timer is cancelled if the window is destroyed first.
+                QTimer.singleShot(200, self, self.open_welcome_tour)
 
     def _apply_dark_titlebar(self) -> None:
         """Apply native Windows 11 Immersive Dark Mode and Mica backdrop."""
@@ -1611,10 +1613,25 @@ class MainWindow(QMainWindow):
             self.refresh()
 
     def open_settings(self) -> None:
+        old_library = self.settings.get("library")
         if dialogs.SettingsDialog(self, self.settings,
                                   self.settings_path).exec():
             from .app import apply_font_size
             apply_font_size(self.settings)
+            if self.settings.get("library") != old_library:
+                self._offer_restart_for_library_change()
+
+    def _offer_restart_for_library_change(self) -> None:
+        """The library folder only takes effect after a restart (H6):
+        offer to restart now instead of leaving the user wondering why
+        nothing changed."""
+        answer = QMessageBox.question(
+            self, APP_NAME, tr("settings_restart_now"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            from PySide6.QtCore import QProcess
+            QProcess.startDetached(sys.executable, sys.argv)
+            QApplication.quit()
 
     def open_help_dialog(self) -> None:
         dialogs.HelpDialog(self, self.settings, self.settings_path).exec()

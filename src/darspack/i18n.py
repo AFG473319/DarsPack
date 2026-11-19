@@ -102,6 +102,13 @@ STRINGS = {
         "settings_reset": "بازنشانی پیش‌فرض",
         "settings_advanced": "تنظیمات پیشرفته",
         "settings_restart": "تغییر اندازه‌ی فونت بلافاصله اعمال می‌شود؛ تغییر زبان و پوشه‌ی کتابخانه بعد از اجرای دوباره اعمال می‌شود.",
+        "settings_damaged_title": "تنظیمات آسیب دیده بود",
+        "settings_damaged_msg": "فایل تنظیمات خوانا نبود؛ با تنظیمات پیش‌فرض باز شد. اگر کتابخانه‌ات در پوشه‌ی دیگری بود، از بخش تنظیمات دوباره انتخابش کن — فایل‌هایت پاک نشده‌اند.",
+        "settings_lib_empty": "مسیر پوشه‌ی کتابخانه خالی است.",
+        "settings_lib_not_dir": "این مسیر یک فایل است، نه یک پوشه. یک پوشه‌ی کتابخانه انتخاب کن.",
+        "settings_lib_create": "پوشه‌ی «{0}» وجود ندارد. ساخته شود؟",
+        "settings_lib_mkdir_failed": "ساختن این پوشه ممکن نشد. مسیر را بررسی کن.",
+        "settings_restart_now": "پوشه‌ی کتابخانه عوض شد. برای استفاده از کتابخانه‌ی جدید، برنامه باید دوباره اجرا شود. الان دوباره اجرا شود؟",
         "about_text": "درس‌پک {}\nسازنده: AFG473319\n\nسازمان‌دهنده‌ی آفلاین فایل‌های درسی — فارسی‌اول، بدون نیاز به اینترنت.",
         "help_text": "۱) فایل‌ها را با «وارد کردن» به کتابخانه اضافه کنید — پیشنهاد درس و فصل از روی نام فایل داده می‌شود و قابل ویرایش است.\n"
                      "۲) با جعبه‌ی جست‌جو فایل‌ها را پیدا کنید؛ اعداد فارسی و لاتین یکسانند.\n"
@@ -213,6 +220,7 @@ STRINGS = {
         "trash_col_subject": "درس",
         "trash_empty_confirm": "آیا مطمئن هستید که می‌خواهید تمام فایل‌های سطل زباله را برای همیشه پاک کنید؟ این عملیات غیرقابل بازگشت است.",
         "trash_empty_done": "سطل زباله پاک‌سازی شد ({0} فایل حذف شد).",
+        "trash_empty_partial": "سطل زباله پاک‌سازی شد ({0} فایل حذف شد، {1} فایل حذف نشد — شاید در برنامه‌ی دیگری باز است).",
         "trash_restore_done": "{0} فایل با موفقیت به کتابخانه بازگردانده شد.",
         "trash_no_selection": "هیچ فایلی برای بازیابی انتخاب نشده است.",
         "trash_empty_state": "سطل زباله خالی است.",
@@ -428,6 +436,13 @@ STRINGS = {
         "settings_reset": "Reset defaults",
         "settings_advanced": "Advanced settings",
         "settings_restart": "Font size updates immediately; language and library folder changes apply after restart.",
+        "settings_damaged_title": "Settings were damaged",
+        "settings_damaged_msg": "The settings file could not be read, so defaults were used. If your library lives in another folder, pick it again in Settings — your files were not deleted.",
+        "settings_lib_empty": "The library folder path is empty.",
+        "settings_lib_not_dir": "That path is a file, not a folder. Choose a library folder.",
+        "settings_lib_create": "The folder “{0}” does not exist. Create it?",
+        "settings_lib_mkdir_failed": "That folder could not be created. Check the path.",
+        "settings_restart_now": "The library folder changed. The app must restart to use the new library. Restart now?",
         "about_text": "DarsPack {}\nAuthor: AFG473319\n\nOffline-first organizer for school materials — Persian-first, no internet required.",
         "help_text": "1) Use Import to copy files into the library — subject/chapter is suggested from the filename and editable.\n"
                      "2) Find files with the search box; Persian and Latin digits match each other.\n"
@@ -539,6 +554,7 @@ STRINGS = {
         "trash_col_subject": "Subject",
         "trash_empty_confirm": "Are you sure you want to permanently delete all files in the trash? This cannot be undone.",
         "trash_empty_done": "Trash bin emptied ({0} files deleted).",
+        "trash_empty_partial": "Trash emptied ({0} files deleted, {1} could not be deleted — maybe open in another program).",
         "trash_restore_done": "{0} file(s) restored to library.",
         "trash_no_selection": "No files selected to restore.",
         "trash_empty_state": "Trash bin is empty.",

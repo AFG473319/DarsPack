@@ -6,6 +6,7 @@ for everything the app owns, easy to back up by copying one folder.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,33 +55,168 @@ class PersianTranslator(QTranslator):
         return None
 
 
-def load_settings() -> tuple[dict, Path]:
-    """Read settings.json from the (possibly default) library folder."""
+FONT_SIZE_MIN = 8
+FONT_SIZE_MAX = 18
+
+
+def sanitize_settings(settings: dict) -> tuple[dict, bool]:
+    """Validate a settings dict in place; return (settings, damaged).
+
+    Mistyped values fall back to safe defaults instead of crashing
+    startup (H5): a corrupt settings.json must never open an empty
+    library silently or raise AttributeError on a non-dict document.
+    `damaged` is True when anything had to be repaired.
+    """
+    if not isinstance(settings, dict):
+        return {}, True
+    damaged = False
+    language = settings.get("language", "fa")
+    if language not in ("fa", "en"):
+        settings["language"] = "fa"
+        damaged = True
+    raw_size = settings.get("font_size", 10)
+    if isinstance(raw_size, bool) or not isinstance(raw_size, (int, float, str)):
+        settings["font_size"] = 10
+        damaged = True
+    else:
+        try:
+            size = int(raw_size)
+        except (TypeError, ValueError):
+            settings["font_size"] = 10
+            damaged = True
+        else:
+            clamped = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, size))
+            settings["font_size"] = clamped
+            if clamped != size:
+                damaged = True
+    library = settings.get("library")
+    if library is not None and (not isinstance(library, str)
+                                or not library.strip()):
+        settings.pop("library", None)
+        damaged = True
+    return settings, damaged
+
+
+_LIBRARY_RE = re.compile(r'"library"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _decode_json_string_loose(raw: str) -> str:
+    """Decode a JSON string body, tolerating invalid escapes.
+
+    A settings file written by json.dumps escapes Windows backslashes
+    and decodes strictly. But a damaged file can hold a raw Windows
+    path, with single backslashes, whose escape-like sequences are
+    not valid JSON escapes, so strict decoding fails. In that case
+    the value is returned exactly as written: decoding its backslash
+    sequences as JSON escapes would corrupt the path (a folder name
+    starting with "r" is not a carriage return).
+    """
+    try:
+        return json.loads(f'"{raw}"')
+    except (json.JSONDecodeError, ValueError):
+        return raw
+
+
+def _recover_library_path(raw_text: str) -> Path | None:
+    """Best-effort recovery of the library path from a damaged settings.json.
+
+    A file truncated mid-write usually still holds the "library" line;
+    if that path is a real folder, the user's library is found instead
+    of silently opening an empty default one (H5). Both readings of
+    the value are tried: the strictly decoded one (a properly escaped
+    path) and the raw text as written (a raw Windows path, whose
+    backslash sequences are not valid JSON escapes). The first one
+    that is a real folder wins. Returns None when nothing usable
+    can be recovered.
+    """
+    match = _LIBRARY_RE.search(raw_text)
+    if not match:
+        return None
+    raw_value = match.group(1)
+    for value in (_decode_json_string_loose(raw_value), raw_value):
+        if value.strip():
+            path = Path(value)
+            if path.is_dir():
+                return path
+    return None
+
+
+def load_settings() -> tuple[dict, Path, bool]:
+    """Read settings.json from the (possibly default) library folder.
+
+    Returns (settings, settings_path, damaged). A corrupt file, a
+    non-dict document, or mistyped values never crash startup and
+    never silently open an empty library: values fall back to safe
+    defaults, the last known library path is recovered when it is
+    still readable, and `damaged` tells run() to warn the user (H5).
+    A library path that points at a file (not a folder) — the H6
+    brick — falls back to the default library instead of crashing
+    the next launch.
+    """
     library = DEFAULT_LIBRARY
     bootstrap = library / "settings.json"
+    settings: dict = {}
+    damaged = False
     if bootstrap.exists():
         try:
-            settings = json.loads(bootstrap.read_text(encoding="utf-8"))
-            library = Path(settings.get("library", library))
-        except (json.JSONDecodeError, OSError):
-            settings = {}
-    else:
-        settings = {}
-    library.mkdir(parents=True, exist_ok=True)
+            raw_text = bootstrap.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            damaged = True
+        else:
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError:
+                damaged = True
+                recovered = _recover_library_path(raw_text)
+                if recovered is not None:
+                    library = recovered
+            else:
+                if not isinstance(parsed, dict):
+                    damaged = True
+                else:
+                    settings = parsed
+    settings, bad_values = sanitize_settings(settings)
+    damaged = damaged or bad_values
+    raw_library = settings.get("library")
+    if isinstance(raw_library, str) and raw_library.strip():
+        candidate = Path(raw_library)
+        if candidate.exists() and not candidate.is_dir():
+            # a file, not a folder (H6's brick): fall back, warn
+            settings["library"] = str(library)
+            damaged = True
+        else:
+            library = candidate
+    try:
+        library.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        library = DEFAULT_LIBRARY
+        settings["library"] = str(library)
+        damaged = True
+        try:
+            library.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
     settings.setdefault("library", str(library))
     settings.setdefault("language", "fa")
     settings.setdefault("font_size", 10)
     path = library / "settings.json"
-    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2),
-                    encoding="utf-8")
-    return settings, path
+    try:
+        path.write_text(json.dumps(settings, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+    except OSError:
+        pass  # read-only folder: keep running with in-memory settings
+    return settings, path, damaged
 
 
 def apply_font_size(settings: dict, app: QApplication | None = None) -> None:
     app = app or QApplication.instance()
     if app is not None:
         font = QFont(theme.load_fonts())
-        font.setPointSize(int(settings.get("font_size", 10)))
+        try:
+            size = int(settings.get("font_size", 10))
+        except (TypeError, ValueError):
+            size = 10
+        font.setPointSize(max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, size)))
         app.setFont(font)
 
 
@@ -123,17 +259,23 @@ def acquire_instance_lock(library: Path) -> QLockFile | None:
 
 
 def run() -> None:
-    settings, settings_path = load_settings()
+    settings, settings_path, damaged = load_settings()
     i18n.set_language(settings.get("language", "fa"))
 
     app = QApplication(sys.argv)
-    # M20: a second copy shows a message and exits instead of opening
+    # A second copy shows a message and exits instead of opening
     # a second window on the same library.
     lock = acquire_instance_lock(Path(settings["library"]))
     if lock is None:
         QMessageBox.information(None, APP_NAME, i18n.tr("already_running"))
         return
     app._instance_lock = lock           # held until the app quits
+    if damaged:
+        # Plain warning, not a silent fallback: the user must know the
+        # app did not open their usual library.
+        QMessageBox.warning(
+            None, i18n.tr("settings_damaged_title"),
+            i18n.tr("settings_damaged_msg"))
     if i18n.language() == "fa":
         app._fa_translator = PersianTranslator(app)
         app.installTranslator(app._fa_translator)

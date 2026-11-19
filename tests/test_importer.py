@@ -1,4 +1,7 @@
 """Tests for the import pipeline (وارد کردن): dedup-at-import and crash safety."""
+import os
+import time
+
 import pytest
 
 from darspack.core.importer import import_file, import_paths
@@ -76,6 +79,12 @@ def test_crash_mid_import_rolls_back(tmp_path, sample, monkeypatch):
         count = lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
         assert count == 0                        # row rolled back
         monkeypatch.undo()
+
+    # the leftover tmp copy is minutes old by the time a human reopens the
+    # app; age it so the sweep treats it as stale, not in-flight
+    for leftover in (tmp_path / "lib" / "files").glob("tmp_*"):
+        old = time.time() - 3600
+        os.utime(leftover, (old, old))
 
     # reopening sweeps the leftover tmp file, and the import now succeeds
     with Library(tmp_path / "lib") as lib:
@@ -193,10 +202,17 @@ def test_reopen_sweeps_orphans_but_keeps_real_files(tmp_path, sample):
         assert real.exists()
         (lib.files_dir / "tmp_7.pdf").write_bytes(b"tmp leftover")
         (lib.files_dir / "999999.pdf").write_bytes(b"orphan of a rolled-back row")
+        # the tmp copy must be stale for the sweep to touch it: a fresh
+        # tmp_* may be an in-flight import from another process
+        old = time.time() - 3600
+        os.utime(lib.files_dir / "tmp_7.pdf", (old, old))
 
     with Library(tmp_path / "lib") as lib:
         assert not (lib.files_dir / "tmp_7.pdf").exists()
+        # an orphaned numbered file is no longer deleted silently: it is
+        # moved to .trash with a log record (M5)
         assert not (lib.files_dir / "999999.pdf").exists()
+        assert (lib.files_dir / ".trash" / "999999.pdf").exists()
         assert real.exists() and real.read_bytes() == b"lesson-content"
 
 

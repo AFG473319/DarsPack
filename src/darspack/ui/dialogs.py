@@ -485,7 +485,11 @@ class FeedbackDialog(QDialog):
         dialog can therefore never accidentally open the modal."""
         if not self._pending_prompted:
             self._pending_prompted = True
-            QTimer.singleShot(0, self._maybe_prompt_pending)
+            # Pass the dialog as the timer's context object so the timer
+            # is cancelled if the dialog is destroyed before it fires.
+            # A parentless singleShot holds the bound method and would
+            # call into the deleted C++ object.
+            QTimer.singleShot(0, self, self._maybe_prompt_pending)
         super().showEvent(event)
 
     def _toggle_star(self, n: int) -> None:
@@ -1550,7 +1554,10 @@ class BulkEditDialog(QDialog):
         from PySide6.QtCore import QEvent
         if event.type() == QEvent.FocusIn and isinstance(obj, QLineEdit):
             if obj.text() == tr("bulk_none"):
-                QTimer.singleShot(0, obj.selectAll)
+                # Pass the line edit as the timer's context object so
+                # the timer is cancelled if the dialog is destroyed
+                # before it fires (same hazard as above).
+                QTimer.singleShot(0, obj, obj.selectAll)
         return super().eventFilter(obj, event)
 
     def _changes(self) -> tuple[list, list]:
@@ -1607,7 +1614,11 @@ class SettingsDialog(QDialog):
 
         self.font_size = make_spinbox(8, 18)
         self.font_size.setSuffix(" pt")
-        self.font_size.setValue(int(settings.get("font_size", 10)))
+        try:
+            _font_size = int(settings.get("font_size", 10))
+        except (TypeError, ValueError):
+            _font_size = 10  # damaged value (H5): fall back, don't crash
+        self.font_size.setValue(max(8, min(18, _font_size)))
 
         self.library = QLineEdit(str(settings.get("library", "")))
         self.library.setPlaceholderText(tr("settings_lib_placeholder"))
@@ -1712,9 +1723,35 @@ class SettingsDialog(QDialog):
             self.library.setText(path)
 
     def _save(self) -> None:
+        # Validate the library path before saving it (H6): a typo, a
+        # file, or a missing drive must not brick the next launch.
+        library_text = self.library.text().strip()
+        if not library_text:
+            QMessageBox.warning(
+                self, tr("settings_title"), tr("settings_lib_empty"))
+            return
+        path = Path(library_text)
+        if path.exists() and not path.is_dir():
+            QMessageBox.warning(
+                self, tr("settings_title"), tr("settings_lib_not_dir"))
+            return
+        if not path.exists():
+            answer = QMessageBox.question(
+                self, tr("settings_title"),
+                tr("settings_lib_create").format(library_text),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                QMessageBox.warning(
+                    self, tr("settings_title"),
+                    tr("settings_lib_mkdir_failed"))
+                return
         self.settings["language"] = self.lang.currentData()
         self.settings["font_size"] = self.font_size.value()
-        self.settings["library"] = self.library.text().strip()
+        self.settings["library"] = library_text
         self.settings["feedback_endpoint"] = self.fb_endpoint.text().strip()
         self.settings["feedback_form_url"] = self.fb_form_url.text().strip()
         self.settings_path.write_text(
@@ -2514,10 +2551,17 @@ class TrashDialog(QDialog):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         ) == QMessageBox.Yes:
-            count = self.lib.empty_trash()
-            QMessageBox.information(
-                self, tr("trash_empty_btn"),
-                tr("trash_empty_done").format(i18n.num(count)))
+            result = self.lib.empty_trash()
+            deleted, failed = result["deleted"], result["failed"]
+            if failed:
+                QMessageBox.information(
+                    self, tr("trash_empty_btn"),
+                    tr("trash_empty_partial").format(
+                        i18n.num(deleted), i18n.num(failed)))
+            else:
+                QMessageBox.information(
+                    self, tr("trash_empty_btn"),
+                    tr("trash_empty_done").format(i18n.num(deleted)))
             self._reload()
 
 

@@ -1,7 +1,9 @@
 """Tests for the one-click full-library backup (پشتیبان‌گیری, B2)."""
 import json
+import os
 import shutil
 import sqlite3
+import time
 import zipfile
 from datetime import date
 
@@ -198,6 +200,10 @@ def test_sweep_still_removes_unknown_content(tmp_path):
         import_file(lib, src)
     junk = tmp_path / "lib" / "files" / "tmp_partial"
     junk.write_bytes(b"interrupted copy")
+    # a stale partial import: the sweep skips tmp_* copies younger than a
+    # few minutes (they may be an in-flight import), so age it first
+    old = time.time() - 3600
+    os.utime(junk, (old, old))
     with Library(tmp_path / "lib") as lib:
         assert not junk.exists()
         assert (lib.files_dir / "000001.pdf").is_file()

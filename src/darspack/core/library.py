@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -101,6 +102,79 @@ class Library:
     def __exit__(self, *exc) -> None:
         self.close()
 
+    # A tmp_* copy younger than this may be an in-flight import from
+    # another process (desktop import, phone upload, MCP): the sweep
+    # must leave it alone (H4).
+    TMP_FRESH_SECONDS = 300
+
+    def _is_fresh_tmp(self, p: Path) -> bool:
+        """True if `p` is a tmp_* copy younger than TMP_FRESH_SECONDS."""
+        if not p.name.startswith("tmp_"):
+            return False
+        try:
+            age = time.time() - p.stat().st_mtime
+        except OSError:
+            return False
+        return age < self.TMP_FRESH_SECONDS
+
+    def _log_sweep(self, action: str, detail: str) -> None:
+        """Best-effort activity-log entry; a logging failure must never
+        break the sweep itself."""
+        if self.conn is None:
+            return
+        try:
+            with self.conn:
+                db.log(self.conn, action, detail)
+        except Exception:
+            pass
+
+    def _trash_dest_for(self, name: str) -> Path:
+        """A non-colliding path inside .trash for `name`."""
+        self.trash_dir.mkdir(exist_ok=True)
+        dest = self.trash_dir / name
+        stem, suffix = Path(name).stem, Path(name).suffix
+        n = 0
+        while dest.exists():
+            n += 1
+            dest = self.trash_dir / f"{stem}~{n}{suffix}"
+        return dest
+
+    def _sweep_one(self, p: Path) -> None:
+        """Deal with one leftover file from the sweep.
+
+        A tmp_* partial import is deleted (and logged). Anything else
+        is a file the user dropped into files/ by hand — it is moved
+        to .trash, logged with name, size and SHA, and never deleted
+        silently (M5). A file that cannot be removed or moved — locked
+        by another program, antivirus holding a just-copied file — is
+        skipped and logged instead of stopping the app from starting
+        (H4).
+        """
+        name = p.name
+        if name.startswith("tmp_"):
+            try:
+                size = p.stat().st_size
+                p.unlink(missing_ok=True)
+            except OSError:
+                self._log_sweep("sweep_skip", f"{name} (locked, left in place)")
+                return
+            self._log_sweep("sweep", f"{name} ({size} bytes, partial import)")
+            return
+        try:
+            size = p.stat().st_size
+            digest = sha256_file(p)
+        except OSError:
+            self._log_sweep("sweep_skip", f"{name} (unreadable, left in place)")
+            return
+        dest = self._trash_dest_for(name)
+        try:
+            os.replace(p, dest)
+        except OSError:
+            self._log_sweep("sweep_skip", f"{name} (locked, left in place)")
+            return
+        self._log_sweep(
+            "sweep", f"{name} → .trash ({size} bytes, sha256={digest})")
+
     def sweep_orphans(self) -> None:
         """Reconcile files/ with the catalog after an interrupted import.
 
@@ -114,10 +188,22 @@ class Library:
         makes a backup made before 2026-11-17 (members filed under
         friendly «NNN - name» labels) safe to restore with the guide's
         manual steps.
+
+        Robustness (H4, M5): a file that cannot be removed, renamed or
+        moved is skipped and logged instead of raising out of open();
+        a tmp_* copy younger than a few minutes is left alone because
+        it may be an in-flight import from another process; and files
+        the user dropped into files/ by hand are moved to .trash (with
+        a log record) instead of being deleted silently.
         """
         if self.conn is None:
             for p in self.files_dir.glob("tmp_*"):
-                p.unlink(missing_ok=True)
+                if self._is_fresh_tmp(p):
+                    continue
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    continue  # locked: leave it for the next open
             return
         known = {r["stored_name"] for r in self.conn.execute(
             "SELECT stored_name FROM files")}
@@ -127,7 +213,9 @@ class Library:
             self._rescue_unknowns(unknown)
             unknown = [p for p in unknown if p.is_file()]
         for p in unknown:
-            p.unlink(missing_ok=True)
+            if self._is_fresh_tmp(p):
+                continue
+            self._sweep_one(p)
 
     def _rescue_unknowns(self, paths) -> int:
         """Rename files the catalog doesn't know into rows that lost their file.
@@ -164,10 +252,14 @@ class Library:
             stored_names = missing.get(digest)
             if not stored_names:
                 continue                    # nobody is waiting for this content
-            stored_name = stored_names.pop(0)
+            stored_name = stored_names[0]
+            try:
+                p.rename(self.files_dir / stored_name)   # same folder: atomic
+            except OSError:
+                continue  # locked: the sweep leaves it in place, logged
+            stored_names.pop(0)
             if not stored_names:
                 del missing[digest]
-            p.rename(self.files_dir / stored_name)   # same folder: atomic
             rescued += 1
             with self.conn:
                 db.log(self.conn, "rescue", f"{p.name} → {stored_name}")
@@ -304,18 +396,12 @@ class Library:
             n += 1
             dest = self.files_dir / f"{p_base.stem}~{n}{p_base.suffix}"
 
-        sha = meta.get("sha256")
+        # Always re-hash the actual file (M7): a trashed file may have
+        # been altered while in trash, and the saved hash would then lie
+        # about its content. A file that cannot be read fails loudly
+        # here instead of being restored with a wrong hash.
         size = src.stat().st_size
-        if not sha:
-            sha = sha256_file(src)
-
-        subject_id = meta.get("subject_id")
-        subject_name = meta.get("subject_name")
-        if not subject_id and subject_name:
-            sub_row = self.conn.execute(
-                "SELECT id FROM subjects WHERE name=?", (subject_name,)).fetchone()
-            if sub_row:
-                subject_id = sub_row["id"]
+        sha = sha256_file(src)
 
         imported_at = meta.get("imported_at") or datetime.now().isoformat()
         tags = meta.get("tags") or []
@@ -324,6 +410,34 @@ class Library:
         # If filesystem move fails, SQLite transaction rolls back.
         # If DB insert fails, the file has not been moved from .trash/ yet.
         with self.conn:
+            # Resolve the subject now, inside the transaction (M7): the
+            # saved subject_id may point at a subject deleted since the
+            # file was trashed, and the saved name may differ in spelling
+            # from the current one. Matching by normalized name finds it;
+            # a missing subject is recreated instead of silently leaving
+            # the file as «بدون درس» or failing on the foreign key.
+            subject_id = meta.get("subject_id")
+            if subject_id is not None:
+                row = self.conn.execute(
+                    "SELECT id FROM subjects WHERE id=?",
+                    (subject_id,)).fetchone()
+                if row is None:
+                    subject_id = None
+            subject_name = meta.get("subject_name")
+            if subject_id is None and subject_name:
+                subject_id = db.get_or_create(
+                    self.conn, "subjects", subject_name)
+
+            # A file with this exact content may already be back in the
+            # library (re-imported while it sat in trash): restoring it
+            # again would create a duplicate row, so flag it instead.
+            existing = self.conn.execute(
+                "SELECT id FROM files WHERE sha256=?", (sha,)).fetchone()
+            if existing is not None:
+                raise ValueError(
+                    "already in the library "
+                    f"(same content as file id {existing['id']})")
+
             cur = self.conn.execute(
                 """INSERT INTO files
                    (stored_name, original_name, name_norm, sha256, size_bytes,
@@ -350,19 +464,46 @@ class Library:
 
         return {"id": new_id, "original_name": original_name, "stored_name": dest.name}
 
-    def empty_trash(self) -> int:
-        """Permanently delete all files currently in files/.trash/."""
-        if not self.trash_dir.exists():
-            return 0
-        count = 0
-        for p in list(self.trash_dir.iterdir()):
-            if p.is_file():
-                p.unlink(missing_ok=True)
-                count += 1
+    def empty_trash(self) -> dict:
+        """Permanently delete all files currently in files/.trash/.
+
+        Returns {"deleted": n, "failed": m, "failed_names": [...]}. A
+        file that is open in another program (Windows locks it) is
+        skipped instead of aborting the whole clear halfway — the user
+        gets the honest count of what went and what stayed (M6). A
+        file that could not be deleted keeps its metadata, so it stays
+        listed in the trash instead of vanishing from the record.
+        """
+        deleted = 0
+        failed_names: list[str] = []
+        if self.trash_dir.exists():
+            for p in list(self.trash_dir.iterdir()):
+                if not p.is_file():
+                    continue
+                try:
+                    p.unlink()
+                except OSError:
+                    failed_names.append(p.name)
+                    continue
+                deleted += 1
         if self.trash_meta_dir.exists():
             for m in list(self.trash_meta_dir.iterdir()):
-                if m.is_file():
-                    m.unlink(missing_ok=True)
+                if not m.is_file():
+                    continue
+                # keep the metadata of any file that survived (failed
+                # delete): it must stay listed in the trash. Drop the
+                # metadata of files that are gone — just deleted, or
+                # removed behind the app's back earlier.
+                if (self.trash_dir / m.name[:-5]).exists():
+                    continue
+                try:
+                    m.unlink()
+                except OSError:
+                    continue  # a stale meta file is harmless; leave it
         if self.conn:
-            db.log(self.conn, "empty_trash", f"{count} files permanently deleted")
-        return count
+            detail = f"{deleted} files permanently deleted"
+            if failed_names:
+                detail += f", {len(failed_names)} could not be deleted"
+            db.log(self.conn, "empty_trash", detail)
+        return {"deleted": deleted, "failed": len(failed_names),
+                "failed_names": failed_names}
