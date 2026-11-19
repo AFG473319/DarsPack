@@ -12,6 +12,13 @@ import zlib
 from pathlib import Path
 
 
+#: Never read more than this of a PDF into memory for a preview.  The
+#: preview only needs a text snippet, and a huge scanned PDF is mostly
+#: image streams anyway — without a cap, previewing one big file can
+#: spike RAM on an 8 GB laptop.
+MAX_PDF_BYTES = 8 * 1024 * 1024
+
+
 def extract_preview(file_path: Path | str, max_chars: int = 2000) -> str:
     """Extract a representative text snippet from a file for LLM classification."""
     path = Path(file_path)
@@ -46,7 +53,8 @@ def _extract_plain_text(path: Path, max_chars: int) -> str:
 def _extract_pdf_text(path: Path, max_chars: int) -> str:
     """Extract plain text from PDF streams using standard library."""
     try:
-        data = path.read_bytes()
+        with path.open("rb") as fh:
+            data = fh.read(MAX_PDF_BYTES)
     except Exception as e:
         return f"[Error reading PDF: {e}]"
 
