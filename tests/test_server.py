@@ -693,7 +693,7 @@ def test_rotate_pin_clears_lockout(server):
 def test_share_auto_stops_after_ttl(tmp_path):
     """H2: sharing stops by itself after the TTL, and the same server
     object can be started again afterwards."""
-    with Library(tmp_path / "lib") as lib:
+    with Library(tmp_path / "lib"):
         share = ShareServer(str(tmp_path / "lib"))
         share.start(ttl_seconds=0.2)
         assert share.is_running()

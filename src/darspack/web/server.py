@@ -286,6 +286,8 @@ def _make_handler(server: ShareServer):
     idle_conns: set[socket.socket] = set()
     all_conns: set[socket.socket] = set()   # M12: every live connection,
     # idle or mid-transfer — stop() shuts them all down at once
+    live_handlers: set = set()  # Handler objects, so stop() can close
+    # their rfile/wfile too (see _close_all_conns)
 
     def _library() -> Library:
         lib = getattr(local, "library", None)
@@ -311,13 +313,36 @@ def _make_handler(server: ShareServer):
         # otherwise keep server_close() (and the UI) waiting for the
         # socket timeout. A shut-down socket makes the handler's read /
         # write fail at once; the handler treats that as "client gone".
+        # But shutdown() alone is not enough on Windows: the handler's
+        # socket has a timeout, so its send waits in select() for a free
+        # send buffer, and shutdown() does not wake that select() — stop()
+        # then waits out the whole 5 s timeout (CI: 4.5 s). Closing the
+        # socket is what actually frees it, but socket.close() defers the
+        # real close while the handler's rfile/wfile hold references, so
+        # both are needed: close() the socket (marks it closed) AND close
+        # the handler's file objects (drops the last references) — the fd
+        # then closes and the blocked send/recv fails at once.
         with registry_lock:
             conns = list(all_conns)
+            handlers = list(live_handlers)
         for conn in conns:
             try:
                 conn.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            try:
+                conn.close()
+            except OSError:
+                pass
+        for handler in handlers:
+            for stream in (getattr(handler, "rfile", None),
+                           getattr(handler, "wfile", None)):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except Exception:  # noqa: BLE001 - teardown, never fatal
+                    pass
 
     def _close_all_libs() -> None:
         import sqlite3 as _sq
@@ -355,14 +380,19 @@ def _make_handler(server: ShareServer):
             with registry_lock:
                 idle_conns.add(self.connection)
                 all_conns.add(self.connection)
+                live_handlers.add(self)
             try:
                 super().handle_one_request()
-            except (TimeoutError, ConnectionError, OSError):
+            except (TimeoutError, ConnectionError, OSError, ValueError):
+                # ValueError: stop() closed rfile/wfile under us (see
+                # _close_all_conns) — a write/read on the closed stream
+                # raises it instead of OSError. Same "client gone".
                 self.close_connection = True
             finally:
                 with registry_lock:
                     idle_conns.discard(self.connection)
                     all_conns.discard(self.connection)
+                    live_handlers.discard(self)
             if server._stopping:
                 self.close_connection = True
 
