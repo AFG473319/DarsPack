@@ -23,9 +23,10 @@ from ..core.manifest import export_package, verify_package
 from ..core.normalize import match_key
 from ..core.search import search
 from ..core.suggest import suggest, learn_hint
+from ..paths import default_library_path, user_documents_dir
 from .extractor import extract_preview
 
-DEFAULT_LIBRARY_PATH = Path.home() / "Documents" / "DarsPackLibrary"
+DEFAULT_LIBRARY_PATH = default_library_path()
 
 #: Protocol revisions this server understands, newest first.  During
 #: ``initialize`` we echo the client's revision when we support it and
@@ -622,7 +623,7 @@ class DarsPackMcpServer:
         }
 
     def tool_backup_library(self, args: dict) -> dict:
-        out_dir = Path(args.get("output_dir") or (Path.home() / "Documents"))
+        out_dir = Path(args.get("output_dir") or user_documents_dir())
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / backup_filename(directory=out_dir)
         info = backup_library(self.lib, out_file)
@@ -937,7 +938,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "library",
         nargs="?",
-        help="DarsPack library folder (defaults to settings.json or ~/Documents/DarsPackLibrary)",
+        help=(
+            "DarsPack library folder (defaults to settings.json or "
+            f"{default_library_path()})"
+        ),
     )
     parser.add_argument(
         "--library",

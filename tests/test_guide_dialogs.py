@@ -4,6 +4,7 @@ import pytest
 
 from darspack import i18n
 from darspack.core.importer import import_file
+from darspack.paths import opencode_command
 from darspack.ui.dialogs import HelpDialog, WelcomeDialog
 from darspack.ui.main_window import MainWindow
 
@@ -104,7 +105,7 @@ def test_help_dialog_structure_and_tabs(qapp):
     # The generated config must point at the headless server, never the GUI.
     assert "--library" in dlg._mcp_json_str
     assert "--selftest" in dlg._mcp_prompt
-    assert "opencode.cmd mcp add darspack" in dlg._opencode_cli_cmd
+    assert f"{opencode_command()} mcp add darspack" in dlg._opencode_cli_cmd
 
     # Test copy prompt button
     dlg.btn_copy_mcp_prompt.click()

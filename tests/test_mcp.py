@@ -6,8 +6,10 @@ import subprocess
 import sys
 import pytest
 
+from darspack.mcp.launch import SERVER_EXE_NAME
 from darspack.mcp.server import DarsPackMcpServer
 from darspack.mcp.extractor import extract_preview
+from darspack.paths import opencode_command
 
 
 @pytest.fixture
@@ -346,7 +348,7 @@ def test_resolve_launch_frozen_without_server_exe_is_explicit(tmp_path, monkeypa
     assert "DarsPack.exe" in launch.note
 
     prompt = build_agent_prompt(library_path=tmp_path / "lib")
-    assert "DarsPackMcp.exe" in prompt
+    assert SERVER_EXE_NAME in prompt
     assert "mcpServers" not in prompt
 
 
@@ -357,7 +359,7 @@ def test_build_agent_prompt():
     assert "# Connect to DarsPack MCP Server" in prompt
     assert "C:\\Python314\\python.exe" in prompt
     assert "claude mcp add darspack" in prompt
-    assert "opencode.cmd mcp add darspack" in prompt
+    assert f"{opencode_command()} mcp add darspack" in prompt
     assert "OpenCode" in prompt
     assert "Antigravity" in prompt
     assert "Hermes" in prompt

@@ -16,9 +16,10 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .. import APP_NAME, asset_path
 from .. import i18n
+from ..paths import default_library_path
 from . import theme
 
-DEFAULT_LIBRARY = Path.home() / "Documents" / "DarsPackLibrary"
+DEFAULT_LIBRARY = default_library_path()
 
 
 class PersianTranslator(QTranslator):

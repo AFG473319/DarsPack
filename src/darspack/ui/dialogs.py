@@ -3352,10 +3352,12 @@ class HelpDialog(QDialog):
 
     def _build_mcp_tab(self) -> QWidget:
         from ..mcp.launch import (
+            SERVER_EXE_NAME,
             build_mcp_config,
             config_json,
             resolve_launch,
         )
+        from ..paths import opencode_command
         from ..mcp.prompt import build_agent_prompt
 
         widget = QWidget()
@@ -3372,7 +3374,7 @@ class HelpDialog(QDialog):
             f"claude mcp add darspack -- {self._mcp_launch.command_line()}"
         )
         self._opencode_cli_cmd = (
-            f"opencode.cmd mcp add darspack -- {self._mcp_launch.command_line()}"
+            f"{opencode_command()} mcp add darspack -- {self._mcp_launch.command_line()}"
         )
 
         # 1. Overview Card
@@ -3406,7 +3408,9 @@ class HelpDialog(QDialog):
         vbox.addWidget(headless_lbl)
 
         if not self._mcp_launch.available:
-            warn_lbl = QLabel(tr("help_mcp_unavailable"))
+            warn_lbl = QLabel(
+                tr("help_mcp_unavailable").format(exe=SERVER_EXE_NAME)
+            )
             warn_lbl.setWordWrap(True)
             warn_lbl.setStyleSheet(f"color: {theme.PALETTE['danger']};")
             vbox.addWidget(warn_lbl)

@@ -11,6 +11,7 @@ it is 2.9:1, so primary buttons use dark text (8.5:1).
 """
 from __future__ import annotations
 
+import sys
 from string import Template
 
 from PySide6.QtCore import QEvent, QObject, QRect, QRectF, Qt
@@ -22,7 +23,9 @@ from PySide6.QtWidgets import QComboBox, QMenu
 from .. import asset_path
 
 FONT_FAMILY = "Vazirmatn"
-FONT_FALLBACK = "Segoe UI"
+# Segoe UI exists only on Windows; on Linux fall back to Noto Sans
+# (Qt falls back further to the system default if that is missing too).
+FONT_FALLBACK = "Segoe UI" if sys.platform == "win32" else "Noto Sans"
 
 PALETTE = {
     "bg": "#14161b",
@@ -740,8 +743,8 @@ QToolTip {
 def load_fonts() -> str:
     """Register the bundled Vazirmatn weights; return the usable family.
 
-    Falls back to Segoe UI if the files are missing so a damaged build
-    still starts with readable Persian.
+    Falls back to Segoe UI on Windows (Noto Sans on Linux) if the files
+    are missing so a damaged build still starts with readable Persian.
     """
     for weight in ("Regular", "Medium", "SemiBold", "Bold"):
         path = asset_path(f"fonts/Vazirmatn-{weight}.ttf")

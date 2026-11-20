@@ -8,8 +8,10 @@ module + ``PYTHONPATH`` in a source checkout).
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+from ..paths import app_exe_name, opencode_command
 from .launch import (
     SERVER_EXE_NAME,
     McpLaunch,
@@ -69,15 +71,38 @@ def build_agent_prompt(
     launch = resolve_launch(library_path, python_path)
     library = resolve_library_path(library_path)
 
+    # Paths and binary names that differ between Windows and Linux.
+    opencode_bin = opencode_command()
+    if sys.platform == "win32":
+        claude_config = "%APPDATA%\\Claude\\claude_desktop_config.json"
+        cursor_config = "%USERPROFILE%\\.cursor\\mcp.json"
+        claude_label = "Claude Desktop (Windows)"
+        opencode_note = (
+            "Use `opencode.cmd` on Windows: the `opencode.ps1` shim drops the `--`\n"
+            "separator, and the CLI then answers \"Unrecognized flag: --library\"."
+        )
+        denied = '"Access is denied"'
+    else:
+        claude_config = "~/.config/Claude/claude_desktop_config.json"
+        cursor_config = "~/.cursor/mcp.json"
+        claude_label = "Claude Desktop (Linux)"
+        opencode_note = "On Linux the binary is plain `opencode`."
+        denied = '"Permission denied"'
+
     if not launch.available:
+        build_script = (
+            "installer\\build.bat"
+            if sys.platform == "win32"
+            else "installer/build-linux.sh"
+        )
         return f"""# Connect to DarsPack MCP Server
 
 This DarsPack build cannot expose MCP yet: {launch.note}
 
 Tell the user, in Persian, that the app must be rebuilt or reinstalled
-(``installer\\build.bat`` produces ``{SERVER_EXE_NAME}`` next to
-``DarsPack.exe``).  Do not invent a configuration - a config pointing at
-``DarsPack.exe`` would only launch the desktop window.
+(``{build_script}`` produces ``{SERVER_EXE_NAME}`` next to
+``{app_exe_name()}``).  Do not invent a configuration - a config pointing at
+``{app_exe_name()}`` would only launch the desktop window.
 """
 
     mcp_json = config_json(build_mcp_config(library_path, python_path))
@@ -102,7 +127,8 @@ The server is a standalone stdio process:
 - it writes only through the tools below, and never hard-deletes a file.
 
 If you can run shell commands, let the server print its own configuration
-instead of retyping it (paths are already absolute and quoted for Windows):
+instead of retyping it (paths are already absolute and quoted when they
+contain spaces):
 
 ```bash
 {launch.command_line()} --print-config
@@ -113,10 +139,9 @@ instead of retyping it (paths are already absolute and quoted for Windows):
 
 OpenCode (v2) - pick one:
 ```bash
-opencode.cmd mcp add darspack -- {launch.command_line()}
+{opencode_bin} mcp add darspack -- {launch.command_line()}
 ```
-Use `opencode.cmd` on Windows: the `opencode.ps1` shim drops the `--`
-separator, and the CLI then answers "Unrecognized flag: --library".
+{opencode_note}
 
 The most reliable route is the config file - merge this into
 `opencode.json` / `opencode.jsonc` (note: OpenCode uses `mcp.servers`, **not**
@@ -132,13 +157,13 @@ claude mcp add darspack -- {launch.command_line()}
 If your shell reports an unrecognized flag, it mangled the `--` separator;
 write the JSON block below into the client config instead.
 
-Claude Desktop (Windows), merge into `%APPDATA%\\Claude\\claude_desktop_config.json`:
+{claude_label}, merge into `{claude_config}`:
 ```json
 {mcp_json}
 ```
 
 Cursor: merge the same `mcpServers` block into
-`%USERPROFILE%\\.cursor\\mcp.json` (global) or `.cursor/mcp.json` (project).
+`{cursor_config}` (global) or `.cursor/mcp.json` (project).
 
 VS Code: put the same entry under `servers` in `.vscode/mcp.json` and add
 `"type": "stdio"` to it.
@@ -156,7 +181,7 @@ Run this once and read the JSON it prints:
 ```
 Expected: `"ok": true` plus `"tool_count": 16`. If it fails, report the exact
 stderr instead of guessing - a `ModuleNotFoundError` means the environment
-was dropped, and "Access is denied" on a locked file means DarsPack was
+was dropped, and {denied} on a locked file means DarsPack was
 built without `{SERVER_EXE_NAME}`.
 
 ## 4. Confirm the connection

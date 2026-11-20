@@ -9,7 +9,7 @@
 
 **همه‌ی فایل‌های درسی‌ات — جزوه، نمونه‌سوال و کاربرگ — در یک جای مرتب و قابل جست‌وجو. آفلاین، فارسی‌اول، بدون نیاز به حساب کاربری یا اینترنت.**
 
-DarsPack (درس‌پک) is a Windows desktop app for Iranian middle-school students. It keeps class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) organized by subject, chapter and kind — and it can serve a phone-friendly web client over your local Wi-Fi, so you can reach your library from your phone at home.
+DarsPack (درس‌پک) is a Windows and Linux desktop app for Iranian middle-school students. It keeps class notes (جزوه), sample exams (نمونه‌سوال) and worksheets (کاربرگ) organized by subject, chapter and kind — and it can serve a phone-friendly web client over your local Wi-Fi, so you can reach your library from your phone at home.
 
 > ⭐ If DarsPack looks useful to you, a star helps other students and parents find it.
 
@@ -21,11 +21,12 @@ Ready-to-install builds are on the [GitHub Releases](https://github.com/AFG47331
 
 - **Latest** — `DarsPack-Setup.exe` (per-user installer, no admin needed) or a portable zip
 - **Pre-release** — beta builds for testing (`vX.Y.Z-beta.N`)
+- **Linux** — no installer on the Releases page yet; run from source or build the portable app folder with `installer/build-linux.sh` (see below)
 - Every release ships `SHA256SUMS.txt` — verify your download before running it
 
 نسخه‌ی آماده‌ی نصب را از صفحه‌ی [Releases](https://github.com/AFG473319/DarsPack/releases) بگیرید: فایل `DarsPack-Setup.exe` را نصب کنید؛ نیازی به دسترسی مدیر (admin) نیست.
 
-> Status: **working v0.1** — core engine, RTL desktop UI, LAN phone client and the Windows build are implemented and covered by 403 automated tests. See `docs/limitations.md` for known limitations.
+> Status: **working v0.1** — core engine, RTL desktop UI, LAN phone client and the Windows build are implemented and covered by 427 automated tests. Linux runs from source or via `installer/build-linux.sh`. See `docs/limitations.md` for known limitations.
 
 ## Who it's for
 
@@ -42,13 +43,13 @@ Ready-to-install builds are on the [GitHub Releases](https://github.com/AFG47331
 - Portable «درس‌پک» packages: ZIP + JSON manifest + per-file hashes + offline RTL index; verify detects exactly which files are missing/corrupt.
 - Optional LAN sharing: PIN-protected web client for phones on the same Wi-Fi (search, inline viewing for PDFs/images/text, download, multi-file upload) with a web-app manifest for «Add to Home screen».
 - **Built-in Model Context Protocol (MCP) server & 1-click AI integration**: Connect AI agents (Claude Code, OpenCode, Antigravity, Cursor, Hermes, OpenClaw) directly to the library. The server runs as a separate headless process (`DarsPackMcp.exe`) — no window, no network — and the in-app Help Center (F1) offers a 1-click prompt generator plus a `--selftest` health check.
-- Persian-first dark RTL UI with the bundled Vazirmatn typeface, one consistent icon set, a compact app bar and toolbar, kind badges, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build.
+- Persian-first dark RTL UI with the bundled Vazirmatn typeface, one consistent icon set, a compact app bar and toolbar, kind badges, Persian/English toggle, in-app feedback (star rating + topic, online submission optional — see `docs/feedback-setup.md`), activity log; one-command Windows build (`installer\build.bat`), Linux build (`installer/build-linux.sh`).
 
 ---
 
 ## درس‌پک چیست؟ (فارسی)
 
-درس‌پک یک برنامه‌ی ویندوزی برای دانش‌آموزان دوره‌ی متوسطه است که فایل‌های درسی — جزوه، نمونه‌سوال و کاربرگ — را بر اساس درس، فصل و نوع فایل مرتب می‌کند تا همیشه سریع پیدا شوند.
+درس‌پک یک برنامه‌ی ویندوزی و لینوکسی برای دانش‌آموزان دوره‌ی متوسطه است که فایل‌های درسی — جزوه، نمونه‌سوال و کاربرگ — را بر اساس درس، فصل و نوع فایل مرتب می‌کند تا همیشه سریع پیدا شوند.
 
 - **کاملاً آفلاین:** اینترنت لازم نیست؛ کتابخانه روی خودِ کامپیوتر شماست.
 - **جست‌وجوی فارسی واقعی:** «فصل ۳» و «فصل 3» یک نتیجه می‌دهند و حروف عربی و فارسی (ی/ي، ک/ك) درست تشخیص داده می‌شوند.
@@ -88,6 +89,8 @@ Ready-to-install builds are on the [GitHub Releases](https://github.com/AFG47331
 
 From source (Python 3.12+, SQLite and the packages in `docs/dependencies.md`):
 
+Windows:
+
 ```
 python -m venv .venv
 .venv/Scripts/pip install -r requirements-dev.txt
@@ -95,12 +98,64 @@ python -m venv .venv
 .venv/Scripts/python -m darspack
 ```
 
-Tests: `.venv/Scripts/python -m pytest tests/`
+Linux:
+
+```
+python3 -m venv .venv-linux
+.venv-linux/bin/pip install -r requirements-dev.txt
+.venv-linux/bin/pip install -e .        # or add src/ to PYTHONPATH
+.venv-linux/bin/python -m darspack
+```
+
+On Linux the GUI also needs the Qt system libraries (the PySide6 wheel
+does not bundle them). On Debian/Ubuntu:
+
+```
+sudo apt install libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+```
+
+If the app fails to start with `libEGL.so.1: cannot open shared object
+file`, those packages are the missing piece. On Linux the library
+defaults to `~/Documents/DarsPackLibrary` when a documents folder
+exists, otherwise to `~/.local/share/DarsPackLibrary` (XDG data dir).
+
+Tests: `.venv/Scripts/python -m pytest tests/` (Windows) or
+`.venv-linux/bin/python -m pytest tests/` (Linux, `QT_QPA_PLATFORM=offscreen` is set by `tests/conftest.py`).
 
 Windows build (produces `dist/DarsPack/DarsPack.exe`, a portable app folder):
 
 ```
 installer\build.bat
+```
+
+Linux build (produces `dist/DarsPack/DarsPack`, a portable app folder) and per-user install (app menu entry, no sudo):
+
+```
+installer/build-linux.sh
+installer/install-linux.sh
+# uninstall: installer/install-linux.sh --uninstall
+```
+
+### Screenshots (every page, headless)
+
+One command captures the main window, search view, every dialog
+(import, classify, metadata, bulk edit, stats, activity, duplicates,
+share, settings, feedback, export, verify report, trash, exam pack),
+all 3 welcome slides, all 5 help tabs, and the context/dropdown
+menus — 33 PNGs:
+
+```
+.venv-linux/bin/python scripts/capture_all_pages.py
+```
+
+Output: `eval/screenshots/all_pages/` (git-ignored). The scripts set
+`QT_QPA_PLATFORM=offscreen`, so no display is needed; on Linux they
+still need the Qt system libraries from the note above. A shorter
+smoke run (main window, search, 7 dialogs, plus a LAN server check)
+is:
+
+```
+.venv-linux/bin/python scripts/app_harness.py screenshot --out-dir eval/screenshots
 ```
 
 ## License

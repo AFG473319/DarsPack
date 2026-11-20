@@ -204,10 +204,24 @@ class AppDriver:
         }
 
     def capture_screenshot(self, target_path: Path, widget=None) -> Path:
-        """Capture a high-res PNG screenshot of a widget or the main window."""
+        """Capture a high-res PNG screenshot of a widget or the main window.
+
+        A widget that was constructed but never shown grabs as a blank
+        pixmap (offscreen or not), so show it first and let layouts and
+        fonts settle before grabbing. Dialogs additionally get an
+        adjustSize() so they are captured at their content size.
+        """
+        from PySide6.QtWidgets import QDialog
+
         target_path = Path(target_path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         w = widget or self.window
+        if not w.isVisible():
+            w.show()
+            self.process_events(100)
+        if isinstance(w, QDialog):
+            w.adjustSize()
+            self.process_events(50)
         pix = w.grab()
         pix.save(str(target_path), "PNG")
         return target_path
