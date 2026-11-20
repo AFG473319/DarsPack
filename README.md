@@ -26,7 +26,7 @@ Ready-to-install builds are on the [GitHub Releases](https://github.com/AFG47331
 
 نسخه‌ی آماده‌ی نصب را از صفحه‌ی [Releases](https://github.com/AFG473319/DarsPack/releases) بگیرید: فایل `DarsPack-Setup.exe` را نصب کنید؛ نیازی به دسترسی مدیر (admin) نیست.
 
-> Status: **working v0.1** — core engine, RTL desktop UI, LAN phone client and the Windows build are implemented and covered by 427 automated tests. Linux runs from source or via `installer/build-linux.sh`. See `docs/limitations.md` for known limitations.
+> Status: **beta — v0.2.2-beta.1**. Core engine, RTL desktop UI, LAN phone client and the Windows/Linux builds are implemented and covered by 552 automated tests (550 passing, 2 skipped). Beta builds are published as GitHub Pre-releases, so they never replace the stable version. See `docs/limitations.md` for known limitations.
 
 ## Who it's for
 
