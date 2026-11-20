@@ -1,18 +1,26 @@
 # DarsPack CI — runs on every push to main, every pull request, and on
 # demand (Actions tab → Run workflow).
 #
-# Four jobs:
-#   test    — the pytest suite on both supported Python versions
-#             (3.12 = declared floor, 3.14 = development machine), Qt offscreen.
-#   lint    — ruff with a deliberately gentle, bug-catching ruleset (ruff.toml).
-#   build   — the real Windows build (PyInstaller onedir + Inno Setup
-#             installer), uploaded as downloadable artifacts.
-#   hygiene — fails if any file that must stay out of git ever gets committed.
-#             The list of guarded paths lives in the repo secret
-#             GUARDED_PATHS (newline-separated), so this file itself
-#             reveals nothing about what is guarded.
+# Six jobs:
+#   test        — the pytest suite on both supported Python versions
+#                 (3.12 = declared floor, 3.14 = development machine), Qt offscreen,
+#                 on Windows.
+#   test-linux  — the same suite on Linux (ubuntu-latest): the Linux port
+#                 (XDG paths, Linux build) is only real if the tests pass
+#                 here. Needs the Qt system libraries the PySide6 wheel
+#                 does not bundle (see docs/dependencies.md).
+#   lint        — ruff with a deliberately gentle, bug-catching ruleset (ruff.toml).
+#   build       — the real Windows build (PyInstaller onedir + Inno Setup
+#                 installer), uploaded as downloadable artifacts.
+#   build-linux — the real Linux build (PyInstaller onedir via
+#                 installer/build-linux.sh), uploaded as a downloadable
+#                 artifact, with a headless smoke test of the built binary.
+#   hygiene     — fails if any file that must stay out of git ever gets committed.
+#                 The list of guarded paths lives in the repo secret
+#                 GUARDED_PATHS (newline-separated), so this file itself
+#                 reveals nothing about what is guarded.
 #
-# Public repository: Windows runners are free for public repos.
+# Public repository: Windows and Linux runners are free for public repos.
 
 name: CI
 
@@ -68,6 +76,53 @@ jobs:
         with:
           name: coverage-python-3.14
           path: coverage.xml
+          retention-days: 14
+          if-no-files-found: error
+
+  test-linux:
+    name: tests on Linux (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+
+      # The PySide6 wheel does not bundle Qt's system libraries; without
+      # these, importing QtGui fails with `libEGL.so.1: cannot open shared
+      # object file`. Same list as README.md / docs/dependencies.md.
+      - name: Install Qt system libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run the test suite (Qt offscreen)
+        env:
+          # conftest.py sets this too; explicit here so CI logs are unambiguous
+          QT_QPA_PLATFORM: offscreen
+        run: >
+          python -m pytest -q
+          --cov=darspack
+          --cov-report=term-missing:skip-covered
+          --cov-report=xml:coverage-linux.xml
+
+      - name: Upload the coverage report
+        if: matrix.python-version == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python-3.14-linux
+          path: coverage-linux.xml
           retention-days: 14
           if-no-files-found: error
 
@@ -127,6 +182,50 @@ jobs:
           path: |
             dist/DarsPack-windows.zip
             dist/DarsPack-Setup.exe
+          retention-days: 14
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux build (portable app folder)
+    needs: [test-linux, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Qt system libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # installer/build-linux.sh runs .venv-linux/bin/pyinstaller, so CI creates
+      # the same layout a developer has after `python3 -m venv .venv-linux`.
+      - name: Create the .venv-linux the build script expects
+        run: python -m venv .venv-linux
+
+      - name: Install dependencies into the venv
+        run: .venv-linux/bin/python -m pip install -r requirements-dev.txt
+
+      - name: Build the portable app folder (PyInstaller onedir)
+        run: bash installer/build-linux.sh
+
+      # A GUI app does not exit on its own: timeout kills it after 20s
+      # (exit 124 = still running, i.e. it started fine). Any other exit
+      # code means it crashed during startup.
+      - name: Smoke-test the built binary (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          test -x dist/DarsPack/DarsPack
+          timeout 20 dist/DarsPack/DarsPack || test $? -eq 124
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarsPack-linux
+          path: dist/DarsPack
           retention-days: 14
           if-no-files-found: error
 
