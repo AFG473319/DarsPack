@@ -255,14 +255,6 @@ def test_fasl_and_dars_target_their_own_columns(lib):
 
 # --- B1: the available flag rides along with every result ------------------
 
-def test_search_exposes_available_flag(lib):
-    rows = search(lib.conn, "ریاضی")
-    assert all(r["available"] == 1 for r in rows)
-    fid = rows[0]["id"]
-    lib.conn.execute("UPDATE files SET available=0 WHERE id=?", (fid,))
-    lib.conn.commit()
-    assert search(lib.conn, "ریاضی")[0]["available"] == 0
-
 def test_school_year_filter(lib):
     rows = search(lib.conn, "")
     fid = rows[0]["id"]

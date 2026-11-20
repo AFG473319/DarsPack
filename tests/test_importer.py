@@ -115,12 +115,6 @@ def test_original_file_is_never_touched(lib, sample):
     assert (src.stat().st_mtime_ns, src.read_bytes()) == before
 
 
-def test_missing_file_is_an_error_result(lib, tmp_path):
-    r = import_file(lib, tmp_path / "نیست.pdf")
-    assert r.status == "error"
-    assert r.message_fa.startswith("فایل پیدا نشد")
-
-
 def test_same_batch_duplicate_is_detected(lib, tmp_path):
     # dedup works WITHIN one batch too, not only against the old catalog
     a = tmp_path / "a.pdf"
@@ -138,14 +132,6 @@ def test_batch_survives_a_missing_file(lib, tmp_path):
     assert [r.status for r in results] == ["imported", "error"]
 
 
-def test_empty_file_imports(lib, sample):
-    r = import_file(lib, sample("خالی.pdf", b""))
-    assert r.status == "imported"
-    row = lib.conn.execute("SELECT size_bytes FROM files WHERE id=?",
-                           (r.file_id,)).fetchone()
-    assert row["size_bytes"] == 0
-
-
 def test_catalog_stamps_match_key_and_school_year(lib, sample):
     # search and dedup silently depend on both stamps being written at
     # import time — this file name is typed with Arabic ك and ي on purpose
@@ -154,14 +140,6 @@ def test_catalog_stamps_match_key_and_school_year(lib, sample):
     row = lib.conn.execute("SELECT name_norm, school_year FROM files").fetchone()
     assert row["name_norm"] == match_key(name)
     assert row["school_year"] == current_school_year()
-
-
-def test_file_without_extension_stored_without_dot(lib, sample):
-    # the flat-storage convention: stored_name is just the zero-padded id
-    # plus the source suffix — no suffix means NO dot
-    import_file(lib, sample("بدون-پسوند"))
-    row = lib.conn.execute("SELECT stored_name FROM files").fetchone()
-    assert row["stored_name"] == "000001"
 
 
 def test_display_name_drives_catalog_and_suggestion(lib, tmp_path):

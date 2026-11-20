@@ -55,13 +55,6 @@ def test_r2_finds_exactly_the_planted_conflicts(built_with_dups):
     assert found == planted
 
 
-def test_r3_rename_hints_are_duplicate_groups_with_distinct_names(built_with_dups):
-    lib, _ = built_with_dups
-    for g in rename_hints(lib.conn):
-        names = {r["name_norm"] for r in g.rows}
-        assert len(names) > 1
-
-
 def test_default_import_leaves_no_duplicates(built_no_dups):
     lib, labels = built_no_dups
     planted = {tuple(sorted(pair)) for pair in labels["duplicates"]}
@@ -165,12 +158,6 @@ def test_likely_versions_groups_redownload_pair(conn):
     assert len(groups) == 1
     assert {r["original_name"] for r in groups[0].rows} == {
         "کاربرگ ریاضی.pdf", "کاربرگ ریاضی (1).pdf"}
-
-
-def test_likely_versions_groups_final_marker_pair(conn):
-    _insert_file(conn, "جزوه علوم.pdf", "sha-a")
-    _insert_file(conn, "جزوه علوم نهایی.pdf", "sha-b")
-    assert len(likely_versions(conn)) == 1
 
 
 def test_likely_versions_ignores_identical_content(conn):

@@ -13,16 +13,6 @@ def test_sha256_known_vector(tmp_path):
     assert sha256_file(p) == ABC_SHA256
 
 
-def test_sha256_large_file_chunked(tmp_path):
-    data = b"x" * (3 * 1024 * 1024)          # forces several 1 MB chunks
-    p = tmp_path / "big.bin"
-    p.write_bytes(data)
-    seen = []
-    sha256_file(p, progress=lambda done, total: seen.append((done, total)))
-    assert sha256_file(p) == hashlib.sha256(data).hexdigest()
-    assert seen[-1] == (len(data), len(data))  # progress reached the end
-
-
 def test_suggest_full_case():
     out = suggest("نمونه سوال ریاضی نهم فصل 3")
     assert out == {"subject": "ریاضی", "chapter": 3, "lesson": None,

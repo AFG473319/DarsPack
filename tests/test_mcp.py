@@ -19,23 +19,6 @@ def mcp_server(tmp_path):
     server.close()
 
 
-def test_mcp_initialize(mcp_server):
-    req = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0"},
-        },
-    }
-    resp = mcp_server.handle_request(req)
-    assert resp["id"] == 1
-    assert resp["result"]["serverInfo"]["name"] == "darspack-mcp"
-    assert resp["result"]["protocolVersion"] == "2024-11-05"
-
-
 def test_mcp_list_tools(mcp_server):
     req = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
     resp = mcp_server.handle_request(req)

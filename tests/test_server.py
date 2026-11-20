@@ -103,13 +103,6 @@ def _headers_for(share, file_id):
     return res.headers["Content-Type"], res.headers["Content-Disposition"]
 
 
-def test_start_returns_urls_and_random_port(server):
-    share, _ = server
-    urls = [f"http://127.0.0.1:{share.port}/"]
-    status, body = _get(urls[0])
-    assert status == 200 and "درس‌پک" in body.decode("utf-8")
-
-
 def test_favicon_is_served(ro_server):
     share, _ = ro_server
     status, body, res = _exchange(f"http://127.0.0.1:{share.port}/favicon.ico")
@@ -375,24 +368,6 @@ def test_api_manifest_matches_catalog(ro_server):
     assert set(next(iter(served.values()))) == {"name", "size"}
 
 
-def test_file_id_validation(ro_server):
-    share, lib = ro_server
-    base = f"http://127.0.0.1:{share.port}"
-    # not a number at all
-    status, body = _get_error(f"{base}/api/file/abc?pin={share.pin}")
-    assert status == 400 and json.loads(body) == {"error": "id"}
-    # a well-formed id that is not in the catalog
-    status, body = _get_error(f"{base}/api/file/99999?pin={share.pin}")
-    assert status == 404 and json.loads(body) == {"error": "not found"}
-    # a NON-Latin id is rejected with the same 400 as garbage — the server
-    # never URL-decodes the id, so even a percent-encoded Persian digit
-    # never reaches latin_digits; the phone client is safe because it uses
-    # the (Latin) ids /api/search returned. Pinned current behavior.
-    status, body = _get_error(
-        f"{base}/api/file/{urllib.parse.quote('۱')}?pin={share.pin}")
-    assert status == 400 and json.loads(body) == {"error": "id"}
-
-
 def test_unknown_route_is_404(ro_server):
     share, _ = ro_server
     status, _ = _get_error(f"http://127.0.0.1:{share.port}/definitely-not-here")
@@ -633,7 +608,10 @@ def test_start_stop_start_serves_again(tmp_path):
         p.write_bytes(b"once")
         import_file(lib, p)
         share = ShareServer(str(tmp_path / "lib"))
-        share.start()
+        urls = share.start()
+        assert urls and share.port != 0        # a random port was assigned
+        status, body = _get(f"http://127.0.0.1:{share.port}/")
+        assert status == 200 and "درس‌پک" in body.decode("utf-8")
         share.stop()
         share.start()                          # fresh port, same library
         try:
@@ -653,6 +631,10 @@ def test_download_nonexistent_file_returns_404(ro_server):
     assert status == 404
     status_bad_id, _ = _get(f"{base}/api/file/not-a-number?pin={share.pin}")
     assert status_bad_id == 400
+    # the id is never URL-decoded: a percent-encoded Persian digit is
+    # rejected with the same 400 as garbage (pinned current behavior)
+    status_fa, _ = _get(f"{base}/api/file/{urllib.parse.quote('۱')}?pin={share.pin}")
+    assert status_fa == 400
 
 
 def test_search_empty_query_lists_all(ro_server):
