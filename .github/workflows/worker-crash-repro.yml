@@ -41,7 +41,7 @@ jobs:
         run: |
           $failures = 0
           for ($i = 1; $i -le 10; $i++) {
-            python -m pytest -q --cov=darspack --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml
+            python -m pytest -v --cov=darspack --cov-report=term-missing:skip-covered --cov-report=xml:coverage.xml
             if ($LASTEXITCODE -ne 0) { $failures++; Write-Output "run $i FAILED (exit $LASTEXITCODE)" }
           }
           Write-Output "RESULT failures: $failures / 10"
