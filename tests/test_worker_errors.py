@@ -17,20 +17,45 @@ from darspack.core.importer import import_paths
 from darspack.core.library import Library
 
 
-def _flush_worker(worker, qapp):
-    """Drain anything the finished worker left in the event queue and
-    delete the thread object while the app is still alive. A queued
-    delivery or deferred delete that outlives the test is processed
-    after the worker's Python wrapper is gone — the access-violation
-    crash class documented in test_ui_dialogs (and the heap corruption
-    the Python 3.14 CI job died on)."""
-    from PySide6.QtCore import QEvent
+def _wait_signal(signal, timeout=30):
+    """Run a nested event loop until `signal` fires or the timeout hits.
 
-    qapp.processEvents()
-    if not worker.isRunning():
-        worker.deleteLater()
-    qapp.sendPostedEvents(None, QEvent.DeferredDelete)
-    qapp.processEvents()
+    This is what QSignalSpy.wait() does internally — but wait() itself
+    times out on signals emitted from another thread in this PySide6
+    build (verified on 3.12 and 3.14: it returns False even though the
+    signal arrives, and the emitting thread stalls until wait returns),
+    so wait on a plain loop that quits on the signal instead. The
+    caller checks the spy's count to tell a real emission from a
+    timeout. Never a processEvents/sleep poll: the loop wakes only
+    when the signal (or the timer) fires.
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(loop.quit)
+    signal.connect(loop.quit)
+    timer.start(timeout * 1000)
+    loop.exec()
+
+
+def _run_worker(worker, timeout=30):
+    """Start the worker on its own thread and wait for `done` — the
+    spy records the payload; the nested loop wakes on the signal.
+    Returns the `done` payloads, each as a list. The thread is joined
+    before returning, so nothing outlives the test."""
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.ui.workers import start_worker
+
+    spy = QSignalSpy(worker.done)
+    thread = start_worker(worker)
+    _wait_signal(worker.done, timeout)
+    assert spy.count() > 0, \
+        "done never emitted — the UI would hang on 'importing'"
+    thread.wait(5000)
+    return [list(spy.at(i)) for i in range(spy.count())]
 
 
 @pytest.fixture()
@@ -68,17 +93,8 @@ def test_batch_import_survives_a_bad_file(tmp_path, batch):
 def test_import_worker_always_emits_done(tmp_path, batch, qapp):
     from darspack.ui.workers import ImportWorker
 
-    received = []
     worker = ImportWorker(str(tmp_path / "lib"), [batch], keep_duplicates=True)
-    worker.done.connect(lambda *args: received.append(args))
-    worker.start()
-    deadline = time.time() + 30
-    while not received and time.time() < deadline:
-        qapp.processEvents()
-        time.sleep(0.02)
-    worker.wait(5000)
-    _flush_worker(worker, qapp)
-    assert received, "done never emitted — the UI would hang on 'importing'"
+    received = _run_worker(worker)
     imported, duplicates, errors, messages, new_ids = received[0]
     assert (imported, duplicates, errors) == (2, 0, 1)
     assert any("bad.pdf" in m for m in messages)
@@ -87,24 +103,24 @@ def test_import_worker_always_emits_done(tmp_path, batch, qapp):
 
 def test_import_worker_reports_progress(tmp_path, qapp):
     """The UI progress contract: (1, total, name) then (2, total, name)."""
-    from darspack.ui.workers import ImportWorker
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.ui.workers import ImportWorker, start_worker
 
     folder = tmp_path / "from"
     folder.mkdir()
     (folder / "one.pdf").write_bytes(b"1")
     (folder / "two.pdf").write_bytes(b"2")
 
-    progress, received = [], []
     worker = ImportWorker(str(tmp_path / "lib"), [folder])
-    worker.progress.connect(lambda d, t, n: progress.append((d, t, n)))
-    worker.done.connect(lambda *args: received.append(args))
-    worker.start()
-    deadline = time.time() + 30
-    while not (received and len(progress) >= 2) and time.time() < deadline:
-        qapp.processEvents()
-        time.sleep(0.02)
-    worker.wait(5000)
-    _flush_worker(worker, qapp)
+    progress_spy = QSignalSpy(worker.progress)
+    done_spy = QSignalSpy(worker.done)
+    thread = start_worker(worker)
+    _wait_signal(worker.done)
+    assert done_spy.count() > 0, "done never emitted"
+    thread.wait(5000)
+    progress = [tuple(progress_spy.at(i))
+                for i in range(progress_spy.count())]
     # iter_files sorts, so one.pdf is imported first
     assert progress[:2] == [(1, 2, "one.pdf"), (2, 2, "two.pdf")]
 
@@ -130,17 +146,8 @@ def test_catastrophic_failure_still_reports_and_logs(tmp_path, monkeypatch, qapp
         raise RuntimeError("disk gone")
     monkeypatch.setattr(workers_mod.Library, "open", boom)
 
-    received = []
     worker = ImportWorker(str(tmp_path / "lib"), [tmp_path])
-    worker.done.connect(lambda *args: received.append(args))
-    worker.start()
-    deadline = time.time() + 30
-    while not received and time.time() < deadline:
-        qapp.processEvents()
-        time.sleep(0.02)
-    worker.wait(5000)
-    _flush_worker(worker, qapp)
-    assert received, "done never emitted on a catastrophic failure"
+    received = _run_worker(worker)
     imported, duplicates, errors, messages, new_ids = received[0]
     assert (imported, duplicates, errors) == (0, 0, 1)
     assert any("خطای غیرمنتظره" in m for m in messages)
@@ -169,22 +176,20 @@ def test_import_worker_cancel_stops_between_files(tmp_path, monkeypatch, qapp):
 
     monkeypatch.setattr(workers_mod, "import_file", slow_import)
 
-    received, progress = [], []
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.ui.workers import start_worker
+
     worker = ImportWorker(str(tmp_path / "lib"), [folder])
-    worker.progress.connect(lambda d, t, n: progress.append((d, t, n)))
-    worker.done.connect(lambda *args: received.append(args))
-    worker.start()
-    deadline = time.time() + 30
-    while not progress and time.time() < deadline:
-        qapp.processEvents()
-        time.sleep(0.02)
+    progress_spy = QSignalSpy(worker.progress)
+    done_spy = QSignalSpy(worker.done)
+    thread = start_worker(worker)
+    _wait_signal(worker.progress)
+    assert progress_spy.count() > 0, "no progress before cancel"
     worker.cancel()          # lands while the first file is still copying
-    while not received and time.time() < deadline:
-        qapp.processEvents()
-        time.sleep(0.02)
-    worker.wait(5000)
-    _flush_worker(worker, qapp)
-    assert received, "done never emitted after cancel"
-    imported, duplicates, errors, messages, new_ids = received[0]
+    _wait_signal(worker.done)
+    assert done_spy.count() > 0, "done never emitted after cancel"
+    thread.wait(5000)
+    imported, duplicates, errors, messages, new_ids = done_spy.at(0)
     assert imported < 5, "cancel did not stop the import"
     assert imported >= 1, "the file in flight should still finish"
