@@ -176,6 +176,19 @@ def create_localized_line_edit_context_menu(
     return menu
 
 
+class _StopShareWorker(QThread):
+    """M12: server.stop() can block while a transfer is in flight — run it
+    off the UI thread so «قطع اشتراک» never freezes the window. The
+    built-in finished signal carries the result back to the UI thread."""
+
+    def __init__(self, server, parent=None):
+        super().__init__(parent)
+        self._server = server
+
+    def run(self) -> None:
+        self._server.stop()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, library_root: Path, settings: dict, settings_path: Path):
         super().__init__()
@@ -1671,17 +1684,50 @@ class MainWindow(QMainWindow):
         else:
             self.stop_share()
 
-    def stop_share(self) -> None:
-        if self.share_server is not None:
-            from ..core import db
-            db.log(self.lib.conn, "share_stop", "")
-            self.share_server.stop()
-            self.share_server = None
+    def stop_share(self, sync: bool = False) -> None:
+        """End sharing. Async by default (M12): server.stop() waits out
+        in-flight transfers, so it runs on a worker thread while the
+        banner shows a "stopping…" state. sync=True is for closeEvent —
+        at shutdown the window is already going away, and the worker
+        must not outlive the window it belongs to."""
+        server = self.share_server
+        if server is None:
+            return
+        self.share_server = None
+        from ..core import db
+        db.log(self.lib.conn, "share_stop", "")
+        if sync:
+            server.stop()
             if hasattr(self, "info_bar"):
                 self.info_bar.hide()
             self.refresh()
+            return
+        if hasattr(self, "info_bar"):
+            self.info_bar_label.setText(tr("infobar_share_stopping"))
+            self.info_bar.show()
+        worker = _StopShareWorker(server, self)
+        worker.finished.connect(lambda: self._on_share_stopped(worker))
+        worker.start()
+        self._stop_worker = worker
+
+    def _on_share_stopped(self, worker: _StopShareWorker) -> None:
+        if getattr(self, "_stop_worker", None) is worker:
+            self._stop_worker = None
+        # The user may have started sharing again while the old server
+        # was still stopping — only hide the banner when nothing is live.
+        if self.share_server is None and hasattr(self, "info_bar"):
+            self.info_bar.hide()
+        self.refresh()
+        worker.deleteLater()
 
     def closeEvent(self, event) -> None:
+        # M12: never destroy a running stop worker with its window —
+        # wait for it (the server-side abort bounds this to well under
+        # a second in practice), then stop synchronously for a clean exit.
+        worker = getattr(self, "_stop_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait()
+        self.stop_share(sync=True)   # never leave the server thread running
         self._stop_background_workers()   # never destroy a running QThread
         self.stop_share()          # never leave the server thread running
         self.lib.close()

@@ -606,7 +606,8 @@ def test_share_dialog_live_refresh(tmp_path, qapp):
         parent.lib = lib
         refreshes = []
         parent.refresh = lambda: refreshes.append(1)
-        dlg = ShareDialog(parent, SimpleNamespace(pin="۱۲۳۴۵۶"),
+        dlg = ShareDialog(parent, SimpleNamespace(pin="۱۲۳۴۵۶",
+                                                  is_running=lambda: True),
                           ["http://192.168.1.5:8000/"], on_close=None)
         assert dlg._upload_label.isHidden()     # no uploads yet → no label
         src = tmp_path / "از گوشی.pdf"

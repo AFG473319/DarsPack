@@ -55,7 +55,13 @@ def qapp():
     app.sendPostedEvents(None, QEvent.DeferredDelete)
     app.processEvents()
     for thread in [o for o in gc.get_objects() if isinstance(o, QThread)]:
-        if thread is not QThread.currentThread() and thread.isRunning():
+        if thread is QThread.currentThread():
+            continue
+        try:
+            running = shiboken6.isValid(thread) and thread.isRunning()
+        except RuntimeError:
+            running = False
+        if running:
             thread.wait(5000)
     shiboken6.delete(app)
 

@@ -224,6 +224,205 @@ setTimeout(() => {{
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.strip().splitlines()[-1])
 
+
+# ---------------------------------------------------------------------------
+# Phone-sharing fixes (2026-11-19 review: M29, M30, L1)
+# ---------------------------------------------------------------------------
+
+
+def test_client_sequences_searches_and_ignores_stale_results():
+    """M29: every search carries a sequence number, and a response from
+    an older search is ignored instead of overwriting the list."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "searchSeq" in html
+    assert "mySeq !== searchSeq" in html
+
+
+def test_client_shows_search_total_when_truncated():
+    """M30: the status line says how many files matched in total when
+    the page is capped, instead of presenting the cap as the library."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "data.total" in html and "data.truncated" in html
+    assert "'نمایش ' + faNum(shown) + ' از ' + faNum(all) + ' فایل'" in html
+
+
+def test_client_checks_upload_size_and_rejects_before_sending():
+    """L1: the 200 MB per-file limit is checked on the phone before the
+    upload starts, and the label says so; the 415/507 server errors
+    also get a plain-Persian message instead of a generic failure."""
+    html = CLIENT.read_text(encoding="utf-8")
+    assert "MAX_UPLOAD_BYTES = 200 * 1024 * 1024" in html
+    assert "file.size > MAX_UPLOAD_BYTES" in html
+    assert "هر فایل تا ۲۰۰ مگابایت" in html
+    assert "res.status === 415" in html
+    assert "این نوع فایل برای اشتراک مجاز نیست (فایل اجرایی)." in html
+    assert "res.status === 507" in html
+    assert "روی رایانه فضای خالی کافی نیست." in html
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — stale-search check skipped")
+def test_client_ignores_stale_search_response(tmp_path):
+    """M29, behaviour: a slow first search resolving after a fast second
+    one must not overwrite the list with its stale rows."""
+    harness = tmp_path / "stale_harness.js"
+    harness.write_text("""
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const source = html.match(/<script>([\\s\\S]*)<\\/script>/)[1];
+const elements = {};
+const make = () => ({ style: {}, textContent: '', innerHTML: '', value: '' });
+const document = { getElementById: id => (elements[id] ||= make()) };
+const store = { 'darspack-pin': '123456' };
+const localStorage = {
+  getItem: k => (k in store ? store[k] : null),
+  setItem: (k, v) => { store[k] = String(v); },
+  removeItem: k => { delete store[k]; },
+};
+let calls = 0;
+const searchPayload = name => ({ files: [{ id: 1, name, subject: '',
+  chapter: null, lesson: null, kind: '', size: 1, available: true }],
+  total: 1, truncated: false });
+const fetch = async (url) => {
+  const n = ++calls;
+  if (url.includes('/api/subjects'))
+    return { status: 200, json: async () => ({ subjects: [], unclassified: 0 }) };
+  if (n === 1) {   // the boot search: deliberately slow
+    await new Promise(r => setTimeout(r, 80));
+    return { status: 200, json: async () => searchPayload('slow-file.pdf') };
+  }
+  return { status: 200, json: async () => searchPayload('fast-file.pdf') };
+};
+const context = { document, localStorage, fetch, setTimeout, clearTimeout,
+                  console, encodeURIComponent, JSON };
+vm.createContext(context);
+vm.runInContext(source, context);
+context.search();   // a second, fast search starts while #1 is still in flight
+setTimeout(() => {
+  const list = elements['list'] ? elements['list'].innerHTML : '';
+  console.log(JSON.stringify({ list }));
+  process.exit(0);
+}, 300);
+""", encoding="utf-8")
+    result = subprocess.run(["node", str(harness), str(CLIENT)],
+                            capture_output=True, text=True, encoding="utf-8",
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout.strip().splitlines()[-1])
+    assert "fast-file" in out["list"]
+    assert "slow-file" not in out["list"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — truncated-status check skipped")
+def test_client_status_line_shows_total_when_truncated(tmp_path):
+    """M30, behaviour: with total=5 and one row on the page, the status
+    reads «نمایش ۱ از ۵ فایل»; untruncated, it reads the plain count."""
+    harness = tmp_path / "status_harness.js"
+    harness.write_text("""
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const source = html.match(/<script>([\\s\\S]*)<\\/script>/)[1];
+const elements = {};
+const make = () => ({ style: {}, textContent: '', innerHTML: '', value: '' });
+const document = { getElementById: id => (elements[id] ||= make()) };
+const store = { 'darspack-pin': '123456' };
+const localStorage = {
+  getItem: k => (k in store ? store[k] : null),
+  setItem: (k, v) => { store[k] = String(v); },
+  removeItem: k => { delete store[k]; },
+};
+const payload = JSON.parse(process.argv[3]);
+const fetch = async (url) => {
+  if (url.includes('/api/subjects'))
+    return { status: 200, json: async () => ({ subjects: [], unclassified: 0 }) };
+  return { status: 200, json: async () => payload };
+};
+const context = { document, localStorage, fetch, setTimeout, clearTimeout,
+                  console, encodeURIComponent, JSON };
+vm.createContext(context);
+vm.runInContext(source, context);
+setTimeout(() => {
+  console.log(JSON.stringify({ status: elements['status'].textContent }));
+  process.exit(0);
+}, 100);
+""", encoding="utf-8")
+
+    def _status(payload):
+        result = subprocess.run(
+            ["node", str(harness), str(CLIENT), json.dumps(payload)],
+            capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout.strip().splitlines()[-1])["status"]
+
+    row = {"id": 1, "name": "x.pdf", "subject": "", "chapter": None,
+           "lesson": None, "kind": "", "size": 1, "available": True}
+    assert _status({"files": [row], "total": 5, "truncated": True}) == "نمایش ۱ از ۵ فایل"
+    assert _status({"files": [row], "total": 1, "truncated": False}) == "۱ فایل"
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node not installed — oversized-upload check skipped")
+def test_client_refuses_oversized_file_before_upload(tmp_path):
+    """L1, behaviour: a 300 MB file never reaches fetch — the phone says
+    so at once; a small file uploads normally."""
+    harness = tmp_path / "oversize_harness.js"
+    harness.write_text("""
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const source = html.match(/<script>([\\s\\S]*)<\\/script>/)[1];
+const elements = {};
+const make = () => ({ style: {}, textContent: '', innerHTML: '', value: '' });
+const document = { getElementById: id => (elements[id] ||= make()) };
+const store = { 'darspack-pin': '123456' };
+const localStorage = {
+  getItem: k => (k in store ? store[k] : null),
+  setItem: (k, v) => { store[k] = String(v); },
+  removeItem: k => { delete store[k]; },
+};
+let uploadCalls = 0;
+const fetch = async (url) => {
+  if (url.includes('/api/upload')) uploadCalls++;
+  if (url.includes('/api/subjects'))
+    return { status: 200, json: async () => ({ subjects: [], unclassified: 0 }) };
+  if (url.includes('/api/search'))
+    return { status: 200, json: async () => ({ files: [], total: 0, truncated: false }) };
+  return { status: 200, ok: true, json: async () => ({ status: 'ok', message: 'ارسال شد.' }) };
+};
+const context = { document, localStorage, fetch, setTimeout, clearTimeout,
+                  console, encodeURIComponent, JSON };
+vm.createContext(context);
+vm.runInContext(source, context);
+const size = Number(process.argv[3]);
+setTimeout(() => {   // let the boot search settle first
+  const up = document.getElementById('up');
+  up.files = [{ name: 'huge.pdf', size }];
+  context.upload().then(() => {
+    console.log(JSON.stringify({ uploadCalls,
+      status: document.getElementById('upstatus').textContent }));
+    process.exit(0);
+  });
+}, 100);
+""", encoding="utf-8")
+
+    def _upload(size):
+        result = subprocess.run(
+            ["node", str(harness), str(CLIENT), str(size)],
+            capture_output=True, text=True, encoding="utf-8", timeout=30)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    oversized = _upload(300 * 1024 * 1024)
+    assert oversized["uploadCalls"] == 0, "no byte of a 300 MB file may be sent"
+    assert "۲۰۰ مگابایت" in oversized["status"]
+    small = _upload(1024)
+    assert small["uploadCalls"] == 1
+    assert small["status"] == "ارسال شد."
+
+
 def test_client_shows_try_again_message_when_server_is_busy():
     """H1: a 503 {"error": "busy"} upload answer must reach the user as
     a 'try again in a moment' message, not the generic failure text."""
