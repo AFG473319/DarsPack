@@ -177,6 +177,28 @@ def _flush_dialog(dlg):
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
+def _wait_poster_threads(dlg):
+    """Wait for every poster thread the dialog started, before the
+    parent widget goes away.
+
+    The dialog starts one thread per queued entry (the pending chain)
+    but only the latest is in dlg._poster_thread; the earlier ones are
+    parented to the dialog's parent window and are destroyed with it.
+    Destroying a QThread while it runs aborts the whole process, so
+    the test must wait for all of them first — exactly the MainWindow
+    shutdown contract. A thread whose C++ object is already gone
+    (finished -> deleteLater, processed by an earlier nested event
+    loop) is skipped."""
+    import shiboken6
+
+    for thread in list(getattr(dlg, "_poster_threads", [])):
+        try:
+            if shiboken6.isValid(thread) and thread.isRunning():
+                thread.wait(5000)
+        except RuntimeError:
+            pass
+
+
 def _dialog_parent(tmp_path, qapp):
     """A real widget stand-in for MainWindow (the dialogs read lib from
     it), with an EMPTY sidecar state the test controls."""
@@ -388,7 +410,8 @@ def test_submit_is_idempotent_and_failures_keep_the_entry(
     assert dlg.result() == QDialog.DialogCode.Accepted
     dlg._flush_draft()
     assert not (tmp_path / "lib" / "feedback_draft.json").exists()
-    _flush_dialog(dlg)
+    _wait_poster_threads(dlg)               # both stub posters must be
+    _flush_dialog(dlg)                      # done before the parent dies
 
 
 def test_real_network_failure_then_retry_success(tmp_path, qapp, fake_boxes):
@@ -436,8 +459,8 @@ def test_real_network_failure_then_retry_success(tmp_path, qapp, fake_boxes):
         spy2 = QSignalSpy(dlg._poster.done)
         _wait_signal(dlg._poster.done, 15)
         assert spy2.count() > 0, "retry post never finished"
-        dlg._poster_thread.wait(5000)
-        assert len(hits) == 2                    # one failure + the retry
+        _wait_poster_threads(dlg)           # both posters (the 500 one
+        assert len(hits) == 2                    # too) before teardown
         assert [p for p in fake_boxes.popped if p[0] == "question"], \
             "the network failure must surface as a retry prompt"
         assert fake_boxes.popped[-1][0] == "info"   # the thanks
@@ -483,4 +506,5 @@ def test_opening_with_pending_entries_offers_to_send(tmp_path, qapp,
     stub_poster[1].done.emit(False)            # Wi-Fi died again
     assert dlg2._chain_active is False         # the chain stops, keeps all
     assert len(load_pending(parent)) == 1
-    _flush_dialog(dlg2)
+    _wait_poster_threads(dlg2)                  # both stub posters must be
+    _flush_dialog(dlg2)                         # done before the parent dies

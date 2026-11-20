@@ -388,6 +388,7 @@ class FeedbackDialog(QDialog):
         self._posting_from_chain = False
         self._poster = None
         self._poster_thread = None
+        self._poster_threads = []    # every poster thread this dialog started
 
         layout = QVBoxLayout(self)
         self.notice = QLabel("")          # «پیش‌نویسِ قبلی بازگردانده شد»
@@ -626,6 +627,12 @@ class FeedbackDialog(QDialog):
         poster.done.connect(self._post_done)
         self._poster_thread = start_worker(poster,
                                            parent=self.parent_window)
+        # Keep every poster thread, not just the latest: a pending
+        # chain starts one poster per entry, and a thread whose only
+        # handle was overwritten can be destroyed while still running
+        # when the parent window goes away — destroying a running
+        # QThread aborts the whole process.
+        self._poster_threads.append(self._poster_thread)
 
     def _post_done(self, ok: bool) -> None:
         payload = self._active_payload
