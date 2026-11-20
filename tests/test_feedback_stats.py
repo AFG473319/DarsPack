@@ -10,7 +10,6 @@ can cancel.
 import json
 import os
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -47,9 +46,34 @@ def test_payload_shape_and_local_mirror(tmp_path):
     assert json.loads(line) == payload        # exact same shape as the POST
 
 
+def _wait_signal(signal, timeout=30):
+    """Run a nested event loop until `signal` fires or the timeout hits.
+
+    This is what QSignalSpy.wait() does internally — but wait() itself
+    times out on signals emitted from another thread in this PySide6
+    build (verified on 3.12 and 3.14: it returns False even though the
+    signal arrives, and the emitting thread stalls until wait returns),
+    so wait on a plain loop that quits on the signal instead. The
+    caller checks the spy's count to tell a real emission from a
+    timeout. Never a processEvents/sleep poll: the loop wakes only
+    when the signal (or the timer) fires.
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(loop.quit)
+    signal.connect(loop.quit)
+    timer.start(timeout * 1000)
+    loop.exec()
+
+
 def test_poster_success_against_local_server(qapp):
     """The poster must deliver the JSON body to a real HTTP endpoint."""
-    from darspack.ui.workers import FeedbackPoster
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.ui.workers import FeedbackPoster, start_worker
 
     received = []
 
@@ -68,43 +92,41 @@ def test_poster_success_against_local_server(qapp):
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        results = []
         payload = {"app": "DarsPack", "message": "test"}
         poster = FeedbackPoster(
             f"http://127.0.0.1:{server.server_port}/", payload)
-        poster.done.connect(results.append)
-        poster.start()
-        deadline = time.time() + 10
-        while not results and time.time() < deadline:
-            qapp.processEvents()
-            time.sleep(0.02)
-        poster.wait(5000)
-        assert results == [True]
+        spy = QSignalSpy(poster.done)
+        thread = start_worker(poster)
+        _wait_signal(poster.done, 10)
+        assert spy.count() > 0, "poster done never emitted"
+        thread.wait(5000)
+        assert spy.at(0) == [True]
         assert received == [payload]          # exact JSON reached the server
     finally:
         server.shutdown()
 
 
 def test_poster_reports_failure_without_raising(qapp):
-    from darspack.ui.workers import FeedbackPoster
+    from PySide6.QtTest import QSignalSpy
 
-    results = []
+    from darspack.ui.workers import FeedbackPoster, start_worker
+
     poster = FeedbackPoster("http://127.0.0.1:9/", {"x": 1}, timeout=0.2)   # nothing listens
-    poster.done.connect(results.append)
-    poster.start()
-    deadline = time.time() + 5
-    while not results and time.time() < deadline:
-        qapp.processEvents()
-        time.sleep(0.05)
-    poster.wait(5000)
-    assert results == [False]                 # clean failure, no exception
+    spy = QSignalSpy(poster.done)
+    thread = start_worker(poster)
+    _wait_signal(poster.done, 5)
+    assert spy.count() > 0, "poster done never emitted"
+    thread.wait(5000)
+    assert spy.at(0) == [False]               # clean failure, no exception
 
 
 # ---- stats: background worker with cancel -------------------------------
 
 def test_stats_worker_matches_library_stats(tmp_path, qapp):
+    from PySide6.QtTest import QSignalSpy
+
     from darspack.ui.dialogs import library_stats
-    from darspack.ui.workers import StatsWorker
+    from darspack.ui.workers import StatsWorker, start_worker
 
     with Library(tmp_path / "lib") as lib:
         for i in range(5):
@@ -113,20 +135,19 @@ def test_stats_worker_matches_library_stats(tmp_path, qapp):
             from darspack.core.importer import import_file
             import_file(lib, p)
         worker = StatsWorker(str(tmp_path / "lib"))
-        results = []
-        worker.done.connect(results.append)
-        worker.start()
-        deadline = time.time() + 15
-        while not results and time.time() < deadline:
-            qapp.processEvents()
-            time.sleep(0.02)
-        worker.wait(5000)
-        assert results and results[0] is not None
-        assert results[0] == library_stats(lib.conn)
+        spy = QSignalSpy(worker.done)
+        thread = start_worker(worker)
+        _wait_signal(worker.done, 15)
+        assert spy.count() > 0, "stats done never emitted"
+        thread.wait(5000)
+        assert spy.at(0)[0] is not None
+        assert spy.at(0)[0] == library_stats(lib.conn)
 
 
 def test_stats_worker_cancel_returns_none(tmp_path, qapp):
-    from darspack.ui.workers import StatsWorker
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.ui.workers import StatsWorker, start_worker
 
     with Library(tmp_path / "lib") as lib:
         p = tmp_path / "f.pdf"
@@ -135,15 +156,12 @@ def test_stats_worker_cancel_returns_none(tmp_path, qapp):
         import_file(lib, p)
         worker = StatsWorker(str(tmp_path / "lib"))
         worker.cancel()                       # cancelled before start
-        results = []
-        worker.done.connect(results.append)
-        worker.start()
-        deadline = time.time() + 15
-        while not results and time.time() < deadline:
-            qapp.processEvents()
-            time.sleep(0.02)
-        worker.wait(5000)
-        assert results == [None]              # no results dialog on cancel
+        spy = QSignalSpy(worker.done)
+        thread = start_worker(worker)
+        _wait_signal(worker.done, 15)
+        assert spy.count() > 0, "stats done never emitted"
+        thread.wait(5000)
+        assert spy.at(0) == [None]            # no results dialog on cancel
 
 
 # ---- feedback: the unsent queue, drafts and limits ------------------------
@@ -220,13 +238,13 @@ def stub_poster(monkeypatch):
     class StubPoster(QObject):
         done = Signal(bool)
 
-        def __init__(self, endpoint, payload, parent=None, timeout=8):
-            super().__init__(parent)
+        def __init__(self, endpoint, payload, timeout=8):
+            super().__init__()
             self.endpoint = endpoint
             self.payload = payload
             created.append(self)
 
-        def start(self):
+        def run(self):
             pass                    # the test emits `done` when it wants
 
     monkeypatch.setattr("darspack.ui.dialogs.FeedbackPoster", StubPoster)
@@ -401,18 +419,24 @@ def test_real_network_failure_then_retry_success(tmp_path, qapp, fake_boxes):
     server = http.server.HTTPServer(("127.0.0.1", 0), FlakyHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
+        from PySide6.QtTest import QSignalSpy
+
         parent = _dialog_parent(tmp_path, qapp)
         fake_boxes.next_answer = fake_boxes.Retry          # send again
         dlg = FeedbackDialog(parent, {
             "feedback_endpoint": f"http://127.0.0.1:{server.server_port}/"})
         dlg.message.setPlainText("راستی‌آزمایی‌های واقعی شبکه هم باید بگذرد")
         dlg._submit()
-        deadline = time.time() + 15
-        while len(hits) < 2 and time.time() < deadline:
-            qapp.processEvents()
-            time.sleep(0.02)
-        dlg._poster.wait(5000)
-        qapp.processEvents()
+        # The first POST 500s (done(False) → retry prompt → a second
+        # poster is started); the second POST 200s (done(True)).
+        spy1 = QSignalSpy(dlg._poster.done)
+        _wait_signal(dlg._poster.done, 15)
+        assert spy1.count() > 0, "first post never finished"
+        assert len(hits) == 1
+        spy2 = QSignalSpy(dlg._poster.done)
+        _wait_signal(dlg._poster.done, 15)
+        assert spy2.count() > 0, "retry post never finished"
+        dlg._poster_thread.wait(5000)
         assert len(hits) == 2                    # one failure + the retry
         assert [p for p in fake_boxes.popped if p[0] == "question"], \
             "the network failure must surface as a retry prompt"

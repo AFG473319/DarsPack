@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, QUrl
+from PySide6.QtCore import (QEvent, QObject, QPoint, QSize, Qt, QThread,
+                            QTimer, QUrl, Signal, Slot)
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
@@ -33,7 +34,7 @@ from ..i18n import tr
 from . import dialogs, icons, theme
 from .delegates import FileNameDelegate, FileNameLabel, KindBadgeDelegate
 from .smooth_scroll import enable_smooth_scroll
-from .workers import ImportWorker
+from .workers import ImportWorker, start_worker
 
 if TYPE_CHECKING:      # F4 (perf audit): ShareServer pulls http/ssl/email —
     from ..web.server import ShareServer   # only needed when sharing starts
@@ -176,17 +177,22 @@ def create_localized_line_edit_context_menu(
     return menu
 
 
-class _StopShareWorker(QThread):
+class _StopShareWorker(QObject):
     """M12: server.stop() can block while a transfer is in flight — run it
-    off the UI thread so «قطع اشتراک» never freezes the window. The
-    built-in finished signal carries the result back to the UI thread."""
+    off the UI thread so «قطع اشتراک» never freezes the window. A plain
+    QObject moved onto a QThread (see workers.start_worker); `done`
+    carries the result back to the UI thread."""
 
-    def __init__(self, server, parent=None):
-        super().__init__(parent)
+    done = Signal()
+
+    def __init__(self, server):
+        super().__init__()
         self._server = server
 
+    @Slot()
     def run(self) -> None:
         self._server.stop()
+        self.done.emit()
 
 
 class MainWindow(QMainWindow):
@@ -1462,18 +1468,26 @@ class MainWindow(QMainWindow):
                           **kwargs) -> None:
         # Prevent re-entrant imports while an import is running or being reviewed
         if getattr(self, "_import_busy", False) or (
-                getattr(self, "_worker", None) is not None and self._worker.isRunning()):
+                getattr(self, "_worker_thread", None) is not None
+                and self._worker_thread.isRunning()):
             self.statusBar().showMessage(tr("import_running_busy"), 3000)
             return
         self._import_busy = True
         # kwargs (A5): metas/meta_base/cleanup_dir for a ?????? import
         self._worker = ImportWorker(
             str(self.lib.root), paths, keep_duplicates, **kwargs)
-        self._worker.progress.connect(
-            lambda d, t, name: self.statusBar().showMessage(
-                tr("import_running").format(d, t, name)))
+        # Bound methods, not lambdas: a lambda connected to a worker
+        # signal runs in the WORKER's thread (PySide6 routes a bare
+        # callable to the sender object's thread), so a lambda would
+        # touch the status bar off the UI thread. A bound method of
+        # this window is queued back to the UI thread.
+        self._worker.progress.connect(self._import_progress)
         self._worker.done.connect(self._import_finished)
-        self._worker.start()
+        self._worker_thread = start_worker(self._worker, parent=self)
+
+    def _import_progress(self, done: int, total: int, name: str) -> None:
+        self.statusBar().showMessage(
+            tr("import_running").format(done, total, name))
 
     def _import_finished(self, imported, duplicates, errors, messages,
                          new_ids) -> None:
@@ -1494,6 +1508,11 @@ class MainWindow(QMainWindow):
                 text += "\n" + "\n".join(messages[:5])
             QMessageBox.information(self, APP_NAME, text)
         finally:
+            # The worker deletes itself when its thread finishes — drop
+            # the references now, while the object is still alive, so
+            # nothing later touches a deleted wrapper.
+            self._worker = None
+            self._worker_thread = None
             self._import_busy = False
 
     def open_trash_dialog(self) -> None:
@@ -1555,14 +1574,25 @@ class MainWindow(QMainWindow):
         progress = dialogs.PackageProgressDialog(
             self, tr("btn_verify") if kind == "verify" else tr("export_title"),
             label)
+        # Kept on self so the bound-method done handler below can find
+        # them (see _import_progress for why no lambda is used here).
+        self._pkg_progress = progress
+        self._pkg_on_done = on_done
         self._pkg_worker.progress.connect(progress.set_progress)
-        self._pkg_worker.done.connect(
-            lambda result: self._package_finished(progress, result, on_done))
-        self._pkg_worker.start()
+        self._pkg_worker.done.connect(self._package_finished)
+        self._pkg_thread = start_worker(self._pkg_worker, parent=self)
         progress.exec()
 
-    def _package_finished(self, progress, result: dict, on_done) -> None:
+    def _package_finished(self, result: dict) -> None:
+        progress = self._pkg_progress
+        on_done = self._pkg_on_done
         progress.accept()
+        # The worker deletes itself when its thread finishes — drop the
+        # references now, while the object is still alive.
+        self._pkg_worker = None
+        self._pkg_thread = None
+        self._pkg_progress = None
+        self._pkg_on_done = None
         if result.get("cancelled"):
             self.statusBar().showMessage(tr("pkg_cancelled"), 4000)
             return
@@ -1594,13 +1624,21 @@ class MainWindow(QMainWindow):
         from .workers import StatsWorker
         self._stats_worker = StatsWorker(str(self.lib.root))
         progress = dialogs.StatsProgressDialog(self)
-        self._stats_worker.done.connect(
-            lambda stats: self._stats_finished(progress, stats))
-        self._stats_worker.start()
+        # Kept on self so the bound-method done handler below can find
+        # it (see _import_progress for why no lambda is used here).
+        self._stats_progress = progress
+        self._stats_worker.done.connect(self._stats_finished)
+        self._stats_thread = start_worker(self._stats_worker, parent=self)
         progress.exec()          # modal; its cancel stops the worker
 
-    def _stats_finished(self, progress, stats) -> None:
+    def _stats_finished(self, stats) -> None:
+        progress = self._stats_progress
         progress.accept()        # closes the progress dialog either way
+        # The worker deletes itself when its thread finishes — drop the
+        # references now, while the object is still alive.
+        self._stats_worker = None
+        self._stats_thread = None
+        self._stats_progress = None
         if stats is None:        # user cancelled
             return
         dialogs.StatsDialog(self, stats).exec()
@@ -1705,28 +1743,35 @@ class MainWindow(QMainWindow):
         if hasattr(self, "info_bar"):
             self.info_bar_label.setText(tr("infobar_share_stopping"))
             self.info_bar.show()
-        worker = _StopShareWorker(server, self)
-        worker.finished.connect(lambda: self._on_share_stopped(worker))
-        worker.start()
+        worker = _StopShareWorker(server)
+        # `done` is wired to the slot below (queued to the UI thread);
+        # start_worker wires done → thread.quit and deletes both
+        # objects when the thread finishes.
+        worker.done.connect(self._on_share_stopped)
         self._stop_worker = worker
+        self._stop_thread = start_worker(worker, parent=self)
 
-    def _on_share_stopped(self, worker: _StopShareWorker) -> None:
+    @Slot()
+    def _on_share_stopped(self) -> None:
+        # sender() is the _StopShareWorker whose done just fired.
+        worker = self.sender()
         if getattr(self, "_stop_worker", None) is worker:
             self._stop_worker = None
+            self._stop_thread = None
         # The user may have started sharing again while the old server
         # was still stopping — only hide the banner when nothing is live.
         if self.share_server is None and hasattr(self, "info_bar"):
             self.info_bar.hide()
         self.refresh()
-        worker.deleteLater()
 
     def closeEvent(self, event) -> None:
         # M12: never destroy a running stop worker with its window —
         # wait for it (the server-side abort bounds this to well under
         # a second in practice), then stop synchronously for a clean exit.
-        worker = getattr(self, "_stop_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.wait()
+        thread = getattr(self, "_stop_thread", None)
+        if thread is not None and thread.isRunning():
+            thread.quit()   # thread-safe; lets wait() return once run() ends
+            thread.wait()
         self.stop_share(sync=True)   # never leave the server thread running
         self._stop_background_workers()   # never destroy a running QThread
         self.stop_share()          # never leave the server thread running
@@ -1744,19 +1789,27 @@ class MainWindow(QMainWindow):
         no cancel point and its request times out after 8 s, so it gets
         9 s. The `done` handlers are disconnected first — a worker
         finishing during close must not pop dialogs onto a window that
-        is already going away.
+        is already going away. Workers are plain QObjects on their own
+        QThreads (see workers.start_worker); the pairs below are
+        (worker, thread).
         """
-        workers = []
-        for attr in ("_worker", "_stats_worker", "_pkg_worker"):
-            worker = getattr(self, attr, None)
-            if worker is not None and worker.isRunning():
-                workers.append(worker)
-        # FeedbackPoster instances are parented to the window, not kept
+        pairs = []
+        for worker_attr, thread_attr in (("_worker", "_worker_thread"),
+                                         ("_stats_worker", "_stats_thread"),
+                                         ("_pkg_worker", "_pkg_thread")):
+            worker = getattr(self, worker_attr, None)
+            thread = getattr(self, thread_attr, None)
+            if thread is not None and thread.isRunning():
+                pairs.append((worker, thread))
+        # FeedbackPoster threads are parented to the window, not kept
         # in an attribute — find them among the window's QThread children.
-        for worker in self.findChildren(QThread):
-            if worker.isRunning() and worker not in workers:
-                workers.append(worker)
-        for worker in workers:
+        known = {thread for _, thread in pairs}
+        for thread in self.findChildren(QThread):
+            if thread.isRunning() and thread not in known:
+                pairs.append((None, thread))
+        for worker, _thread in pairs:
+            if worker is None:
+                continue
             handler = {"_worker": "_import_finished",
                        "_stats_worker": "_stats_finished",
                        "_pkg_worker": "_package_finished"}
@@ -1766,12 +1819,20 @@ class MainWindow(QMainWindow):
                         worker.done.disconnect(getattr(self, slot))
                     except (TypeError, RuntimeError):
                         pass
-        for worker in workers:
-            cancel = getattr(worker, "cancel", None)
-            if callable(cancel):
-                try:
-                    cancel()
-                except Exception:
-                    pass
-        for worker in workers:
-            worker.wait(3000 if hasattr(worker, "cancel") else 9000)
+        for worker, _thread in pairs:
+            if worker is not None:
+                cancel = getattr(worker, "cancel", None)
+                if callable(cancel):
+                    try:
+                        cancel()
+                    except Exception:
+                        pass
+        for worker, thread in pairs:
+            # Ask the thread's event loop to exit as soon as the
+            # worker's run() returns (quit is thread-safe). Without
+            # this, wait() below can time out: the done->quit wiring in
+            # start_worker only fires once run() returns, and a worker
+            # still mid-file has not emitted done yet.
+            thread.quit()
+            thread.wait(3000 if worker is not None
+                        and hasattr(worker, "cancel") else 9000)

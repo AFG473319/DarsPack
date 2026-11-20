@@ -742,10 +742,10 @@ def test_import_worker_reentrancy_guard(tmp_path, qapp):
             def isRunning(self):
                 return True
 
-        # Case 1: _worker isRunning
-        win._worker = FakeRunningWorker()
+        # Case 1: the import thread isRunning
+        win._worker_thread = FakeRunningWorker()
         win.run_import_worker([tmp_path / "foo.pdf"])
-        assert win._worker is not None and isinstance(win._worker, FakeRunningWorker)
+        assert win._worker_thread is not None and isinstance(win._worker_thread, FakeRunningWorker)
         assert tr("import_running_busy") in win.statusBar().currentMessage()
 
         # Case 2: _import_busy flag (e.g. during modal ClassifyDialog review)
@@ -958,12 +958,12 @@ def test_close_during_import_waits_for_worker(tmp_path, qapp, monkeypatch):
             win.show()
             win.run_import_worker([folder])
             deadline = time.time() + 10
-            while not win._worker.isRunning() and time.time() < deadline:
+            while not win._worker_thread.isRunning() and time.time() < deadline:
                 qapp.processEvents()
                 time.sleep(0.02)
-            assert win._worker.isRunning()
+            assert win._worker_thread.isRunning()
             win.close()
-            assert not win._worker.isRunning()
+            assert not win._worker_thread.isRunning()
             qapp.processEvents()
             assert QApplication.activeModalWidget() is None
         finally:

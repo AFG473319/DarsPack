@@ -1,9 +1,16 @@
 """Background workers (نخ‌های پس‌زمینه).
 
 Hashing and copying big files can take seconds — running them on the UI
-thread would freeze the window. Each worker opens its OWN connection to
-the catalog (one connection per thread, WAL mode), does the work, and
-reports back via Qt signals.
+thread would freeze the window. Each worker is a plain QObject moved
+onto its own QThread (Qt's recommended worker pattern — a Python
+QThread subclass raced in the C++ layer and crashed the Windows
+Python 3.14 CI job with an access violation), does the work, and
+reports back via Qt signals. `start_worker` owns the lifecycle:
+thread.started runs the worker, the worker's `done` quits the thread,
+and both objects delete themselves when the thread finishes.
+
+Each worker opens its OWN connection to the catalog (one connection
+per thread, WAL mode).
 
 Error rule: a bad file (locked by another program, unreadable, deleted
 mid-import) is counted and reported — it must never kill the worker
@@ -17,14 +24,43 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from .. import __version__          # for the FeedbackPoster User-Agent
 from ..core.importer import import_file, iter_files
 from ..core.library import Library
 
 
-class ImportWorker(QThread):
+def start_worker(worker, parent=None):
+    """Run a worker QObject on a fresh QThread; return the thread.
+
+    The worker object must have no parent (an object with a parent
+    cannot be moved to another thread) and must expose a `run` slot
+    and a `done` signal. Wiring: thread.started calls run on the new
+    thread; done quits the thread; thread.finished deletes both
+    objects. Callers keep the returned QThread to wait on it at
+    shutdown — the worker itself is deleted by the thread, so never
+    touch it after `done` fires.
+    """
+    thread = QThread(parent)
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    # NOTE: this stays a plain (queued) connection on purpose. A
+    # DirectConnection here made the thread quit and delete the worker
+    # while a test still held a QSignalSpy on its `done` signal, and
+    # PySide6 segfaulted on the deleted sender. The thread still exits
+    # promptly: callers that block in thread.wait() must call
+    # thread.quit() first (see MainWindow._stop_background_workers),
+    # because a queued quit cannot be delivered while the main thread
+    # is blocked in wait().
+    worker.done.connect(thread.quit)
+    thread.finished.connect(worker.deleteLater)
+    thread.finished.connect(thread.deleteLater)
+    thread.start()
+    return thread
+
+
+class ImportWorker(QObject):
     """Import a list of files/folders in the background.
 
     `done` also carries the ids of the freshly imported files so the UI
@@ -44,9 +80,9 @@ class ImportWorker(QThread):
     progress = Signal(int, int, str)          # done, total, current name
     done = Signal(int, int, int, list, list)  # imported, dups, errors, messages, new ids
 
-    def __init__(self, library_root, paths, keep_duplicates=False, parent=None,
+    def __init__(self, library_root, paths, keep_duplicates=False,
                  metas=None, meta_base=None, cleanup_dir=None):
-        super().__init__(parent)
+        super().__init__()
         self.library_root = library_root
         self.paths = list(paths)
         self.keep_duplicates = keep_duplicates
@@ -60,11 +96,12 @@ class ImportWorker(QThread):
         """Ask the worker to stop after the file it is currently on.
 
         Closing the window while an import runs must never destroy a
-        running QThread (Qt aborts the process). The flag is checked
+        running thread (Qt aborts the process). The flag is checked
         between files; `done` still fires, so the UI never hangs.
         """
         self._cancelled = True
 
+    @Slot()
     def run(self) -> None:
         imported = duplicates = errors = 0
         messages: list[str] = []
@@ -135,7 +172,7 @@ class _PackageCancelled(Exception):
     """Raised from the progress callback to stop verify/export cleanly."""
 
 
-class PackageWorker(QThread):
+class PackageWorker(QObject):
     """Verify or export a درس‌پک off the UI thread (M24).
 
     manifest's verify/export already accept a `progress` callback —
@@ -150,9 +187,8 @@ class PackageWorker(QThread):
     progress = Signal(int, int, str)   # done, total, current file name
     done = Signal(object)
 
-    def __init__(self, library_root, kind: str, path, file_ids=None,
-                 parent=None):
-        super().__init__(parent)
+    def __init__(self, library_root, kind: str, path, file_ids=None):
+        super().__init__()
         self.library_root = library_root
         self.kind = kind
         self.path = str(path)
@@ -175,6 +211,7 @@ class PackageWorker(QThread):
         self._check_cancelled()
         self.progress.emit(done, total, "")
 
+    @Slot()
     def run(self) -> None:
         from ..core import manifest as manifest_core
 
@@ -213,7 +250,7 @@ class PackageWorker(QThread):
                 pass
 
 
-class StatsWorker(QThread):
+class StatsWorker(QObject):
     """Compute library stats off the UI thread (the «آمار» dialog).
 
     Opens its OWN Library (one connection per thread), runs the indexed
@@ -222,14 +259,15 @@ class StatsWorker(QThread):
 
     done = Signal(object)                     # stats dict, or None on cancel
 
-    def __init__(self, library_root, parent=None):
-        super().__init__(parent)
+    def __init__(self, library_root):
+        super().__init__()
         self.library_root = library_root
         self._cancelled = False
 
     def cancel(self) -> None:
         self._cancelled = True
 
+    @Slot()
     def run(self) -> None:
         stats = None
         lib = None
@@ -249,7 +287,7 @@ class StatsWorker(QThread):
             self.done.emit(stats if not self._cancelled else None)
 
 
-class FeedbackPoster(QThread):
+class FeedbackPoster(QObject):
     """POST one feedback payload to the configured endpoint (background).
 
     Network must never run on the UI thread. done(ok: bool) — True only
@@ -260,19 +298,19 @@ class FeedbackPoster(QThread):
     starts, so a failure never loses feedback — the dialog (not this
     class) drives re-sending. A firmer timeout than a desktop would
     need, because students often are on phone hotspots. The dialog
-    parents this thread to the main window, so closing the form never
-    deletes a running thread.
+    runs this on a thread parented to the main window, so closing the
+    form never deletes a running thread.
     """
 
     done = Signal(bool)
 
-    def __init__(self, endpoint: str, payload: dict, parent=None,
-                 timeout: float = 8):
-        super().__init__(parent)
+    def __init__(self, endpoint: str, payload: dict, timeout: float = 8):
+        super().__init__()
         self.endpoint = endpoint
         self.payload = payload
         self.timeout = timeout
 
+    @Slot()
     def run(self) -> None:
         import json as _json
         import urllib.request
