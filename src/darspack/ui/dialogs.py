@@ -29,7 +29,9 @@ from PySide6.QtWidgets import (
 
 from .. import asset_path, i18n
 from ..core import db, manifest as manifest_core
-from ..core.normalize import persian_digits
+from ..core.normalize import latin_digits, match_key, persian_digits
+from ..core.stats import library_stats as library_stats   # re-exported for callers
+from ..core.suggest import learn_hint, load_hints, suggest
 from ..i18n import STRINGS, num, tr
 from .workers import FeedbackPoster, PackageWorker, start_worker
 from .smooth_scroll import enable_smooth_scroll
@@ -133,13 +135,6 @@ def _format_activity_detail(action: str, detail: str) -> tuple[str, bool]:
     return (persian_digits(detail) if i18n.language() == "fa" else detail), False
 
 
-_LATIN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-
-
-def _latin_digits(text: str) -> str:
-    return text.translate(_LATIN_DIGITS)
-
-
 class _PersianSpinBox(QSpinBox):
     """QSpinBox subclass that renders Persian numerals (۰-۹) in `fa` mode."""
 
@@ -147,7 +142,7 @@ class _PersianSpinBox(QSpinBox):
         return num(val)
 
     def valueFromText(self, text: str) -> int:
-        return super().valueFromText(_latin_digits(text))
+        return super().valueFromText(latin_digits(text))
 
 
 def make_year_combo(current: str | None) -> QComboBox:
@@ -155,7 +150,7 @@ def make_year_combo(current: str | None) -> QComboBox:
     school year) plus the years around it — anything else can be typed,
     the column is free text («1405-1406»)."""
     from ..core.schoolyear import current_school_year
-    chosen = _latin_digits(current) if current else current_school_year()
+    chosen = latin_digits(current) if current else current_school_year()
     try:
         base = int(chosen[:4])
     except ValueError:
@@ -920,6 +915,23 @@ class ExportDialog(QDialog):
         self.accept()
 
 
+def _save_tags(conn, fid: int, text: str) -> None:
+    """Replace a file's tags with the comma/«،»-separated text field.
+
+    Shared by the classify and metadata save paths — one definition of
+    what a tag field means (B12).
+    """
+    conn.execute("DELETE FROM file_tags WHERE file_id=?", (fid,))
+    for tag in text.replace(",", "،").split("،"):
+        tag = tag.strip()
+        if not tag:
+            continue
+        tag_id = db.get_or_create(conn, "tags", tag)
+        conn.execute(
+            "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
+            (fid, tag_id))
+
+
 class ClassifyDialog(QDialog):
     """Review the info of freshly imported files (بازبینی اطلاعات).
 
@@ -940,10 +952,18 @@ class ClassifyDialog(QDialog):
         # (second instance, or a phone delete while sharing) — drop the
         # missing ones instead of crashing on a None row below. If all
         # are gone the dialog simply shows an empty table.
-        file_ids = [fid for fid in file_ids
-                    if lib.conn.execute(
-                        "SELECT 1 FROM files WHERE id=?",
-                        (fid,)).fetchone() is not None]
+        # One query for the whole batch: the rows are needed for the table
+        # anyway, so this doubles as the existence check (B11).
+        rows_by_id = {}
+        if file_ids:
+            marks = ",".join("?" * len(file_ids))
+            rows_by_id = {
+                row["id"]: row for row in lib.conn.execute(
+                    f"""SELECT f.*, s.name AS subject_name
+                        FROM files f
+                        LEFT JOIN subjects s ON s.id=f.subject_id
+                        WHERE f.id IN ({marks})""", list(file_ids))}
+        file_ids = [fid for fid in file_ids if fid in rows_by_id]
         self.resize(1120, max(360, min(580, 230 + len(file_ids) * 46)))
 
         headers = [tr("col_name"), tr("meta_subject"), tr("meta_chapter"),
@@ -975,13 +995,12 @@ class ClassifyDialog(QDialog):
 
         subjects = [r["name"] for r in lib.conn.execute(
             "SELECT name FROM subjects ORDER BY name")]
+        hints = load_hints(lib.conn)       # one query, not one per file (B11)
+        self._names: dict[int, str] = {}
         self.rows = []                            # (file_id, widgets)
         for r, fid in enumerate(file_ids):
-            file_row = lib.conn.execute(
-                """SELECT f.*, s.name AS subject_name
-                   FROM files f
-                   LEFT JOIN subjects s ON s.id=f.subject_id
-                   WHERE f.id=?""", (fid,)).fetchone()
+            file_row = rows_by_id[fid]
+            self._names[fid] = file_row["original_name"]
 
             name_item = QTableWidgetItem(file_row["original_name"])
             name_item.setToolTip(file_row["original_name"])
@@ -991,9 +1010,8 @@ class ClassifyDialog(QDialog):
             # Pre-fill: the stored subject, then the package manifest's
             # subject (A5), then the filename heuristic's suggestion —
             # for files the importer left unclassified.
-            from ..core.suggest import load_hints, suggest
             suggested = suggest(Path(file_row["original_name"]).stem,
-                                learned=load_hints(lib.conn))
+                                learned=hints)
             prefill = (prefills or {}).get(fid) or {}
             subject = QComboBox()
             subject.setEditable(True)
@@ -1127,25 +1145,26 @@ class ClassifyDialog(QDialog):
                 if widget.value() == self._BULK_EMPTY[attr]:
                     widget.setValue(value)
 
-    def _learn_tokens(self, fid: int, subject_name: str) -> None:
+    def _learn_tokens(self, fid: int, subject_name: str,
+                      subject_keys: set[str]) -> None:
         """A4: remember the class's naming habits — each filename token
         (≥3 chars, not itself a subject name) votes token→subject. Only
         the next import's PRE-FILL gets smarter; nothing is auto-applied.
+
+        `subject_keys` is the subject table's match keys, computed once
+        per save by `_save_all` instead of once per file (B12).
         """
-        from ..core.normalize import match_key
-        from ..core.suggest import learn_hint
-        row = self.lib.conn.execute(
-            "SELECT original_name FROM files WHERE id=?", (fid,)).fetchone()
-        if row is None:
+        name = self._names.get(fid)
+        if not name:
             return
-        subject_keys = {match_key(r["name"]) for r in self.lib.conn.execute(
-            "SELECT name FROM subjects")}
-        for token in match_key(Path(row["original_name"]).stem).split():
+        for token in match_key(Path(name).stem).split():
             if len(token) >= 3 and token not in subject_keys:
                 learn_hint(self.lib.conn, token, subject_name)
 
     def _save_all(self) -> None:
         conn = self.lib.conn
+        subject_keys = {match_key(r["name"])
+                        for r in conn.execute("SELECT name FROM subjects")}
         with conn:
             for fid, subject, chapter, kind, lesson, year, tags in self.rows:
                 name = subject.currentText().strip()
@@ -1156,24 +1175,12 @@ class ClassifyDialog(QDialog):
                        lesson=?, school_year=? WHERE id=?""",
                     (subject_id, chapter.value() or None,
                      kind.currentText(), lesson.value() or None,
-                     _latin_digits(year.currentText().strip()) or None, fid))
+                     latin_digits(year.currentText().strip()) or None, fid))
                 if name:
-                    self._learn_tokens(fid, name)
-                self._save_tags(conn, fid, tags.text())
+                    self._learn_tokens(fid, name, subject_keys)
+                _save_tags(conn, fid, tags.text())
             db.log(conn, "classify", f"{len(self.rows)} files")
         self.accept()
-
-    def _save_tags(self, conn, fid: int, text: str) -> None:
-        """Replace the file's tags with the comma/«،»-separated field."""
-        conn.execute("DELETE FROM file_tags WHERE file_id=?", (fid,))
-        for tag in text.replace(",", "،").split("،"):
-            tag = tag.strip()
-            if not tag:
-                continue
-            tag_id = db.get_or_create(conn, "tags", tag)
-            conn.execute(
-                "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
-                (fid, tag_id))
 
 
 class VerifyReportDialog(QDialog):
@@ -1462,17 +1469,9 @@ class MetadataDialog(QDialog):
                    WHERE id=?""",
                 (subject_id, chapter, self.lesson.value() or None,
                  self.kind.currentText(),
-                 _latin_digits(self.year.currentText().strip()) or None,
+                 latin_digits(self.year.currentText().strip()) or None,
                  self.note.text(), self.file_id))
-            conn.execute("DELETE FROM file_tags WHERE file_id=?", (self.file_id,))
-            for tag in self.tags.text().replace(",", "،").split("،"):
-                tag = tag.strip()
-                if not tag:
-                    continue
-                tag_id = db.get_or_create(conn, "tags", tag)
-                conn.execute(
-                    "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
-                    (self.file_id, tag_id))
+            _save_tags(conn, self.file_id, self.tags.text())
             db.log(conn, "edit_meta", f"id={self.file_id}")
         self.accept()
 
@@ -1601,7 +1600,7 @@ class BulkEditDialog(QDialog):
         if self.lesson.value():
             sets.append("lesson=?")
             params.append(self.lesson.value())
-        year = _latin_digits(self.year.currentText().strip())
+        year = latin_digits(self.year.currentText().strip())
         if year and year != none:
             sets.append("school_year=?")
             params.append(year)
@@ -2245,44 +2244,25 @@ def stat_bar_row(name: str, count: int, max_count: int) -> QWidget:
     return row
 
 
-def library_stats(conn) -> dict:
-    """The numbers behind the stats dialog — one dict so the M10/M11
-    benchmark scripts can reuse the exact same queries."""
-    per_subject = [(r["name"], r["c"]) for r in conn.execute(
-        """SELECT s.name, COUNT(*) c FROM files f
-           JOIN subjects s ON s.id=f.subject_id
-           GROUP BY s.name ORDER BY c DESC""")]
-    per_kind = [(r["kind"], r["c"]) for r in conn.execute(
-        """SELECT kind, COUNT(*) c FROM files WHERE kind IS NOT NULL
-           GROUP BY kind ORDER BY c DESC""")]
-    total = conn.execute(
-        "SELECT COUNT(*) c, COALESCE(SUM(size_bytes),0) s FROM files"
-    ).fetchone()
-    dedup = conn.execute(
-        "SELECT COALESCE(SUM(size_bytes), 0) saved FROM import_skips"
-    ).fetchone()["saved"]
-    unclassified = conn.execute(
-        "SELECT COUNT(*) c FROM files WHERE subject_id IS NULL").fetchone()["c"]
-    return {
-        "file_count": total["c"],
-        "total_bytes": total["s"],
-        "dedup_bytes": dedup,
-        "unclassified": unclassified,
-        "per_subject": per_subject,
-        "per_kind": per_kind,
-    }
-
-
 class StatsProgressDialog(QDialog):
     """Opens the instant «آمار» is clicked: says what is happening and
     offers a real cancel (the user asked for exactly this after the old
-    silent UI-thread freeze). The worker runs in the background."""
+    silent UI-thread freeze). The worker runs in the background.
 
-    def __init__(self, parent):
+    The same dialog serves the duplicates scan (B17) through the three
+    keyword arguments: it only needs a title, a label and the attribute
+    name its parent window keeps the worker under (so cancel reaches the
+    right worker).
+    """
+
+    def __init__(self, parent, *, title_key: str = "stats_title",
+                 label_key: str = "stats_computing",
+                 worker_attr: str = "_stats_worker"):
         super().__init__(parent)
-        self.setWindowTitle(tr("stats_title"))
+        self._worker_attr = worker_attr
+        self.setWindowTitle(tr(title_key))
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(tr("stats_computing")))
+        layout.addWidget(QLabel(tr(label_key)))
         bar = QProgressBar()
         bar.setRange(0, 0)                    # indeterminate = "working…"
         layout.addWidget(bar)
@@ -2294,7 +2274,7 @@ class StatsProgressDialog(QDialog):
 
     def _cancel(self) -> None:
         parent = self.parent()
-        worker = getattr(parent, "_stats_worker", None)
+        worker = getattr(parent, self._worker_attr, None)
         if worker is not None:
             worker.cancel()
         self.reject()

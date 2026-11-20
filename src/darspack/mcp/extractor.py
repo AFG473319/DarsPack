@@ -18,6 +18,10 @@ from pathlib import Path
 #: spike RAM on an 8 GB laptop.
 MAX_PDF_BYTES = 8 * 1024 * 1024
 
+# PDF content streams: `stream` … `endstream`. Compiled once at import —
+# this pattern is re-used for every PDF that gets previewed.
+_STREAM_RE = re.compile(rb"stream[\r\n]+(.*?)[\r\n]+endstream", re.DOTALL)
+
 
 def extract_preview(file_path: Path | str, max_chars: int = 2000) -> str:
     """Extract a representative text snippet from a file for LLM classification."""
@@ -59,11 +63,10 @@ def _extract_pdf_text(path: Path, max_chars: int) -> str:
         return f"[Error reading PDF: {e}]"
 
     # Search for all FlateDecode streams
-    stream_re = re.compile(rb"stream[\r\n]+(.*?)[\r\n]+endstream", re.DOTALL)
     extracted_chunks = []
     total_len = 0
 
-    for match in stream_re.finditer(data):
+    for match in _STREAM_RE.finditer(data):
         raw_stream = match.group(1)
         try:
             decompressed = zlib.decompress(raw_stream)

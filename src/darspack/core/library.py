@@ -38,6 +38,20 @@ class Library:
             self.health_check()
         return self
 
+    @classmethod
+    def for_background(cls, root) -> "Library":
+        """Open a library for a worker thread without the startup passes.
+
+        The desktop window opens the library — seeding, orphan sweep,
+        health check — before any worker starts, so re-running those on
+        every import/export/stats batch is pure repeated work (the health
+        check alone stats every file in the library). A folder with no
+        catalog yet (a test, a script, a first run) still gets the full
+        one-time setup, so a worker never lands on a missing schema.
+        """
+        fresh = not (Path(root) / "catalog.db").exists()
+        return cls(root, maintain=fresh).open()
+
     def seed_subjects(self) -> None:
         """Pre-fill the subjects table on a brand-new library only (A1).
 

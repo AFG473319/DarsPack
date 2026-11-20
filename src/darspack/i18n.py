@@ -7,6 +7,8 @@ as-is regardless of language.
 """
 from __future__ import annotations
 
+from .core.normalize import persian_digits
+
 _current = "fa"   # Persian-first; switchable at runtime
 
 STRINGS = {
@@ -81,6 +83,8 @@ STRINGS = {
         "dups_tab1": "تکراری کامل",
         "dups_tab2": "نسخه‌های متفاوت، نام یکسان",
         "dups_tab3": "یک محتوا، نام‌های مختلف",
+        "dups_title": "بررسی تکراری‌ها",
+        "dups_computing": "در حال بررسی کتابخانه…",
         "dups_clean_msg": "هیچ موردی یافت نشد",
         "dups_clean_sub": "کتابخانه‌ی شما در این بخش کاملاً تمیز و مرتب است.",
         "dups_clean_sub1": "هیچ دو فایلی با محتوای دقیقاً یکسان در کتابخانه وجود ندارد.",
@@ -417,6 +421,8 @@ STRINGS = {
         "dups_tab1": "Exact duplicates",
         "dups_tab2": "Different versions, same name",
         "dups_tab3": "Same content, different names",
+        "dups_title": "Duplicate check",
+        "dups_computing": "Scanning the library…",
         "dups_clean_msg": "No issues found",
         "dups_clean_sub": "Your library is clean and well-organized in this category.",
         "dups_clean_sub1": "No two files share identical binary content.",
@@ -699,33 +705,40 @@ def tr(key: str, lang: str | None = None) -> str:
     return STRINGS[active].get(key, STRINGS["fa"].get(key, key))
 
 
-_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
-
-
 def num(value, lang: str | None = None) -> str:
     """Format a number for a language: ۰-۹ in Persian, Latin in English.
     The single helper for UI counts, years and sizes."""
     text = str(value)
-    return text.translate(_PERSIAN_DIGITS) if (lang or _current) == "fa" else text
+    return persian_digits(text) if (lang or _current) == "fa" else text
+
+
+def has_rtl(text: str) -> bool:
+    """True if `text` contains Persian/Arabic letters (the RTL scripts)."""
+    return any(
+        "\u0600" <= ch <= "\u06FF"
+        or "\u0750" <= ch <= "\u077F"
+        or "\uFB50" <= ch <= "\uFDFF"
+        or "\uFE70" <= ch <= "\uFEFF"
+        for ch in text
+    )
+
+
+def isolate_rtl(text: str) -> str:
+    """Wrap RTL text in directional isolates so mixed Latin/numbers inside
+    it keep their order; non-RTL text passes through untouched."""
+    if not text or not has_rtl(text):
+        return text
+    return f"\u200F\u2067{text}\u2069"
 
 
 def bidi_filename(name: str, lang: str | None = None) -> str:
     """Wrap mixed RTL+ASCII-extension filenames with Unicode isolates so
     numerals stay bound to Persian words and `.ext` stays left-to-right."""
-    if not name or (lang or _current) != "fa":
-        return name
-    has_rtl = any(
-        "\u0600" <= ch <= "\u06FF"
-        or "\u0750" <= ch <= "\u077F"
-        or "\uFB50" <= ch <= "\uFDFF"
-        or "\uFE70" <= ch <= "\uFEFF"
-        for ch in name
-    )
-    if not has_rtl:
+    if not name or (lang or _current) != "fa" or not has_rtl(name):
         return name
     dot = name.rfind(".")
     if 0 < dot < len(name) - 1:
         stem, suffix = name[:dot], name[dot:]
         if suffix.isascii() and suffix[1:].isalnum():
             return f"\u200F\u2067{stem}\u2069 \u2066({suffix})\u2069"
-    return f"\u200F\u2067{name}\u2069"
+    return isolate_rtl(name)

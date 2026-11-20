@@ -134,6 +134,25 @@ def test_library_maintain_false_skips_maintenance(tmp_path):
             lib.conn.execute("SELECT COUNT(*) FROM subjects")
 
 
+def test_for_background_skips_the_startup_passes(tmp_path):
+    # B9: workers open the library the window already prepared — seeding,
+    # the orphan sweep and the health check must not run again per batch.
+    root = tmp_path / "lib"
+    with Library(root) as lib:
+        before = lib.conn.execute(
+            "SELECT COUNT(*) c FROM activity_log").fetchone()["c"]
+    with Library.for_background(root) as lib:
+        after = lib.conn.execute(
+            "SELECT COUNT(*) c FROM activity_log").fetchone()["c"]
+        assert after == before                     # no new startup log rows
+        assert lib.conn.execute(
+            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] > 0
+    # a folder with no catalog yet still gets a usable schema
+    with Library.for_background(tmp_path / "fresh") as lib:
+        assert lib.conn.execute(
+            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] > 0
+
+
 def test_list_trash_with_corrupted_metadata_json(tmp_path):
     with Library(tmp_path / "lib") as lib:
         # Create trash and trash_meta directories

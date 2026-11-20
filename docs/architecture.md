@@ -23,6 +23,7 @@ src/darspack/
 │   ├── importer.py       # copy-in + hash + import-time dedup + metadata suggestion  (uses the modules above)
 │   ├── dedup.py          # duplicate groups + conflict rules R1–R3 + likely versions 
 │   ├── search.py         # normalized multi-token search over the catalog            
+│   ├── stats.py          # library statistics dict (desktop «آمار» + MCP get_stats)  
 │   ├── manifest.py       # درس‌پک manifest build + package export/verify/read        
 │   ├── backup.py         # full-library backup ZIP (catalog snapshot + files)        
 │   └── schoolyear.py     # Jalali school-year helpers (Mehr→Shahrivar span)          
@@ -38,8 +39,9 @@ src/darspack/
 │   │                     #   lesson/year, package prefill), bulk edit,
 │   │                     #   metadata, export, verify, duplicates, settings,
 │   │                     #   share (QR), history, stats
-│   └── workers.py        # background import thread (own DB connection;
-│                         #   carries درس‌پک manifest metas + subject/tags prefill)
+│   └── workers.py        # background workers: import (own DB connection,
+│                         #   manifest metas + prefill), package export/verify,
+│                         #   stats and duplicates scans
 ├── web/                  # LAN web client + server
 │   ├── server.py         # stdlib ThreadingHTTPServer, PIN gate, endpoints           
 │   ├── sync.py           # manifest/diff logic shared with packaging                 

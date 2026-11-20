@@ -27,8 +27,10 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from .. import __version__          # for the FeedbackPoster User-Agent
+from ..core.dedup import duplicate_groups, rename_hints, version_conflicts
 from ..core.importer import import_file, iter_files
 from ..core.library import Library
+from ..core.stats import library_stats
 
 
 def start_worker(worker, parent=None):
@@ -108,7 +110,7 @@ class ImportWorker(QObject):
         new_ids: list[int] = []
         lib = None
         try:
-            lib = Library(self.library_root).open()
+            lib = Library.for_background(self.library_root).open()
             files = list(iter_files(self.paths))
             for i, path in enumerate(files, start=1):
                 if self._cancelled:
@@ -222,7 +224,7 @@ class PackageWorker(QObject):
                     self.path, progress=self._verify_progress)
                 self.done.emit({"kind": "verify", "report": report})
             else:
-                lib = Library(self.library_root).open()
+                lib = Library.for_background(self.library_root).open()
                 info = manifest_core.export_package(
                     lib.conn, lib.files_dir, self.file_ids, self.path,
                     progress=self._export_progress)
@@ -272,9 +274,8 @@ class StatsWorker(QObject):
         stats = None
         lib = None
         try:
-            lib = Library(self.library_root).open()
+            lib = Library.for_background(self.library_root).open()
             if not self._cancelled:
-                from ..ui.dialogs import library_stats
                 stats = library_stats(lib.conn)
         except Exception:
             stats = None                      # cancelled or failed: no dialog
@@ -285,6 +286,48 @@ class StatsWorker(QObject):
                 except Exception:
                     pass
             self.done.emit(stats if not self._cancelled else None)
+
+
+class DuplicatesWorker(QObject):
+    """Scan for duplicates/conflicts off the UI thread (B17).
+
+    The three reports are full-library scans; on a large catalog they
+    blocked the window long enough to feel frozen. Same contract as
+    StatsWorker: opens its OWN Library, emits one dict — or None when
+    the user cancelled (or the scan failed).
+    """
+
+    done = Signal(object)                     # report dict, or None on cancel
+
+    def __init__(self, library_root):
+        super().__init__()
+        self.library_root = library_root
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    @Slot()
+    def run(self) -> None:
+        report = None
+        lib = None
+        try:
+            lib = Library.for_background(self.library_root).open()
+            if not self._cancelled:
+                report = {
+                    "groups": duplicate_groups(lib.conn),
+                    "conflicts": version_conflicts(lib.conn),
+                    "renames": rename_hints(lib.conn),
+                }
+        except Exception:
+            report = None                     # cancelled or failed: no dialog
+        finally:
+            if lib is not None:
+                try:
+                    lib.close()
+                except Exception:
+                    pass
+            self.done.emit(report if not self._cancelled else None)
 
 
 class FeedbackPoster(QObject):

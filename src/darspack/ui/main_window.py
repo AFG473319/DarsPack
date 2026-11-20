@@ -27,9 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, __version__, asset_path, i18n
-from ..core.dedup import duplicate_groups, rename_hints, version_conflicts
 from ..core.search import search as catalog_search
-from ..core.search import unclassified_count
 from ..i18n import tr
 from . import dialogs, icons, theme
 from .delegates import FileNameDelegate, FileNameLabel, KindBadgeDelegate
@@ -1059,9 +1057,12 @@ class MainWindow(QMainWindow):
         self.table.setUpdatesEnabled(True)
         self._update_empty_state(len(rows))
         self._update_action_states()
-        unclassified = unclassified_count(self.lib.conn)   # F6: computed once
-        total_files = self.lib.conn.execute(
-            "SELECT COUNT(*) FROM files").fetchone()[0]
+        # One query for both numbers (B10): the status bar wants the total
+        # and the unclassified nudge, and COUNT over the same table twice
+        # is a second full scan for a value it already has.
+        total_files, unclassified = self.lib.conn.execute(
+            "SELECT COUNT(*) c, COALESCE(SUM(subject_id IS NULL), 0) u "
+            "FROM files").fetchone()
         is_filtered = bool(
             self.search_box.text().strip()
             or subject_data is not None
@@ -1290,12 +1291,13 @@ class MainWindow(QMainWindow):
         rows = self._selected_rows()
         if not rows:
             return
-        paths = []
-        for r in rows:
-            rec = self.lib.conn.execute(
-                "SELECT stored_name FROM files WHERE id=?", (r["id"],)).fetchone()
-            if rec and rec["stored_name"]:
-                paths.append(str(self.lib.files_dir / rec["stored_name"]))
+        # One query for the whole selection (B14) instead of one per row.
+        ids = [r["id"] for r in rows]
+        marks = ",".join("?" * len(ids))
+        stored = {r["id"]: r["stored_name"] for r in self.lib.conn.execute(
+            f"SELECT id, stored_name FROM files WHERE id IN ({marks})", ids)}
+        paths = [str(self.lib.files_dir / stored[r["id"]])
+                 for r in rows if stored.get(r["id"])]
         QApplication.clipboard().setText("\n".join(paths))
 
     def _show_search_context_menu(self, pos: QPoint) -> None:
@@ -1394,13 +1396,16 @@ class MainWindow(QMainWindow):
         it), but never a row pointing at an erased file.
         """
         rows = []
-        for fid in file_ids:
-            row = self.lib.conn.execute(
-                """SELECT f.*, s.name AS subject_name FROM files f
-                   LEFT JOIN subjects s ON s.id=f.subject_id WHERE f.id=?""",
-                (fid,)).fetchone()
-            if row is not None:
-                rows.append(row)
+        ids = list(file_ids)
+        if ids:
+            # One query for the batch (B14) — the delete loop below needs
+            # the full row of every file anyway.
+            marks = ",".join("?" * len(ids))
+            rows_by_id = {row["id"]: row for row in self.lib.conn.execute(
+                f"""SELECT f.*, s.name AS subject_name FROM files f
+                    LEFT JOIN subjects s ON s.id=f.subject_id
+                    WHERE f.id IN ({marks})""", ids)}
+            rows = [rows_by_id[fid] for fid in ids if fid in rows_by_id]
         if not rows:
             return
         if len(rows) == 1:
@@ -1603,10 +1608,39 @@ class MainWindow(QMainWindow):
             on_done(result)
 
     def show_duplicates(self) -> None:
+        """Duplicates/conflicts/rename hints — three full-library scans.
+
+        They run in a background worker (B17): on a large catalog the
+        scans blocked the window long enough to look frozen. The progress
+        dialog opens instantly and offers a real cancel, exactly like
+        «آمار» (show_stats).
+        """
+        from .workers import DuplicatesWorker
+        self._dups_worker = DuplicatesWorker(str(self.lib.root))
+        progress = dialogs.StatsProgressDialog(
+            self, title_key="dups_title", label_key="dups_computing",
+            worker_attr="_dups_worker")
+        # Kept on self so the bound-method done handler below can find it
+        # (see _import_progress for why no lambda is used here).
+        self._dups_progress = progress
+        self._dups_worker.done.connect(self._duplicates_finished)
+        self._dups_thread = start_worker(self._dups_worker, parent=self)
+        progress.exec()          # modal; its cancel stops the worker
+
+    def _duplicates_finished(self, report) -> None:
+        progress = self._dups_progress
+        progress.accept()        # closes the progress dialog either way
+        # The worker deletes itself when its thread finishes — drop the
+        # references now, while the object is still alive.
+        self._dups_worker = None
+        self._dups_thread = None
+        self._dups_progress = None
+        if report is None:       # user cancelled
+            return
         dialogs.DuplicatesDialog(self, {
-            tr("dups_tab1"): duplicate_groups(self.lib.conn),
-            tr("dups_tab2"): version_conflicts(self.lib.conn),
-            tr("dups_tab3"): rename_hints(self.lib.conn),
+            tr("dups_tab1"): report["groups"],
+            tr("dups_tab2"): report["conflicts"],
+            tr("dups_tab3"): report["renames"],
         }).exec()
 
     def show_history(self) -> None:
@@ -1796,6 +1830,7 @@ class MainWindow(QMainWindow):
         pairs = []
         for worker_attr, thread_attr in (("_worker", "_worker_thread"),
                                          ("_stats_worker", "_stats_thread"),
+                                         ("_dups_worker", "_dups_thread"),
                                          ("_pkg_worker", "_pkg_thread")):
             worker = getattr(self, worker_attr, None)
             thread = getattr(self, thread_attr, None)
@@ -1812,6 +1847,7 @@ class MainWindow(QMainWindow):
                 continue
             handler = {"_worker": "_import_finished",
                        "_stats_worker": "_stats_finished",
+                       "_dups_worker": "_duplicates_finished",
                        "_pkg_worker": "_package_finished"}
             for attr, slot in handler.items():
                 if getattr(self, attr, None) is worker:

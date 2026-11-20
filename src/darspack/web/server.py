@@ -29,6 +29,7 @@ from pathlib import Path
 
 from .. import asset_path
 from ..core.library import Library
+from ..core.normalize import latin_digits
 
 _ICON_TYPES = {
     "icon-192.png": "image/png",
@@ -144,7 +145,6 @@ def _int_param(query: dict, key: str) -> int | None:
     Anything non-numeric is ignored (the filter just doesn't apply) —
     a malformed value must never crash a request.
     """
-    from ..core.normalize import latin_digits
     raw = latin_digits((query.get(key) or [""])[0])
     return int(raw) if raw.isdigit() else None
 
@@ -665,7 +665,6 @@ def _make_handler(server: ShareServer):
             self._serve_static(asset_path(f"fonts/{name}"), "font/ttf")
 
         def _serve_file(self, file_id: str, query: dict | None = None) -> None:
-            from ..core.normalize import latin_digits
             if not latin_digits(file_id).isdigit():
                 self._json({"error": "id"}, 400)
                 return

@@ -164,6 +164,58 @@ def test_stats_worker_cancel_returns_none(tmp_path, qapp):
         assert spy.at(0) == [None]            # no results dialog on cancel
 
 
+# ---- duplicates: the scan also runs off the UI thread (B17) --------------
+
+def test_duplicates_worker_matches_the_direct_scan(tmp_path, qapp):
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.core.dedup import duplicate_groups, rename_hints, version_conflicts
+    from darspack.core.importer import import_file
+    from darspack.ui.workers import DuplicatesWorker, start_worker
+
+    with Library(tmp_path / "lib") as lib:
+        for i in range(3):
+            p = tmp_path / f"f{i}.pdf"
+            p.write_bytes(b"x" * (i + 1))
+            import_file(lib, p)
+        expected = {
+            "groups": duplicate_groups(lib.conn),
+            "conflicts": version_conflicts(lib.conn),
+            "renames": rename_hints(lib.conn),
+        }
+
+        def shape(report):
+            """Labels + file ids per tab — sqlite3.Row objects compare by
+            identity, so the dataclasses themselves cannot be compared."""
+            return {key: [(g.label_fa, [r["id"] for r in g.rows])
+                          for g in groups]
+                    for key, groups in report.items()}
+
+        worker = DuplicatesWorker(str(tmp_path / "lib"))
+        spy = QSignalSpy(worker.done)
+        thread = start_worker(worker)
+        _wait_signal(worker.done, 15)
+        assert spy.count() > 0, "duplicates done never emitted"
+        thread.wait(5000)
+        assert shape(spy.at(0)[0]) == shape(expected)
+
+
+def test_duplicates_worker_cancel_returns_none(tmp_path, qapp):
+    from PySide6.QtTest import QSignalSpy
+
+    from darspack.ui.workers import DuplicatesWorker, start_worker
+
+    with Library(tmp_path / "lib"):
+        worker = DuplicatesWorker(str(tmp_path / "lib"))
+        worker.cancel()                       # cancelled before start
+        spy = QSignalSpy(worker.done)
+        thread = start_worker(worker)
+        _wait_signal(worker.done, 15)
+        assert spy.count() > 0, "duplicates done never emitted"
+        thread.wait(5000)
+        assert spy.at(0) == [None]
+
+
 # ---- feedback: the unsent queue, drafts and limits ------------------------
 
 def _flush_dialog(dlg):

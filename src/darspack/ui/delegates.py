@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QApplication, QLabel, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
 )
 
+from .. import i18n
+
 # subject/kind colours are deliberately muted so the eye stays on the names
 KIND_BADGES = {
     "جزوه": ("#273556", "#b9c8ea"),
@@ -49,24 +51,6 @@ class KindBadgeDelegate(QStyledItemDelegate):
         painter.setPen(QColor(foreground))
         painter.drawText(rect, Qt.AlignCenter, text)
         painter.restore()
-
-
-def _has_rtl(text: str) -> bool:
-    return any(
-        "\u0600" <= ch <= "\u06FF"
-        or "\u0750" <= ch <= "\u077F"
-        or "\uFB50" <= ch <= "\uFDFF"
-        or "\uFE70" <= ch <= "\uFEFF"
-        for ch in text
-    )
-
-
-def _isolate_stem(stem: str) -> str:
-    """Wrap stems with Arabic/Persian characters in RTL directional isolates
-    so mixed English/number words inside filenames don't reorder awkwardly."""
-    if not stem or not _has_rtl(stem):
-        return stem
-    return f"\u200F\u2067{stem}\u2069"
 
 
 def split_filename_ext(name: str) -> tuple[str, str]:
@@ -158,7 +142,7 @@ def paint_filename_badge(
 
     painter.setPen(text_color)
     align = (Qt.AlignRight if rtl else Qt.AlignLeft) | Qt.AlignAbsolute | Qt.AlignVCenter
-    painter.drawText(stem_rect, align, _isolate_stem(elided))
+    painter.drawText(stem_rect, align, i18n.isolate_rtl(elided))
     painter.restore()
 
 

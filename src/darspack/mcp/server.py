@@ -22,6 +22,7 @@ from ..core.library import Library
 from ..core.manifest import export_package, verify_package
 from ..core.normalize import match_key
 from ..core.search import search
+from ..core.stats import library_stats
 from ..core.suggest import suggest, learn_hint
 from ..paths import default_library_path, user_documents_dir
 from .extractor import extract_preview
@@ -638,39 +639,18 @@ class DarsPackMcpServer:
         }
 
     def tool_get_stats(self, args: dict) -> dict:
-        conn = self.lib.conn
-        total = conn.execute(
-            "SELECT COUNT(*) c, COALESCE(SUM(size_bytes),0) s FROM files"
-        ).fetchone()
-        dedup = conn.execute(
-            "SELECT COALESCE(SUM(size_bytes), 0) saved FROM import_skips"
-        ).fetchone()["saved"]
-        unclassified = conn.execute(
-            "SELECT COUNT(*) c FROM files WHERE subject_id IS NULL"
-        ).fetchone()["c"]
-
-        per_subject = [
-            {"subject": r["name"], "count": r["c"]}
-            for r in conn.execute(
-                """SELECT s.name, COUNT(*) c FROM files f
-                   JOIN subjects s ON s.id=f.subject_id
-                   GROUP BY s.name ORDER BY c DESC"""
-            )
-        ]
-        per_kind = [
-            {"kind": r["kind"], "count": r["c"]}
-            for r in conn.execute(
-                """SELECT kind, COUNT(*) c FROM files WHERE kind IS NOT NULL
-                   GROUP BY kind ORDER BY c DESC"""
-            )
-        ]
+        # Same queries the desktop «آمار» dialog runs (B16) — one
+        # definition of the numbers, two presentations.
+        stats = library_stats(self.lib.conn)
         return {
-            "file_count": total["c"],
-            "total_bytes": total["s"],
-            "dedup_bytes_saved": dedup,
-            "unclassified_count": unclassified,
-            "per_subject": per_subject,
-            "per_kind": per_kind,
+            "file_count": stats["file_count"],
+            "total_bytes": stats["total_bytes"],
+            "dedup_bytes_saved": stats["dedup_bytes"],
+            "unclassified_count": stats["unclassified"],
+            "per_subject": [{"subject": name, "count": count}
+                            for name, count in stats["per_subject"]],
+            "per_kind": [{"kind": kind, "count": count}
+                         for kind, count in stats["per_kind"]],
         }
 
     # --- Dispatch JSON-RPC methods ---

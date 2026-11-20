@@ -43,29 +43,44 @@ def _now() -> str:
     return _dt.datetime.now().isoformat(timespec="seconds")
 
 
-def _fetch_entry(conn, file_id: int) -> dict:
-    row = conn.execute(
-        """SELECT f.*, s.name AS subject_name
-           FROM files f LEFT JOIN subjects s ON s.id = f.subject_id
-           WHERE f.id = ?""", (file_id,)).fetchone()
-    if row is None:
-        raise KeyError(f"file id {file_id} not found in catalog")
-    tags = [t["name"] for t in conn.execute(
-        """SELECT t.name FROM tags t
-           JOIN file_tags ft ON ft.tag_id = t.id
-           WHERE ft.file_id = ?""", (file_id,))]
-    return {
-        "name": row["original_name"],
-        "sha256": row["sha256"],
-        "size": row["size_bytes"],
-        "subject": row["subject_name"],
-        "chapter": row["chapter"],
-        "lesson": row["lesson"],
-        "school_year": row["school_year"],
-        "kind": row["kind"],
-        "tags": tags,
-        "stored_name": row["stored_name"],   # internal; removed from manifest
-    }
+def _fetch_entries(conn, file_ids) -> list[dict]:
+    """Manifest entries for `file_ids`, in the order given (B13).
+
+    Two queries for the whole batch instead of two per file: the catalog
+    row (with its subject name) and the tag names, both keyed by id.
+    """
+    ids = list(file_ids)
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = {row["id"]: row for row in conn.execute(
+        f"""SELECT f.*, s.name AS subject_name
+            FROM files f LEFT JOIN subjects s ON s.id = f.subject_id
+            WHERE f.id IN ({marks})""", ids)}
+    tags: dict[int, list[str]] = {}
+    for tag in conn.execute(
+            f"""SELECT ft.file_id, t.name FROM tags t
+                JOIN file_tags ft ON ft.tag_id = t.id
+                WHERE ft.file_id IN ({marks})""", ids):
+        tags.setdefault(tag["file_id"], []).append(tag["name"])
+    entries = []
+    for file_id in ids:
+        row = rows.get(file_id)
+        if row is None:
+            raise KeyError(f"file id {file_id} not found in catalog")
+        entries.append({
+            "name": row["original_name"],
+            "sha256": row["sha256"],
+            "size": row["size_bytes"],
+            "subject": row["subject_name"],
+            "chapter": row["chapter"],
+            "lesson": row["lesson"],
+            "school_year": row["school_year"],
+            "kind": row["kind"],
+            "tags": tags.get(file_id, []),
+            "stored_name": row["stored_name"],   # internal; removed from manifest
+        })
+    return entries
 
 
 def export_package(conn, files_dir, file_ids, out_path, progress=None,
@@ -86,7 +101,7 @@ def export_package(conn, files_dir, file_ids, out_path, progress=None,
     # a catalog.db snapshot whose rows point at those stored names — with
     # friendly labels a restore leaves the copied files unreferenced, and the
     # next startup's orphan sweep deletes them (data loss). Fixed 2026-11-17.
-    entries = [_fetch_entry(conn, fid) for fid in file_ids]
+    entries = _fetch_entries(conn, file_ids)
     manifest = {"format": FORMAT, "version": VERSION, "created": _now(),
                 "files": []}
     out_path = Path(out_path)

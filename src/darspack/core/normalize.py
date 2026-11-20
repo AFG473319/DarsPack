@@ -12,7 +12,6 @@ names — so that typing style never changes what matches:
 """
 from __future__ import annotations
 
-import re
 import unicodedata
 
 # Arabic letters commonly mistyped for their Persian equivalents.
@@ -22,10 +21,18 @@ _AR_TO_FA = str.maketrans({"ي": "ی", "ك": "ک", "ۀ": "ه", "ة": "ه"})
 _TO_LATIN = str.maketrans("۰۱۲۳۴۵۶۷۸۹" + "٠١٢٣٤٥٦٧٨٩", "0123456789" * 2)
 _TO_PERSIAN = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
-# Combining marks (fatha, kasra, sukun, …) and tatweel (کشیده).
-_DIACRITICS = re.compile(r"[\u064B-\u065F\u0670\u0640]")
-_SPACES = re.compile(r"\s+")
 ZWNJ = "\u200c"
+
+# One table for normalize(): the three substitutions above plus dropping
+# combining marks (fatha, kasra, sukun, …) and tatweel (کشیده), and
+# treating ZWNJ as a space. Disjoint character sets, so a single pass
+# gives exactly what three chained passes used to.
+_NORMALIZE_TABLE = {
+    **_AR_TO_FA,
+    **_TO_LATIN,
+    ord(ZWNJ): " ",
+    **{cp: None for cp in (*range(0x064B, 0x0660), 0x0670, 0x0640)},
+}
 
 
 def latin_digits(text: str) -> str:
@@ -43,10 +50,9 @@ def normalize(text: str) -> str:
     if not text:
         return ""
     text = unicodedata.normalize("NFC", text)
-    text = text.translate(_AR_TO_FA).translate(_TO_LATIN)
-    text = text.replace(ZWNJ, " ")
-    text = _DIACRITICS.sub("", text)
-    return _SPACES.sub(" ", text).strip()
+    # str.split() splits on the same Unicode whitespace runs the old
+    # regex matched, and drops leading/trailing whitespace too.
+    return " ".join(text.translate(_NORMALIZE_TABLE).split())
 
 
 def match_key(text: str) -> str:

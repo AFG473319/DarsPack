@@ -51,6 +51,14 @@ MAX_CHAPTER = 40  # sanity bound — anything larger is not a school chapter
 # Grade words in filenames («نمونه سوال ریاضی نهم»); a display hint only.
 _GRADES = ("نهم", "هشتم", "هفتم")
 
+# Pre-normalized lookup tables (A6): match_key() is the expensive part and
+# these are constants, so normalize once at import instead of once per
+# filename per hint. Insertion order is kept — the first match wins.
+_KIND_HINT_KEYS = [(match_key(hint), kind) for hint, kind in _KIND_HINTS.items()]
+_DEFAULT_SUBJECT_KEYS = sorted(
+    ((match_key(name), name) for name in DEFAULT_SUBJECTS),
+    key=lambda pair: len(pair[0]), reverse=True)
+
 
 def suggest(filename_stem: str, subjects=None, learned: dict | None = None) -> dict:
     """Suggest {'subject', 'chapter', 'lesson', 'kind', 'grade'} from a filename.
@@ -71,9 +79,14 @@ def suggest(filename_stem: str, subjects=None, learned: dict | None = None) -> d
 
     # Longest match first: «علوم تجربی» must beat any shorter overlap, and
     # a custom subject list gets the same courtesy.
-    for subj in sorted(subjects if subjects is not None else DEFAULT_SUBJECTS,
-                       key=lambda s: len(match_key(s)), reverse=True):
-        if match_key(subj) in key:
+    if subjects is None:
+        subject_pairs = _DEFAULT_SUBJECT_KEYS
+    else:
+        subject_pairs = sorted(
+            ((match_key(name), name) for name in subjects),
+            key=lambda pair: len(pair[0]), reverse=True)
+    for subj_key, subj in subject_pairs:
+        if subj_key in key:
             out["subject"] = subj
             break
 
@@ -95,8 +108,8 @@ def suggest(filename_stem: str, subjects=None, learned: dict | None = None) -> d
                 out["lesson"] = num
                 break
 
-    for hint, kind in _KIND_HINTS.items():
-        if match_key(hint) in key:
+    for hint_key, kind in _KIND_HINT_KEYS:
+        if hint_key in key:
             out["kind"] = kind
             break
 

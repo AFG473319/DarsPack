@@ -1,9 +1,10 @@
 """Streaming SHA-256 (هش فایل).
 
-Reads the file in 1 MB chunks so a large PDF never loads fully into
-RAM — the target laptop has 8 GB shared by the app, the browser client
-and everything else. `progress(done, total)` lets the UI show a bar
-without knowing any hashing details.
+Reads the file in fixed-size chunks so a large PDF never loads fully
+into RAM — the target laptop has 8 GB shared by the app, the browser
+client and everything else. `progress(done, total)` lets the UI show a
+bar without knowing any hashing details; without a callback the read
+loop runs inside hashlib (C) instead.
 """
 from __future__ import annotations
 
@@ -21,9 +22,15 @@ def sha256_file(path, progress=None, size: int | None = None) -> str:
     the file is not stat()ed twice.
     """
     path = Path(path)
-    digest = hashlib.sha256()
+    if progress is None:
+        # hashlib.file_digest runs the read loop in C (same 1 MB buffer,
+        # same constant memory) — the Python loop below exists only to
+        # report progress, so it is skipped when nobody is watching.
+        with open(path, "rb") as f:
+            return hashlib.file_digest(f, "sha256").hexdigest()
     if size is None:
         size = path.stat().st_size
+    digest = hashlib.sha256()
     total = size
     done = 0
     with open(path, "rb") as f:
@@ -33,6 +40,5 @@ def sha256_file(path, progress=None, size: int | None = None) -> str:
                 break
             digest.update(chunk)
             done += len(chunk)
-            if progress is not None:
-                progress(done, total)
+            progress(done, total)
     return digest.hexdigest()
