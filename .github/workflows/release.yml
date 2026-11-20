@@ -11,6 +11,11 @@
 # agree) → PyInstaller + Inno Setup build → SHA-256 checksums → GitHub
 # Release with all assets attached.
 #
+# Release notes: a curated changelog committed as docs/releases/<tag>.md
+# is used as the release body when present (it ships with the version
+# bump, so the notes match the tagged code); otherwise the workflow falls
+# back to GitHub's generated notes.
+#
 # Rehearsal without publishing: run this workflow manually with the
 # dry_run input enabled (default) — it tests and builds but releases nothing.
 #
@@ -94,9 +99,21 @@ jobs:
         if: ${{ github.ref_type == 'tag' && inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ github.token }}
+          NOTES_FILE: docs/releases/${{ github.ref_name }}.md
         shell: bash
         run: |
-          ARGS=(--title "DarsPack ${TAG#v}" --generate-notes)
+          # Release notes: a curated changelog committed as
+          # docs/releases/<tag>.md (it ships in the same commit as the
+          # version bump, so the notes always match the tagged code),
+          # otherwise GitHub's generated notes as a fallback.
+          if [ -f "$NOTES_FILE" ]; then
+            echo "Using curated release notes: $NOTES_FILE"
+            NOTES=(--notes-file "$NOTES_FILE")
+          else
+            echo "No $NOTES_FILE — using GitHub's generated notes"
+            NOTES=(--generate-notes)
+          fi
+          ARGS=(--title "DarsPack ${TAG#v}")
           if [[ "$TAG" =~ -(alpha|beta|rc)\.[0-9]+$ ]]; then
             ARGS+=(--prerelease)
           fi
@@ -104,7 +121,7 @@ jobs:
             dist/DarsPack-Setup.exe \
             dist/DarsPack-windows.zip \
             dist/SHA256SUMS.txt \
-            "${ARGS[@]}"
+            "${ARGS[@]}" "${NOTES[@]}"
 
       - name: Upload build artifacts (always, including dry runs)
         uses: actions/upload-artifact@v4
