@@ -21,6 +21,7 @@ restore below is safe for them too. See tests/test_backup.py.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import tempfile
 import zipfile
@@ -60,38 +61,86 @@ _RESTORE_GUIDE = """بازگردانی پشتیبان درس‌پک — راهن
 """
 
 
-def backup_filename(today=None) -> str:
-    """Jalali-dated name for the backup ZIP: darspack-backup-1405-08-02.zip."""
+def backup_filename(today=None, directory=None) -> str:
+    """Jalali-dated name for the backup ZIP: darspack-backup-1405-08-02.zip.
+
+    If `directory` is given and that name is already taken there, a counter
+    suffix is added (-2, -3, ...) so a second backup on the same day never
+    silently overwrites the first one.
+    """
     if today is None:
         import datetime as _dt
         today = _dt.date.today()
     jalali = jdatetime.date.fromgregorian(date=today)
-    return f"darspack-backup-{jalali.strftime('%Y-%m-%d')}.zip"
+    base = f"darspack-backup-{jalali.strftime('%Y-%m-%d')}"
+    if directory is None:
+        return f"{base}.zip"
+    directory = Path(directory)
+    name = f"{base}.zip"
+    n = 2
+    while (directory / name).exists():
+        name = f"{base}-{n}.zip"
+        n += 1
+    return name
 
 
 def backup_library(lib, out_path, progress=None) -> dict:
     """Write the one-click backup ZIP; returns the export info dict.
 
     Order matters: the snapshot is taken FIRST (a consistent point-in-time
-    copy of the catalog), then the files are exported from the same
-    connection. Both parts live in one ZIP so nothing can half-arrive.
+    copy of the catalog), then the files are exported from the snapshot's
+    connection — never from the live one. Both parts therefore describe
+    the same moment, even if an import or a phone upload lands mid-backup.
+
+    The ZIP is built as a temp file next to the destination and moved into
+    place only on success, so a failed backup never leaves a half-written
+    ZIP with a valid-looking name, and a file that already sits at
+    out_path is never destroyed by a failed run. Files the catalog lists
+    but whose disk copy is gone are skipped (reported as ``missing`` in
+    the returned info) instead of aborting the whole backup.
     """
     out_path = Path(out_path)
-    ids = [r["id"] for r in lib.conn.execute("SELECT id FROM files ORDER BY id")]
-    info = export_package(lib.conn, lib.files_dir, ids, out_path,
-                          progress=progress, stored_names=True)
-    with tempfile.TemporaryDirectory() as td:
-        snapshot = Path(td) / "catalog.db"
-        # conn.backup() copies the database INCLUDING committed WAL content —
-        # never zip catalog.db directly, a live WAL file is not a snapshot.
-        # The destination is closed BEFORE the temp dir cleanup: an open
-        # handle would make Windows refuse to delete the folder.
-        dst = sqlite3.connect(snapshot)
-        try:
-            lib.conn.backup(dst)
-        finally:
-            dst.close()
-        with zipfile.ZipFile(out_path, "a", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(snapshot, "catalog.db")
-            zf.writestr("RESTORE-راهنما.txt", _RESTORE_GUIDE)
-    return info
+    tmp_zip: Path | None = None
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            snapshot = Path(td) / "catalog.db"
+            # conn.backup() copies the database INCLUDING committed WAL
+            # content — never zip catalog.db directly, a live WAL file is
+            # not a snapshot. The destination is closed BEFORE the temp dir
+            # cleanup: an open handle would make Windows refuse to delete
+            # the folder.
+            dst = sqlite3.connect(snapshot)
+            try:
+                lib.conn.backup(dst)
+            finally:
+                dst.close()
+            # Read the file list from the snapshot, not the live DB: the
+            # manifest and the catalog inside one ZIP are one point in time.
+            snap_conn = sqlite3.connect(snapshot)
+            snap_conn.row_factory = sqlite3.Row
+            try:
+                ids = [r["id"] for r in snap_conn.execute(
+                    "SELECT id FROM files ORDER BY id")]
+                fd, tmp_name = tempfile.mkstemp(
+                    prefix=out_path.stem + ".", suffix=".tmp.zip",
+                    dir=str(out_path.parent))
+                os.close(fd)
+                tmp_zip = Path(tmp_name)
+                info = export_package(
+                    snap_conn, lib.files_dir, ids, tmp_zip,
+                    progress=progress, stored_names=True, skip_missing=True)
+                with zipfile.ZipFile(tmp_zip, "a",
+                                     zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(snapshot, "catalog.db")
+                    zf.writestr("RESTORE-راهنما.txt", _RESTORE_GUIDE)
+            finally:
+                snap_conn.close()
+        os.replace(tmp_zip, out_path)
+        tmp_zip = None
+        info["path"] = str(out_path)
+        return info
+    finally:
+        # Only ever remove the temp file this run created; a pre-existing
+        # file at out_path is left exactly as it was.
+        if tmp_zip is not None and tmp_zip.exists():
+            tmp_zip.unlink(missing_ok=True)
