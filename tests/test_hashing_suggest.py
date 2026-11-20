@@ -156,12 +156,16 @@ def test_sha256_of_empty_file(tmp_path):
 
 def test_sha256_exact_at_chunk_boundaries(tmp_path):
     # 1 MB is exactly one chunk; +1 byte forces a second (1-byte) chunk —
-    # both must equal the plain hashlib digest, not a padded approximation
+    # both must equal the plain hashlib digest, not a padded approximation,
+    # and the progress callback ends at the full file size
     for size in (1024 * 1024, 1024 * 1024 + 1):
         data = b"y" * size
         p = tmp_path / f"edge-{size}.bin"
         p.write_bytes(data)
-        assert sha256_file(p) == hashlib.sha256(data).hexdigest()
+        seen = []
+        assert sha256_file(p, progress=lambda d, t: seen.append((d, t))) == \
+            hashlib.sha256(data).hexdigest()
+        assert seen[-1] == (size, size)
 
 
 def test_sha256_progress_never_goes_backwards(tmp_path):

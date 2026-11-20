@@ -182,8 +182,12 @@ def test_likely_versions_ignores_single_name(conn):
 
 
 def test_likely_versions_name_made_only_of_noise(conn):
-    # a file whose name is solely version noise (e.g. نهایی.pdf) falls back to itself
+    # a name stripped to noise-only buckets by itself; with two different
+    # contents and two different stored names it groups — the
+    # "fallback to itself" branch of likely_versions()
     _insert_file(conn, "نهایی.pdf", "sha-a")
     _insert_file(conn, "نهایی (1).pdf", "sha-b")
-    # Both names strip down to same key or fallback
-    assert isinstance(likely_versions(conn), list)
+    groups = likely_versions(conn)
+    assert len(groups) == 1
+    assert {r["original_name"] for r in groups[0].rows} == {
+        "نهایی.pdf", "نهایی (1).pdf"}
