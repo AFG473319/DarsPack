@@ -334,3 +334,18 @@ def test_package_import_prefills_from_manifest(tmp_path, qapp):
             """SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id
                WHERE ft.file_id=?""", (new_id,))]
         assert tags == ["امتحان"]
+
+
+def test_classify_dialog_skips_missing_ids(lib, qapp):
+    """M22: ids that vanished between the import and this dialog (a
+    second instance, or a phone delete while sharing) are skipped
+    instead of crashing on a None row."""
+    from darspack.ui.dialogs import ClassifyDialog
+    known = lib.conn.execute(
+        "SELECT id FROM files LIMIT 1").fetchone()["id"]
+    dlg = ClassifyDialog(None, lib, [known, 999999])
+    assert dlg.table.rowCount() == 1
+    assert len(dlg.rows) == 1
+    dlg_empty = ClassifyDialog(None, lib, [999999])
+    assert dlg_empty.table.rowCount() == 0
+    assert dlg_empty.rows == []

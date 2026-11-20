@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
@@ -29,7 +29,6 @@ from .. import APP_NAME, __version__, asset_path, i18n
 from ..core.dedup import duplicate_groups, rename_hints, version_conflicts
 from ..core.search import search as catalog_search
 from ..core.search import unclassified_count
-from ..core import manifest as manifest_core
 from ..i18n import tr
 from . import dialogs, icons, theme
 from .delegates import FileNameDelegate, FileNameLabel, KindBadgeDelegate
@@ -175,6 +174,19 @@ def create_localized_line_edit_context_menu(
 
     theme.apply_menu_style(menu)
     return menu
+
+
+class _StopShareWorker(QThread):
+    """M12: server.stop() can block while a transfer is in flight — run it
+    off the UI thread so «قطع اشتراک» never freezes the window. The
+    built-in finished signal carries the result back to the UI thread."""
+
+    def __init__(self, server, parent=None):
+        super().__init__(parent)
+        self._server = server
+
+    def run(self) -> None:
+        self._server.stop()
 
 
 class MainWindow(QMainWindow):
@@ -1212,6 +1224,13 @@ class MainWindow(QMainWindow):
             return
         row = self.lib.conn.execute(
             "SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+        if row is None:
+            # M22: the row vanished between the table fill and the click
+            # (second instance, or a phone delete while sharing) — say so
+            # and refresh instead of crashing on a None row.
+            self.statusBar().showMessage(tr("err_file_gone"), 3000)
+            self.refresh()
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(
             str(self.lib.stored_path(row))))
 
@@ -1388,17 +1407,33 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
+        # M27: one file locked by another program (a PDF open in a
+        # reader is the classic case) used to abort the whole delete
+        # with a crash dialog, leaving some files moved and some not
+        # with no message about which. Move each file on its own and
+        # report the split at the end.
+        moved, failed = [], []
         for row in rows:
-            self.lib.move_to_trash(row["id"])
+            try:
+                self.lib.move_to_trash(row["id"])
+            except (OSError, KeyError):
+                failed.append(row["original_name"])
+                continue
+            moved.append(row)
             self._display_strs.pop(row["id"], None)
         self.reload_filters()
         self.refresh()
-        if len(rows) == 1:
+        if failed and moved:
+            message = tr("delete_partial").format(
+                moved=i18n.num(len(moved)), failed=i18n.num(len(failed)))
+        elif failed:
+            message = tr("delete_none_moved")
+        elif len(moved) == 1:
             message = tr("delete_done").format(
-                name=rows[0]["original_name"])
+                name=moved[0]["original_name"])
         else:
             message = tr("delete_done_many").format(
-                count=i18n.num(len(rows)))
+                count=i18n.num(len(moved)))
         self.statusBar().showMessage(message, 5000)
 
     def delete_file(self, file_id: int) -> None:
@@ -1488,8 +1523,12 @@ class MainWindow(QMainWindow):
             self, tr("verify_pick"), "", "ZIP (*.zip)")
         if not path:
             return
-        report = manifest_core.verify_package(path)
-        dialogs.VerifyReportDialog(self, path, report, library=self.lib).exec()
+        # M24: hashing every file in the package used to freeze the
+        # whole window with no progress and no cancel.
+        self._run_package_worker(
+            "verify", path, label=tr("pkg_verifying"),
+            on_done=lambda result: dialogs.VerifyReportDialog(
+                self, path, result["report"], library=self.lib).exec())
 
     def import_package(self) -> None:
         """Open a درس‌پک, verify it, offer to import its contents."""
@@ -1497,9 +1536,41 @@ class MainWindow(QMainWindow):
             self, tr("verify_pick"), "", "ZIP (*.zip)")
         if not path:
             return
-        report = manifest_core.verify_package(path)
-        dialogs.VerifyReportDialog(self, path, report, library=self.lib,
-                                   offer_import=True).exec()
+        self._run_package_worker(
+            "verify", path, label=tr("pkg_verifying"),
+            on_done=lambda result: dialogs.VerifyReportDialog(
+                self, path, result["report"], library=self.lib,
+                offer_import=True).exec())
+
+    def _run_package_worker(self, kind: str, path: str, file_ids=None,
+                            label: str = "", on_done=None) -> None:
+        """Run a PackageWorker behind a progress dialog (M24).
+
+        `on_done(result)` runs on the UI thread with the worker's
+        result dict. Modelled on show_stats / StatsProgressDialog.
+        """
+        from .workers import PackageWorker
+        self._pkg_worker = PackageWorker(str(self.lib.root), kind, path,
+                                         file_ids)
+        progress = dialogs.PackageProgressDialog(
+            self, tr("btn_verify") if kind == "verify" else tr("export_title"),
+            label)
+        self._pkg_worker.progress.connect(progress.set_progress)
+        self._pkg_worker.done.connect(
+            lambda result: self._package_finished(progress, result, on_done))
+        self._pkg_worker.start()
+        progress.exec()
+
+    def _package_finished(self, progress, result: dict, on_done) -> None:
+        progress.accept()
+        if result.get("cancelled"):
+            self.statusBar().showMessage(tr("pkg_cancelled"), 4000)
+            return
+        if "error" in result:
+            QMessageBox.critical(self, APP_NAME, result["error"])
+            return
+        if on_done is not None:
+            on_done(result)
 
     def show_duplicates(self) -> None:
         dialogs.DuplicatesDialog(self, {
@@ -1542,15 +1613,38 @@ class MainWindow(QMainWindow):
         file_id = self.selected_file_id()
         if file_id is None:
             return
+        # M22: the row may have vanished since the table was filled —
+        # check before building the dialog (it dereferences the row).
+        row = self.lib.conn.execute(
+            "SELECT id FROM files WHERE id=?", (file_id,)).fetchone()
+        if row is None:
+            self.statusBar().showMessage(tr("err_file_gone"), 3000)
+            self.refresh()
+            return
         if dialogs.MetadataDialog(self, self.lib, file_id).exec():
             self.reload_filters()
             self.refresh()
 
     def open_settings(self) -> None:
+        old_library = self.settings.get("library")
         if dialogs.SettingsDialog(self, self.settings,
                                   self.settings_path).exec():
             from .app import apply_font_size
             apply_font_size(self.settings)
+            if self.settings.get("library") != old_library:
+                self._offer_restart_for_library_change()
+
+    def _offer_restart_for_library_change(self) -> None:
+        """The library folder only takes effect after a restart (H6):
+        offer to restart now instead of leaving the user wondering why
+        nothing changed."""
+        answer = QMessageBox.question(
+            self, APP_NAME, tr("settings_restart_now"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer == QMessageBox.Yes:
+            from PySide6.QtCore import QProcess
+            QProcess.startDetached(sys.executable, sys.argv)
+            QApplication.quit()
 
     def open_help_dialog(self) -> None:
         dialogs.HelpDialog(self, self.settings, self.settings_path).exec()
@@ -1590,17 +1684,94 @@ class MainWindow(QMainWindow):
         else:
             self.stop_share()
 
-    def stop_share(self) -> None:
-        if self.share_server is not None:
-            from ..core import db
-            db.log(self.lib.conn, "share_stop", "")
-            self.share_server.stop()
-            self.share_server = None
+    def stop_share(self, sync: bool = False) -> None:
+        """End sharing. Async by default (M12): server.stop() waits out
+        in-flight transfers, so it runs on a worker thread while the
+        banner shows a "stopping…" state. sync=True is for closeEvent —
+        at shutdown the window is already going away, and the worker
+        must not outlive the window it belongs to."""
+        server = self.share_server
+        if server is None:
+            return
+        self.share_server = None
+        from ..core import db
+        db.log(self.lib.conn, "share_stop", "")
+        if sync:
+            server.stop()
             if hasattr(self, "info_bar"):
                 self.info_bar.hide()
             self.refresh()
+            return
+        if hasattr(self, "info_bar"):
+            self.info_bar_label.setText(tr("infobar_share_stopping"))
+            self.info_bar.show()
+        worker = _StopShareWorker(server, self)
+        worker.finished.connect(lambda: self._on_share_stopped(worker))
+        worker.start()
+        self._stop_worker = worker
+
+    def _on_share_stopped(self, worker: _StopShareWorker) -> None:
+        if getattr(self, "_stop_worker", None) is worker:
+            self._stop_worker = None
+        # The user may have started sharing again while the old server
+        # was still stopping — only hide the banner when nothing is live.
+        if self.share_server is None and hasattr(self, "info_bar"):
+            self.info_bar.hide()
+        self.refresh()
+        worker.deleteLater()
 
     def closeEvent(self, event) -> None:
+        # M12: never destroy a running stop worker with its window —
+        # wait for it (the server-side abort bounds this to well under
+        # a second in practice), then stop synchronously for a clean exit.
+        worker = getattr(self, "_stop_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait()
+        self.stop_share(sync=True)   # never leave the server thread running
+        self._stop_background_workers()   # never destroy a running QThread
         self.stop_share()          # never leave the server thread running
         self.lib.close()
         super().closeEvent(event)
+
+    def _stop_background_workers(self) -> None:
+        """Stop every worker thread before the window is destroyed (M21).
+
+        Destroying a QThread while it runs aborts the whole process
+        ("QThread: Destroyed while thread is still running"), so the
+        window must outlive its workers. Each worker is asked to stop
+        and waited on: cancellable workers (import, stats, package)
+        stop between steps, so 3 s is plenty; the feedback poster has
+        no cancel point and its request times out after 8 s, so it gets
+        9 s. The `done` handlers are disconnected first — a worker
+        finishing during close must not pop dialogs onto a window that
+        is already going away.
+        """
+        workers = []
+        for attr in ("_worker", "_stats_worker", "_pkg_worker"):
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                workers.append(worker)
+        # FeedbackPoster instances are parented to the window, not kept
+        # in an attribute — find them among the window's QThread children.
+        for worker in self.findChildren(QThread):
+            if worker.isRunning() and worker not in workers:
+                workers.append(worker)
+        for worker in workers:
+            handler = {"_worker": "_import_finished",
+                       "_stats_worker": "_stats_finished",
+                       "_pkg_worker": "_package_finished"}
+            for attr, slot in handler.items():
+                if getattr(self, attr, None) is worker:
+                    try:
+                        worker.done.disconnect(getattr(self, slot))
+                    except (TypeError, RuntimeError):
+                        pass
+        for worker in workers:
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+        for worker in workers:
+            worker.wait(3000 if hasattr(worker, "cancel") else 9000)

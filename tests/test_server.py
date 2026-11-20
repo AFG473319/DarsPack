@@ -2,6 +2,7 @@
 import http.client
 import json
 import tempfile
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -49,7 +50,7 @@ def ro_server(tmp_path_factory):
         share.stop()
 
 
-def _exchange(url, data=None):
+def _exchange(url, data=None, headers=None):
     """One raw HTTP exchange with the server under test.
 
     Returns (status, body, response). http.client connects to the URL's
@@ -70,7 +71,8 @@ def _exchange(url, data=None):
     conn = http.client.HTTPConnection(parts.hostname, parts.port or 80,
                                       timeout=5 if data is None else 10)
     try:
-        conn.request("POST" if data is not None else "GET", path, body=data)
+        conn.request("POST" if data is not None else "GET", path,
+                     body=data, headers=headers or {})
         res = conn.getresponse()
         return res.status, res.read(), res
     finally:
@@ -333,6 +335,26 @@ def test_upload_crash_leaves_nothing_in_library_root(server, monkeypatch):
     assert staged == []            # nothing staged in the library root…
     # …and the OS-temp staging file was removed by the finally-block
     assert not list(Path(tempfile.gettempdir()).glob("darspack-upload-*"))
+
+
+def test_busy_upload_returns_503_busy_json(server, monkeypatch):
+    """H1: when the import fails because the database is locked, the
+    phone gets a 503 JSON answer it can show ("try again in a moment")
+    — not a dropped request. Only lock errors get this treatment; any
+    other importer crash still drops the request (see the test above)."""
+    import sqlite3
+    share, lib = server
+    import darspack.core.importer as importer_module
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(importer_module, "import_file", locked)
+    status, body = _post(
+        f"http://127.0.0.1:{share.port}"
+        f"/api/upload?name={urllib.parse.quote('مشغول.pdf')}"
+        f"&pin={share.pin}", b"content")
+    assert status == 503
+    assert body == {"error": "busy"}
 
 
 def test_local_ips_are_valid():
@@ -648,3 +670,245 @@ def test_check_pin_whitespace_and_invalid(tmp_path):
     assert not share.check_pin("10.0.0.3", " ")
     assert not share.check_pin("10.0.0.3", "")
     assert not share.check_pin("10.0.0.3", "abcdef")
+
+
+# ---------------------------------------------------------------------------
+# Phone-sharing fixes (2026-11-19 review: H2, M10, M11, M12, M30)
+# ---------------------------------------------------------------------------
+
+
+def test_rotate_pin_invalidates_old_pin(server):
+    """H2: a rotated PIN kills the old one at once — a forwarded link dies."""
+    share, _ = server
+    base = f"http://127.0.0.1:{share.port}"
+    status, _ = _get(f"{base}/api/search?q=x&pin={share.pin}")
+    assert status == 200
+    old_pin = share.pin
+    new_pin = share.rotate_pin()
+    assert new_pin != old_pin
+    assert new_pin == share.pin
+    status, _ = _get(f"{base}/api/search?q=x&pin={old_pin}")
+    assert status == 403
+    status, _ = _get(f"{base}/api/search?q=x&pin={new_pin}")
+    assert status == 200
+
+
+def test_rotate_pin_clears_lockout(server):
+    """H2: rotating the PIN also resets a tripped lockout — the owner is
+    never locked out of their own share by a classmate's guessing."""
+    share, _ = server
+    base = f"http://127.0.0.1:{share.port}"
+    wrong = "000000" if share.pin != "000000" else "111111"
+    for _ in range(5):
+        status, _ = _get(f"{base}/api/search?q=x&pin={wrong}")
+        assert status == 403
+    # even the CORRECT pin is refused while locked out
+    status, _ = _get(f"{base}/api/search?q=x&pin={share.pin}")
+    assert status == 403
+    share.rotate_pin()
+    status, _ = _get(f"{base}/api/search?q=x&pin={share.pin}")
+    assert status == 200
+
+
+def test_share_auto_stops_after_ttl(tmp_path):
+    """H2: sharing stops by itself after the TTL, and the same server
+    object can be started again afterwards."""
+    with Library(tmp_path / "lib"):
+        share = ShareServer(str(tmp_path / "lib"))
+        share.start(ttl_seconds=0.2)
+        assert share.is_running()
+        try:
+            time.sleep(0.8)
+            assert not share.is_running()
+            conn = http.client.HTTPConnection(
+                "127.0.0.1", share.port, timeout=2)
+            with pytest.raises(OSError):
+                conn.request("GET", "/")
+                conn.getresponse()
+            conn.close()
+            # sharing can start again on the same object
+            share.start()
+            assert share.is_running()
+            status, _ = _get(
+                f"http://127.0.0.1:{share.port}/?pin={share.pin}")
+            assert status == 200
+        finally:
+            share.stop()
+
+
+@pytest.mark.parametrize("name", [
+    "notes.exe", "run.bat", "script.ps1", "tool.py",
+    "notes.PDF.exe", "app.msi", "macro.vbs",
+])
+def test_upload_rejects_executable_extensions(server, name):
+    """M10: executables and scripts never reach the library."""
+    share, _ = server
+    status, body = _post(
+        f"http://127.0.0.1:{share.port}/api/upload?name={name}"
+        f"&pin={share.pin}",
+        b"fake-binary")
+    assert status == 415
+    assert body["error"] == "type"
+
+
+@pytest.mark.parametrize("name", ["notes.pdf", "pack.zip", "photo.png", "noext"])
+def test_upload_accepts_documents_and_archives(server, name):
+    """M10 control: documents, archives and extensionless files still
+    upload — the block list is narrow, not a whitelist."""
+    share, _ = server
+    status, body = _post(
+        f"http://127.0.0.1:{share.port}/api/upload?name={name}"
+        f"&pin={share.pin}",
+        b"content")
+    assert status == 200, (name, body)
+    assert body["status"] == "imported"
+
+
+def test_upload_rejects_when_disk_full(server, monkeypatch):
+    """M10: a full disk fails fast with 507, before a single byte of the
+    file is read or staged."""
+    from collections import namedtuple
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr("shutil.disk_usage",
+                        lambda path: usage(10 ** 9, 10 ** 9, 0))
+    share, _ = server
+    status, body = _post(
+        f"http://127.0.0.1:{share.port}/api/upload?name=notes.pdf"
+        f"&pin={share.pin}",
+        b"content")
+    assert status == 507
+    assert body["error"] == "space"
+
+
+def test_concurrent_uploads_all_succeed(server):
+    """M10/M12: five phones uploading at once all land in the library —
+    the import lock is per-import, not per-request."""
+    share, lib = server
+    results = []
+
+    def _up(i):
+        status, body = _post(
+            f"http://127.0.0.1:{share.port}/api/upload?name=parallel-{i}.pdf"
+            f"&pin={share.pin}",
+            f"parallel-content-{i}".encode())
+        results.append((i, status, body))
+
+    threads = [threading.Thread(target=_up, args=(i,)) for i in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+    assert len(results) == 5
+    assert all(status == 200 for _, status, _ in results), results
+    n = lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
+    assert n == 2 + 5
+    names = {r["original_name"] for r in lib.conn.execute(
+        "SELECT original_name FROM files").fetchall()}
+    assert {f"parallel-{i}.pdf" for i in range(5)} <= names
+
+
+def test_download_range_requests(ro_server):
+    """M11: a phone resumes a failed download with Range instead of
+    restarting it — single ranges, suffix and open-ended ranges, and a
+    416 for anything unsatisfiable or multi-range."""
+    share, lib = ro_server
+    fid = lib.conn.execute(
+        "SELECT id FROM files ORDER BY id").fetchone()["id"]
+    base = f"http://127.0.0.1:{share.port}/api/file/{fid}?pin={share.pin}"
+    # a plain download still works and advertises resume support
+    status, body, res = _exchange(base)
+    assert status == 200 and body == b"content-0"
+    assert res.headers["Accept-Ranges"] == "bytes"
+    # first four bytes
+    status, body, res = _exchange(base, headers={"Range": "bytes=0-3"})
+    assert status == 206
+    assert res.headers["Content-Range"] == "bytes 0-3/9"
+    assert body == b"cont"
+    # open-ended range runs to the end
+    status, body, res = _exchange(base, headers={"Range": "bytes=5-"})
+    assert status == 206
+    assert res.headers["Content-Range"] == "bytes 5-8/9"
+    assert body == b"nt-0"
+    # suffix range takes the last three bytes
+    status, body, res = _exchange(base, headers={"Range": "bytes=-3"})
+    assert status == 206
+    assert res.headers["Content-Range"] == "bytes 6-8/9"
+    assert body == b"t-0"
+    # past the end of the file
+    status, body, res = _exchange(base, headers={"Range": "bytes=9-20"})
+    assert status == 416
+    assert res.headers["Content-Range"] == "bytes */9"
+    # multi-range is not supported — 416, per the single-range contract
+    status, body, res = _exchange(
+        base, headers={"Range": "bytes=0-3, 5-8"})
+    assert status == 416
+
+
+def test_stop_returns_quickly_during_download(tmp_path):
+    """M12: stopping sharing during a big download returns at once
+    instead of waiting out the whole transfer (the old behaviour hung
+    until the socket timeout, ~5 s, per chunk)."""
+    with Library(tmp_path / "lib") as lib:
+        big = tmp_path / "big.pdf"
+        big.write_bytes(b"x" * (20 * 1024 * 1024))
+        import_file(lib, big)
+        fid = lib.conn.execute(
+            "SELECT id FROM files").fetchone()["id"]
+        share = ShareServer(str(tmp_path / "lib"))
+        share.start()
+        started = threading.Event()
+
+        def _download():
+            try:
+                conn = http.client.HTTPConnection(
+                    "127.0.0.1", share.port, timeout=10)
+                conn.request("GET", f"/api/file/{fid}?pin={share.pin}")
+                res = conn.getresponse()
+                res.read(1024)  # first chunk, then stop reading entirely
+                started.set()
+                time.sleep(10)  # hold the connection open, unread
+                conn.close()
+            except Exception:  # noqa: BLE001 - the server may cut us off
+                pass
+
+        t = threading.Thread(target=_download, daemon=True)
+        try:
+            t.start()
+            assert started.wait(timeout=5), "download never started"
+            time.sleep(0.5)  # let the server reach the blocked write
+            t0 = time.monotonic()
+            share.stop()
+            elapsed = time.monotonic() - t0
+            assert elapsed < 3.0, f"stop() took {elapsed:.2f}s mid-download"
+            assert not share.is_running()
+        finally:
+            if share.is_running():
+                share.stop()
+            t.join(timeout=2)
+
+
+def test_search_reports_total_and_truncated(server, tmp_path, monkeypatch):
+    """M30: /api/search reports the true total and whether the page was
+    capped, instead of silently presenting 300 rows as the library."""
+    from darspack.web import server as server_module
+    share, lib = server
+    for i in range(3):
+        p = tmp_path / f"extra-{i}.pdf"
+        p.write_bytes(f"extra-content-{i}".encode())  # distinct bytes:
+        # identical content would be deduplicated by content hash
+        import_file(lib, p)
+    monkeypatch.setattr(server_module, "SEARCH_LIMIT", 3)
+    status, body = _get(
+        f"http://127.0.0.1:{share.port}/api/search?pin={share.pin}")
+    assert status == 200
+    data = json.loads(body)
+    assert len(data["files"]) == 3
+    assert data["total"] == 5
+    assert data["truncated"] is True
+    monkeypatch.setattr(server_module, "SEARCH_LIMIT", 300)
+    status, body = _get(
+        f"http://127.0.0.1:{share.port}/api/search?pin={share.pin}")
+    data = json.loads(body)
+    assert len(data["files"]) == 5
+    assert data["total"] == 5
+    assert data["truncated"] is False

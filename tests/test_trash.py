@@ -8,7 +8,8 @@ from darspack.ui import dialogs, main_window as mw_module
 def test_trash_empty_library(tmp_path):
     with Library(tmp_path / "lib") as lib:
         assert lib.list_trash() == []
-        assert lib.empty_trash() == 0
+        assert lib.empty_trash() == {"deleted": 0, "failed": 0,
+                                     "failed_names": []}
 
 
 def test_trash_restore_and_empty(tmp_path, qapp, monkeypatch):
@@ -73,7 +74,7 @@ def test_trash_restore_and_empty(tmp_path, qapp, monkeypatch):
         assert len(win.lib.list_trash()) == 1
 
         cleared = win.lib.empty_trash()
-        assert cleared == 1
+        assert cleared["deleted"] == 1 and cleared["failed"] == 0
         assert len(win.lib.list_trash()) == 0
     finally:
         win.lib.close()

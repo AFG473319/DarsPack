@@ -347,3 +347,16 @@ def test_search_with_brackets_and_punctuation(lib):
     assert any(r["id"] == fid for r in res)
     res_bracket = search(lib.conn, "[ویژه]")
     assert any(r["id"] == fid for r in res_bracket)
+
+
+def test_search_total_counts_match_search_rows(lib):
+    """M30: search_total counts exactly the rows search() would return,
+    ignoring the page limit — the API's total/truncated flag rests on it."""
+    from darspack.core.search import search_total
+    assert search_total(lib.conn, "") == 4
+    assert search_total(lib.conn, "ریاضی") == 2
+    assert search_total(lib.conn, "ریاضی") == len(search(lib.conn, "ریاضی"))
+    assert search_total(lib.conn, "ریاضی", kind="جزوه") == 0
+    assert search_total(lib.conn, "", unclassified_only=True) == 4
+    assert search_total(lib.conn, "علوم") == 1
+    assert search_total(lib.conn, "نیم‌فاصله‌ای که نیست") == 0

@@ -606,7 +606,8 @@ def test_share_dialog_live_refresh(tmp_path, qapp):
         parent.lib = lib
         refreshes = []
         parent.refresh = lambda: refreshes.append(1)
-        dlg = ShareDialog(parent, SimpleNamespace(pin="۱۲۳۴۵۶"),
+        dlg = ShareDialog(parent, SimpleNamespace(pin="۱۲۳۴۵۶",
+                                                  is_running=lambda: True),
                           ["http://192.168.1.5:8000/"], on_close=None)
         assert dlg._upload_label.isHidden()     # no uploads yet → no label
         src = tmp_path / "از گوشی.pdf"
@@ -619,3 +620,36 @@ def test_share_dialog_live_refresh(tmp_path, qapp):
         assert label                                # «۱ فایل جدید…» shown
         dlg._poll_timer.stop()
         dlg.deleteLater()
+
+
+def test_metadata_dialog_missing_file_raises(lib_with_file, qapp):
+    """M22: a vanished row fails fast with a clear error instead of
+    crashing on self.row[...] — callers check first and show a
+    status message."""
+    from darspack.ui.dialogs import MetadataDialog
+    lib, _, _ = lib_with_file
+    with pytest.raises(ValueError, match="not found in catalog"):
+        MetadataDialog(None, lib, 999999)
+
+
+def test_share_dialog_shows_latin_pin(lib_with_file, qapp):
+    """M23: the PIN on screen must be exactly what the phone accepts —
+    Latin digits. Persian digits read off the screen used to fail the
+    phone login with a bare 'wrong PIN'."""
+    import types
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel
+
+    from darspack.ui.dialogs import ShareDialog
+
+    lib, _, _ = lib_with_file
+    server = types.SimpleNamespace(pin="123456", port=8765)
+    dlg = ShareDialog(None, server,
+                      ["http://192.168.1.5:8765/?pin=123456"],
+                      on_close=lambda: None)
+    pin_label = dlg.findChild(QLabel, "PinDigits")
+    assert pin_label is not None
+    assert pin_label.text() == "123456"
+    assert "۱۲۳۴۵۶" not in pin_label.text()
+    assert pin_label.layoutDirection() == Qt.LeftToRight

@@ -51,6 +51,34 @@ READ_ONLY_TOOLS = frozenset({
 })
 
 
+#: Bounds for agent-supplied pagination/preview sizes.  A negative SQLite
+#: ``LIMIT`` means "unlimited", so an unclamped value can dump the whole
+#: catalog into one reply; a huge ``max_chars`` can spike RAM on an 8 GB
+#: laptop while a big PDF is read into memory.
+LIMIT_MIN, LIMIT_MAX = 1, 200
+MAX_CHARS_MIN, MAX_CHARS_MAX = 100, 10_000
+
+
+def _clamp_int(value, default: int, lo: int, hi: int) -> int:
+    """Coerce an agent-supplied int into [lo, hi]; fall back to default."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, number))
+
+
+def _is_valid_chapter_lesson(value) -> bool:
+    """None means "keep the current value"; otherwise an int in 1..40."""
+    if value is None:
+        return True
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 1 <= value <= 40
+    )
+
+
 class DarsPackMcpServer:
     """Core handler for MCP protocol methods."""
 
@@ -346,7 +374,7 @@ class DarsPackMcpServer:
         return {"id": sid, "name": name, "status": "ok"}
 
     def tool_get_unclassified_files(self, args: dict) -> dict:
-        limit = int(args.get("limit", 50))
+        limit = _clamp_int(args.get("limit", 50), 50, LIMIT_MIN, LIMIT_MAX)
         rows = search(self.lib.conn, unclassified_only=True, limit=limit)
         items = []
         for r in rows:
@@ -368,7 +396,7 @@ class DarsPackMcpServer:
         query = args.get("query", "")
         subject_name = args.get("subject")
         kind = args.get("kind")
-        limit = int(args.get("limit", 20))
+        limit = _clamp_int(args.get("limit", 20), 20, LIMIT_MIN, LIMIT_MAX)
 
         subject_id = None
         if subject_name:
@@ -377,6 +405,10 @@ class DarsPackMcpServer:
             ).fetchone()
             if s_row:
                 subject_id = s_row["id"]
+            else:
+                # A requested filter that matches nothing must not fall
+                # through to an unfiltered search of the whole catalog.
+                return {"results": [], "note": "subject not found"}
 
         rows = search(self.lib.conn, query=query, subject_id=subject_id, kind=kind, limit=limit)
         items = []
@@ -400,7 +432,10 @@ class DarsPackMcpServer:
             return {"error": f"File with id {fid} not found"}
 
         stored_file = self.lib.stored_path(row)
-        preview_text = extract_preview(stored_file, max_chars=args.get("max_chars", 1500))
+        max_chars = _clamp_int(
+            args.get("max_chars", 1500), 1500, MAX_CHARS_MIN, MAX_CHARS_MAX
+        )
+        preview_text = extract_preview(stored_file, max_chars=max_chars)
 
         return {
             "id": fid,
@@ -412,33 +447,49 @@ class DarsPackMcpServer:
         }
 
     def tool_classify_file(self, args: dict) -> dict:
-        fid = int(args["file_id"])
-        subject = args["subject"].strip()
+        try:
+            fid = int(args["file_id"])
+        except (KeyError, TypeError, ValueError):
+            return {"error": "file_id is required and must be an integer"}
+        subject = args.get("subject")
+        subject = subject.strip() if isinstance(subject, str) else ""
+        if not subject:
+            return {"error": "Subject name cannot be empty"}
         chapter = args.get("chapter")
         lesson = args.get("lesson")
+        if not _is_valid_chapter_lesson(chapter):
+            return {"error": "Chapter must be an integer between 1 and 40"}
+        if not _is_valid_chapter_lesson(lesson):
+            return {"error": "Lesson must be an integer between 1 and 40"}
         kind = args.get("kind")
         school_year = args.get("school_year")
         tags = args.get("tags") or []
         note = args.get("note")
 
         conn = self.lib.conn
+        # Fetch the file FIRST: creating the subject before this check used
+        # to leave a junk subject behind when the file id was wrong, and
+        # the early return inside `with conn:` committed that insert.
+        cur_row = conn.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
+        if not cur_row:
+            return {"error": f"File with id {fid} not found"}
+
         with conn:
-            subject_id = db.get_or_create(conn, "subjects", subject) if subject else None
+            subject_id = db.get_or_create(conn, "subjects", subject)
 
-            # Fetch existing to avoid overwriting unspecified fields
-            cur_row = conn.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
-            if not cur_row:
-                return {"error": f"File with id {fid} not found"}
-
+            # Unspecified fields keep their current values — classifying by
+            # subject only must never wipe chapter/lesson.
             final_kind = kind or cur_row["kind"]
             final_year = school_year if school_year is not None else cur_row["school_year"]
             final_note = note if note is not None else cur_row["note"]
+            final_chapter = chapter if chapter is not None else cur_row["chapter"]
+            final_lesson = lesson if lesson is not None else cur_row["lesson"]
 
             conn.execute(
                 """UPDATE files
                    SET subject_id=?, chapter=?, lesson=?, kind=?, school_year=?, note=?
                    WHERE id=?""",
-                (subject_id, chapter, lesson, final_kind, final_year, final_note, fid),
+                (subject_id, final_chapter, final_lesson, final_kind, final_year, final_note, fid),
             )
 
             # Update tags if provided
@@ -454,10 +505,9 @@ class DarsPackMcpServer:
                         )
 
             # Learn hint tokens
-            if subject:
-                for token in match_key(Path(cur_row["original_name"]).stem).split():
-                    if len(token) >= 3:
-                        learn_hint(conn, token, subject)
+            for token in match_key(Path(cur_row["original_name"]).stem).split():
+                if len(token) >= 3:
+                    learn_hint(conn, token, subject)
 
             db.log(conn, "mcp_classify", f"file {fid} → {subject}")
 
@@ -465,8 +515,8 @@ class DarsPackMcpServer:
             "status": "success",
             "file_id": fid,
             "subject": subject,
-            "chapter": chapter,
-            "lesson": lesson,
+            "chapter": final_chapter,
+            "lesson": final_lesson,
             "kind": final_kind,
         }
 
@@ -474,7 +524,14 @@ class DarsPackMcpServer:
         items = args.get("items", [])
         results = []
         for it in items:
-            res = self.tool_classify_file(it)
+            if not isinstance(it, dict):
+                results.append({"file_id": None, "error": "Each batch item must be an object"})
+                continue
+            try:
+                res = self.tool_classify_file(it)
+            except Exception as e:
+                # One bad item must not abort the whole batch.
+                res = {"file_id": it.get("file_id"), "error": str(e)}
             results.append(res)
         return {"processed": len(results), "results": results}
 

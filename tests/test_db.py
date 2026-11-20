@@ -63,6 +63,83 @@ def test_get_or_create_rejects_blank_names(conn):
     assert conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"] == 0
 
 
+def test_get_or_create_is_safe_under_concurrency(tmp_path):
+    """M2: two connections creating the same subject at once must not
+    raise IntegrityError and must leave exactly one row behind. The
+    pausing wrapper forces both threads through the SELECT before
+    either inserts, so the old SELECT-then-INSERT code fails here
+    deterministically instead of only when the scheduler feels like it
+    (the window is microseconds wide — a plain barrier race passes on
+    the old code almost every time)."""
+    import threading
+    import time
+
+    class _PausingConn:
+        """Pauses once after its first subjects SELECT, forcing the
+        SELECT→INSERT race window open for both threads at once."""
+
+        def __init__(self, real):
+            self._real = real
+            self._paused = False
+
+        def execute(self, sql, *args, **kwargs):
+            cur = self._real.execute(sql, *args, **kwargs)
+            if (not self._paused and isinstance(sql, str)
+                    and sql.strip().upper().startswith("SELECT")
+                    and "FROM subjects" in sql):
+                self._paused = True
+                time.sleep(0.15)
+            return cur
+
+        def __enter__(self):
+            self._real.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._real.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    path = tmp_path / "race.db"
+    c1 = db.connect(path)
+    db.init_schema(c1)
+    c2 = db.connect(path)
+    barrier = threading.Barrier(2)
+    results, errors = [], []
+
+    def worker(conn):
+        try:
+            barrier.wait(timeout=10)
+            # every real caller wraps get_or_create in `with conn:` (dialog
+            # saves, MCP tools, seed) — the block commits promptly, so the
+            # lock is only ever held for the one short save
+            with conn:
+                results.append(db.get_or_create(conn, "subjects", "ریاضی"))
+        except Exception as exc:  # noqa: BLE001 — collected, asserted below
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker, args=(_PausingConn(c1),))
+    t2 = threading.Thread(target=worker, args=(_PausingConn(c2),))
+    try:
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+        assert not t1.is_alive() and not t2.is_alive()
+    finally:
+        c1.close()
+        c2.close()
+    assert errors == []
+    assert len(results) == 2 and results[0] == results[1] is not None
+    c3 = db.connect(path)
+    try:
+        count = c3.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
+    finally:
+        c3.close()
+    assert count == 1
+
+
 # --- schema contracts the rest of the app silently leans on --------------
 
 def test_kind_column_only_accepts_known_kinds(conn):
