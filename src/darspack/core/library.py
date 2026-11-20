@@ -48,6 +48,10 @@ class Library:
         check alone stats every file in the library). A folder with no
         catalog yet (a test, a script, a first run) still gets the full
         one-time setup, so a worker never lands on a missing schema.
+
+        Returns an ALREADY OPENED library: call it instead of
+        `Library(root).open()`, not in addition to it (a second open()
+        would make a second connection and leak the first).
         """
         fresh = not (Path(root) / "catalog.db").exists()
         return cls(root, maintain=fresh).open()

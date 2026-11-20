@@ -110,7 +110,7 @@ class ImportWorker(QObject):
         new_ids: list[int] = []
         lib = None
         try:
-            lib = Library.for_background(self.library_root).open()
+            lib = Library.for_background(self.library_root)
             files = list(iter_files(self.paths))
             for i, path in enumerate(files, start=1):
                 if self._cancelled:
@@ -224,7 +224,7 @@ class PackageWorker(QObject):
                     self.path, progress=self._verify_progress)
                 self.done.emit({"kind": "verify", "report": report})
             else:
-                lib = Library.for_background(self.library_root).open()
+                lib = Library.for_background(self.library_root)
                 info = manifest_core.export_package(
                     lib.conn, lib.files_dir, self.file_ids, self.path,
                     progress=self._export_progress)
@@ -274,7 +274,7 @@ class StatsWorker(QObject):
         stats = None
         lib = None
         try:
-            lib = Library.for_background(self.library_root).open()
+            lib = Library.for_background(self.library_root)
             if not self._cancelled:
                 stats = library_stats(lib.conn)
         except Exception:
@@ -312,7 +312,7 @@ class DuplicatesWorker(QObject):
         report = None
         lib = None
         try:
-            lib = Library.for_background(self.library_root).open()
+            lib = Library.for_background(self.library_root)
             if not self._cancelled:
                 report = {
                     "groups": duplicate_groups(lib.conn),
