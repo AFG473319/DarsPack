@@ -31,7 +31,7 @@ from .. import asset_path, i18n
 from ..core import db, manifest as manifest_core
 from ..core.normalize import persian_digits
 from ..i18n import STRINGS, num, tr
-from .workers import FeedbackPoster, PackageWorker
+from .workers import FeedbackPoster, PackageWorker, start_worker
 from .smooth_scroll import enable_smooth_scroll
 from .delegates import FileNameDelegate, FileNameLabel, KeycapDelegate, KindBadgeDelegate
 from . import icons, theme
@@ -387,6 +387,8 @@ class FeedbackDialog(QDialog):
         self._active_payload = None
         self._posting_from_chain = False
         self._poster = None
+        self._poster_thread = None
+        self._poster_threads = []    # every poster thread this dialog started
 
         layout = QVBoxLayout(self)
         self.notice = QLabel("")          # «پیش‌نویسِ قبلی بازگردانده شد»
@@ -615,14 +617,22 @@ class FeedbackDialog(QDialog):
         self._posting_from_chain = from_chain
         self.submit.setEnabled(False)
         self.submit.setText(tr("fb_sending"))
-        # parented to the MAIN WINDOW: closing this dialog must never
-        # delete a running thread (the failed-send contract: the queued
-        # entry just retries on the next open)
-        poster = FeedbackPoster(endpoint, payload,
-                                parent=self.parent_window)
+        # The poster is a plain QObject on its own thread (see
+        # workers.start_worker); the thread is parented to the MAIN
+        # WINDOW, so closing this dialog must never delete a running
+        # thread (the failed-send contract: the queued entry just
+        # retries on the next open).
+        poster = FeedbackPoster(endpoint, payload)
         self._poster = poster
         poster.done.connect(self._post_done)
-        poster.start()
+        self._poster_thread = start_worker(poster,
+                                           parent=self.parent_window)
+        # Keep every poster thread, not just the latest: a pending
+        # chain starts one poster per entry, and a thread whose only
+        # handle was overwritten can be destroyed while still running
+        # when the parent window goes away — destroying a running
+        # QThread aborts the whole process.
+        self._poster_threads.append(self._poster_thread)
 
     def _post_done(self, ok: bool) -> None:
         payload = self._active_payload
@@ -870,18 +880,31 @@ class ExportDialog(QDialog):
         # M24: zipping runs in a worker — the old direct call froze the
         # whole window on a big package, with no progress and no cancel.
         self._pkg_worker = PackageWorker(
-            str(self.parent_window.lib.root), "export", path, file_ids,
-            parent=self)
+            str(self.parent_window.lib.root), "export", path, file_ids)
         progress = PackageProgressDialog(self, tr("export_title"),
                                          tr("pkg_exporting"))
+        # Kept on self so the bound-method done handler below can find
+        # them: a lambda connected to a worker signal runs in the
+        # WORKER's thread (PySide6 routes a bare callable to the sender
+        # object's thread), so a lambda would touch dialogs off the UI
+        # thread and hang the modal progress dialog.
+        self._pkg_progress = progress
+        self._pkg_path = path
         self._pkg_worker.progress.connect(progress.set_progress)
-        self._pkg_worker.done.connect(
-            lambda result: self._export_finished(progress, result, path))
-        self._pkg_worker.start()
+        self._pkg_worker.done.connect(self._export_finished)
+        self._pkg_thread = start_worker(self._pkg_worker, parent=self)
         progress.exec()
 
-    def _export_finished(self, progress, result: dict, path: str) -> None:
+    def _export_finished(self, result: dict) -> None:
+        progress = self._pkg_progress
+        path = self._pkg_path
         progress.accept()
+        # The worker deletes itself when its thread finishes — drop the
+        # references now, while the object is still alive.
+        self._pkg_worker = None
+        self._pkg_thread = None
+        self._pkg_progress = None
+        self._pkg_path = None
         if result.get("cancelled"):
             return            # stay open so the user can retry
         if "error" in result:
@@ -2879,17 +2902,28 @@ class ExamPackDialog(QDialog):
         # M24: zipping runs in a worker — the old direct call froze the
         # whole window on a big package, with no progress and no cancel.
         self._pkg_worker = PackageWorker(
-            str(self.lib.root), "export", path, ids, parent=self)
+            str(self.lib.root), "export", path, ids)
         progress = PackageProgressDialog(self, tr("exam_pack_title"),
                                          tr("pkg_exporting"))
+        # Kept on self so the bound-method done handler below can find
+        # them (see ExportDialog._export for why no lambda is used).
+        self._pkg_progress = progress
+        self._pkg_path = path
         self._pkg_worker.progress.connect(progress.set_progress)
-        self._pkg_worker.done.connect(
-            lambda result: self._create_finished(progress, result, path))
-        self._pkg_worker.start()
+        self._pkg_worker.done.connect(self._create_finished)
+        self._pkg_thread = start_worker(self._pkg_worker, parent=self)
         progress.exec()
 
-    def _create_finished(self, progress, result: dict, path: str) -> None:
+    def _create_finished(self, result: dict) -> None:
+        progress = self._pkg_progress
+        path = self._pkg_path
         progress.accept()
+        # The worker deletes itself when its thread finishes — drop the
+        # references now, while the object is still alive.
+        self._pkg_worker = None
+        self._pkg_thread = None
+        self._pkg_progress = None
+        self._pkg_path = None
         if result.get("cancelled"):
             return            # stay open so the user can retry
         if "error" in result:
