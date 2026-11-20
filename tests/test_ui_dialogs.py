@@ -653,3 +653,14 @@ def test_share_dialog_shows_latin_pin(lib_with_file, qapp):
     assert pin_label.text() == "123456"
     assert "۱۲۳۴۵۶" not in pin_label.text()
     assert pin_label.layoutDirection() == Qt.LeftToRight
+
+
+def test_text_dialog_shows_message_and_confirm_button(qapp, monkeypatch):
+    from darspack.ui import dialogs
+    created = []
+    monkeypatch.setattr(
+        dialogs.QMessageBox, "exec",
+        lambda self: (created.append(self), 0)[1])
+    dialogs.text_dialog(None, "about-title", "about-body")
+    assert created[0].windowTitle() == "about-title"
+    assert created[0].text() == "about-body"

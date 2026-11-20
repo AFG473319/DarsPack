@@ -162,3 +162,18 @@ def test_export_worker_cancel_deletes_partial_zip(tmp_path, monkeypatch):
         assert not out.exists(), "cancelled export left a partial ZIP"
     finally:
         lib.close()
+
+
+def test_package_progress_dialog_updates_bar_and_label(qapp):
+    from darspack.ui.dialogs import PackageProgressDialog
+    dlg = PackageProgressDialog(None, "Title", "Start")
+    # nothing known yet: indeterminate range, the label shows the first note
+    assert dlg._bar.maximum() == 0
+    dlg.set_progress(3, 0, "Stage")
+    assert dlg._bar.maximum() == 0 and dlg._label.text() == "Stage"
+    dlg.set_progress(0, 10, "Step 1")
+    assert dlg._bar.maximum() == 10 and dlg._bar.value() == 0
+    dlg.set_progress(10, 10, "Step 2")
+    assert dlg._bar.value() == 10 and dlg._label.text() == "Step 2"
+    dlg.set_progress(1, 2, "")          # empty name keeps the label
+    assert dlg._label.text() == "Step 2" and dlg._bar.value() == 1

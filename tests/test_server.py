@@ -12,7 +12,7 @@ import pytest
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.search import unclassified_count
-from darspack.web.server import ShareServer, local_ips
+from darspack.web.server import ShareServer, _open_server_library, _parse_range, local_ips
 
 
 @pytest.fixture()
@@ -894,3 +894,43 @@ def test_search_reports_total_and_truncated(server, tmp_path, monkeypatch):
     assert len(data["files"]) == 5
     assert data["total"] == 5
     assert data["truncated"] is False
+
+
+# --- server helpers: range parsing (download resume) + server-thread opens ---
+
+@pytest.mark.parametrize("header,size,expected", [
+    ("bytes=0-99", 100, (0, 99)),
+    ("bytes=5-10", 100, (5, 10)),
+    ("bytes=50-", 100, (50, 99)),
+    ("bytes=-50", 100, (50, 99)),
+    ("bytes=-500", 100, (0, 99)),  # suffix longer than the file → the whole file
+    ("bytes=0-", 100, (0, 99)),
+    ("bytes=99-99", 100, (99, 99)),
+    ("bytes=-5", 5, (0, 4)),
+    # unsatisfiable or invalid ranges → None (the route answers 416)
+    ("bytes=100-", 100, None),          # start >= size
+    ("bytes=2-1", 100, None),           # end < start
+    ("bytes=-0", 100, None),            # zero-length suffix
+    ("bytes=0-99,100-199", 200, None),  # multi-range
+    ("items=0-9", 100, None),           # wrong unit
+    ("bytes=a-b", 100, None),
+    ("bytes=0-99", 0, None),            # empty file
+])
+def test_parse_range(header, size, expected):
+    assert _parse_range(header, size) == expected
+
+
+def test_open_server_library_opens_a_connection_without_maintenance(tmp_path):
+    # The server's per-thread opens skip schema init / orphan sweep / health
+    # check (the desktop opens the library first); the connection must still
+    # answer queries for the phone path.
+    with Library(tmp_path / "srv-lib") as lib:
+        p = tmp_path / "ریاضی.pdf"
+        p.write_bytes(b"data")
+        import_file(lib, p)
+    srv = _open_server_library(str(tmp_path / "srv-lib"))
+    try:
+        assert [r["original_name"] for r in
+                srv.conn.execute("SELECT original_name FROM files")] == ["ریاضی.pdf"]
+    finally:
+        srv.close()

@@ -135,3 +135,20 @@ def test_menu_fit_width_and_styled_standard_context_menu(qapp):
     assert bool(std_flags & Qt.WindowType.FramelessWindowHint)
     assert bool(std_flags & Qt.WindowType.NoDropShadowWindowHint)
 
+
+def test_apply_palette_sets_placeholder_highlight_roles(qapp):
+    from PySide6.QtGui import QColor, QPalette
+
+    from darspack.ui import theme
+    original = qapp.palette()
+    try:
+        theme.apply_palette(qapp)
+        assert qapp.palette().color(
+            QPalette.ColorRole.PlaceholderText) == QColor("#8e95a2")
+        assert qapp.palette().color(
+            QPalette.ColorRole.Highlight) == QColor(theme.PALETTE["selection"])
+        assert qapp.palette().color(
+            QPalette.ColorRole.HighlightedText) == QColor(theme.PALETTE["text"])
+    finally:
+        qapp.setPalette(original)
+

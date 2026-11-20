@@ -71,3 +71,17 @@ def test_all_source_tr_keys_exist_in_strings():
     missing_en = {k for k in found_keys if k not in i18n.STRINGS["en"]}
     assert not missing_fa, f"Missing keys in STRINGS['fa']: {missing_fa}"
     assert not missing_en, f"Missing keys in STRINGS['en']: {missing_en}"
+
+
+def test_bidi_filename_wraps_mixed_rtl_filenames():
+    # Persian + ASCII extension: the stem is inside an RTL isolate and the
+    # extension gets its own LTR isolate+brackets
+    assert i18n.bidi_filename("فارسی ریاضی.pdf") == \
+        "\u200F\u2067فارسی ریاضی\u2069 \u2066(.pdf)\u2069"
+    # non-FA language: the name is returned untouched
+    assert i18n.bidi_filename("فارسی ریاضی.pdf", lang="en") == "فارسی ریاضی.pdf"
+    # purely-Latin name in FA: untouched (no RTL content to wrap)
+    assert i18n.bidi_filename("eng notes.pdf") == "eng notes.pdf"
+    # Persian name without an ASCII-alnum extension: the whole name is wrapped
+    assert i18n.bidi_filename("فارسی بدون پسوند") == "\u200F\u2067فارسی بدون پسوند\u2069"
+    assert i18n.bidi_filename("") == ""

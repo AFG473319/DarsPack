@@ -312,3 +312,25 @@ def test_open_settings_offers_restart_when_library_changes(
         assert asked  # the restart question was asked
     finally:
         win.lib.close()
+
+
+# --- sanitize_settings: the mistyped-value repair contract -----------------
+
+def test_sanitize_settings_repairs_and_reports_damage():
+    from darspack.ui.app import sanitize_settings
+    # a clean dict passes through untouched (font_size is written back with
+    # the same value — the write-back itself is not damage)
+    clean = {"language": "en", "font_size": 14, "library": "C:/X"}
+    assert sanitize_settings(dict(clean)) == (clean, False)
+    # mistyped language: repaired to the default + damage flagged
+    assert sanitize_settings({"language": "de"}) == (
+        {"language": "fa", "font_size": 10}, True)
+    # mistyped font_size values: repaired to range or default
+    assert sanitize_settings({"font_size": True})[0]["font_size"] == 10
+    assert sanitize_settings({"font_size": "big"})[0]["font_size"] == 10
+    assert sanitize_settings({"font_size": 0})[0]["font_size"] == 8
+    assert sanitize_settings({"font_size": 99})[0]["font_size"] == 18
+    # a blank/whitespace library is dropped (font_size written back too)
+    assert sanitize_settings({"library": "   "}) == ({"font_size": 10}, True)
+    # not a dict at all
+    assert sanitize_settings("nope") == ({}, True)

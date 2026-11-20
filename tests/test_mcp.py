@@ -6,7 +6,10 @@ import subprocess
 import sys
 import pytest
 
-from darspack.mcp.launch import SERVER_EXE_NAME
+from darspack.mcp.launch import (
+    DEFAULT_LIBRARY_PATH, McpLaunch, SERVER_EXE_NAME, build_mcp_config,
+    build_opencode_config, build_selftest_command, resolve_library_path,
+)
 from darspack.mcp.server import DarsPackMcpServer
 from darspack.mcp.extractor import extract_preview
 from darspack.paths import opencode_command
@@ -716,3 +719,147 @@ def test_preview_large_pdf_does_not_read_whole_file(tmp_path):
     big = tmp_path / "big.pdf"
     big.write_bytes(b"A" * (MAX_PDF_BYTES + 1024 * 1024) + stream)
     assert "Hello from the stream" not in extract_preview(big)
+
+
+# --- gap coverage: launch/config surface, prompt, extractor, stdio loop ---
+
+
+def test_mcp_launch_properties_and_formats():
+    launch = McpLaunch(command="C:/Python314/python.exe",
+                       args=["-m", "darspack.mcp", "--library", "D:/X"],
+                       env={"PYTHONPATH": "C:/repo/src"}, mode="python")
+    assert launch.available
+    assert launch.argv == ["C:/Python314/python.exe", "-m", "darspack.mcp",
+                           "--library", "D:/X"]
+    assert "C:/Python314/python.exe -m darspack.mcp" in launch.command_line()
+    assert launch.selftest_line().endswith("--selftest")
+    entry = launch.to_mcp_server()
+    assert entry["command"] == "C:/Python314/python.exe"
+    assert entry["args"][0] == "-m"
+    assert entry["env"] == {"PYTHONPATH": "C:/repo/src"}
+    oc = launch.to_opencode_server()
+    assert oc["type"] == "local" and isinstance(oc["command"], list)
+    assert McpLaunch(command="", mode="unavailable").available is False
+
+
+def test_mcp_launch_quote_and_config_json():
+    from darspack.mcp.launch import _quote, config_json
+    assert _quote("plain") == "plain"
+    assert _quote("a b") == '"a b"'
+    assert _quote('with "quote') == '"with "quote"'
+    cfg = config_json({"k": "فارسی"})
+    assert json.loads(cfg) == {"k": "فارسی"}
+    assert "فارسی" in cfg  # ensure_ascii=False: Persian is not escaped
+
+
+def test_mcp_launch_resolve_library_path():
+    assert isinstance(DEFAULT_LIBRARY_PATH, Path)
+    assert resolve_library_path("D:/School/Lib") == \
+        Path("D:/School/Lib").resolve()
+
+
+def test_mcp_launch_build_configs_describe_the_launch():
+    cfg = build_mcp_config(library_path="D:/School/Lib")
+    entry = cfg["mcpServers"]["darspack"]
+    assert "darspack.mcp" in entry["args"]
+    lib_idx = entry["args"].index("--library")
+    assert entry["args"][lib_idx + 1] == str(Path("D:/School/Lib").resolve())
+    oc = build_opencode_config(library_path="D:/School/Lib")
+    assert oc["mcp"]["servers"]["darspack"]["type"] == "local"
+    assert "darspack.mcp" in oc["mcp"]["servers"]["darspack"]["command"]
+    assert build_selftest_command(
+        library_path="D:/School/Lib").endswith("--selftest")
+
+
+def test_mcp_build_minimal_prompt():
+    from darspack.mcp.prompt import build_minimal_prompt
+    prompt = build_minimal_prompt(library_path="D:/School/Lib")
+    assert prompt.startswith("Register this local MCP server")
+    assert "darspack" in prompt and "--selftest" in prompt
+
+
+def test_extractor_plain_text_truncates_with_notice(tmp_path):
+    from darspack.mcp.extractor import _extract_plain_text
+    f = tmp_path / "فایل.txt"
+    f.write_text("سطر اول\nسطر دوم\n" + "x" * 200, encoding="utf-8")
+    out = _extract_plain_text(f, max_chars=10)
+    assert out.startswith("سطر اول")
+    assert out.endswith("\n... [truncated]")
+
+
+def test_extractor_pdf_text_from_stream(tmp_path):
+    import zlib
+    from darspack.mcp.extractor import _extract_pdf_text
+    f = tmp_path / "ریاضی.pdf"
+    f.write_bytes(b"%PDF-1.4\n" + b"stream\n"
+                  + zlib.compress(b"(Hello PDF) Tj") + b"\nendstream")
+    assert _extract_pdf_text(f, 2000) == "Hello PDF"
+
+
+def test_extractor_pdf_without_text_reports_no_text(tmp_path):
+    from darspack.mcp.extractor import _extract_pdf_text
+    f = tmp_path / "خالی.pdf"
+    f.write_bytes(b"%PDF-1.4\n")
+    result = _extract_pdf_text(f, 2000)
+    assert "[PDF:" in result and "No plain text stream extracted" in result
+
+
+def test_stderr_only_stream_forwards_and_swallows():
+    from darspack.mcp.server import _StderrOnlyStream
+    sink = []
+
+    class _Sink:
+        def write(self, text):
+            sink.append(text)
+            return len(text)
+
+        def flush(self):
+            pass
+
+    s = _StderrOnlyStream(_Sink())
+    assert s.write("hello") == 5
+    assert sink == ["hello"]
+    assert s.isatty() is False
+    s.flush()
+
+
+def test_run_stdio_server_answers_and_exits_on_eof(tmp_path, monkeypatch):
+    import io
+    from darspack.mcp.server import run_stdio_server
+    stdin_buf = io.BytesIO(b'{"jsonrpc": "2.0", "id": 1, "method": "ping"}\n')
+    stdout_buf = io.BytesIO()
+
+    class _FakeIn:
+        buffer = stdin_buf
+
+    class _FakeOut:
+        buffer = stdout_buf
+
+    monkeypatch.setattr(sys, "stdin", _FakeIn())
+    monkeypatch.setattr(sys, "stdout", _FakeOut())
+    run_stdio_server(str(tmp_path / "lib"))
+    stdout_buf.seek(0)
+    responses = [json.loads(line)
+                 for line in stdout_buf.read().splitlines() if line.strip()]
+    assert len(responses) == 1
+    assert responses[0]["id"] == 1
+    assert responses[0]["jsonrpc"] == "2.0"
+    assert responses[0]["result"] == {}
+
+
+def test_main_stdio_returns_zero_on_eof(tmp_path, monkeypatch):
+    import io
+    from darspack.mcp.server import main
+    stdin_buf = io.BytesIO(b"")
+    stdout_buf = io.BytesIO()
+
+    class _FakeIn:
+        buffer = stdin_buf
+
+    class _FakeOut:
+        buffer = stdout_buf
+
+    monkeypatch.setattr(sys, "stdin", _FakeIn())
+    monkeypatch.setattr(sys, "stdout", _FakeOut())
+    assert main([str(tmp_path / "lib")]) == 0
+    assert stdout_buf.getvalue() == b""
