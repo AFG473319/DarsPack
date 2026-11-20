@@ -5,7 +5,8 @@
 name: Worker crash repro (temporary)
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ci/worker-crash-repro]
 
 permissions:
   contents: read
