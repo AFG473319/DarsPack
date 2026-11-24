@@ -1338,10 +1338,18 @@ class VerifyReportDialog(QDialog):
         for the classify dialog — never auto-applied. The extracted temp
         folder is removed by the import worker after it finishes (the
         worker outlives this dialog, which returns right away)."""
-        metas = package_metas(self.path)
-        tmp = tempfile.mkdtemp(prefix="darspack-pkg-")
-        with zipfile.ZipFile(self.path) as zf:
-            zf.extractall(tmp)
+        tmp = None
+        try:
+            metas = package_metas(self.path)
+            tmp = tempfile.mkdtemp(prefix="darspack-pkg-")
+            with zipfile.ZipFile(self.path) as zf:
+                zf.extractall(tmp)
+        except Exception as exc:  # disk full, permissions, corrupt zip…
+            # The worker never starts, so the temp folder is ours to remove.
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
         files_dir = Path(tmp) / "files"
         self.parent_window.run_import_worker(
             [files_dir], metas=metas, meta_base=files_dir, cleanup_dir=Path(tmp))

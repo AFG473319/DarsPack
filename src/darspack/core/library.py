@@ -301,7 +301,10 @@ class Library:
             return []
         items = []
         for p in self.trash_dir.iterdir():
-            if not p.is_file():
+            try:
+                if not p.is_file():
+                    continue
+            except OSError:
                 continue
             meta_path = self.trash_meta_dir / f"{p.name}.json"
             meta = {}
@@ -310,13 +313,20 @@ class Library:
                     meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
-            stat = p.stat()
-            deleted_at = meta.get("deleted_at") or datetime.fromtimestamp(stat.st_mtime).isoformat()
+            # Antivirus scans / concurrent moves on Windows can make stat()
+            # fail for a moment; list the item with safe defaults instead.
+            try:
+                stat = p.stat()
+                size, mtime = stat.st_size, stat.st_mtime
+            except OSError:
+                size, mtime = 0, None
+            deleted_at = meta.get("deleted_at") or (
+                datetime.fromtimestamp(mtime).isoformat() if mtime is not None else "")
             items.append({
                 "trash_name": p.name,
                 "original_name": meta.get("original_name") or p.name,
                 "stored_name": meta.get("stored_name") or p.name,
-                "size": stat.st_size,
+                "size": size,
                 "deleted_at": deleted_at,
                 "subject_name": meta.get("subject_name") or "?",
                 "kind": meta.get("kind") or "",
