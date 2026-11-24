@@ -40,8 +40,10 @@ if TYPE_CHECKING:      # F4 (perf audit): ShareServer pulls http/ssl/email —
 KINDS = ["جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر"]
 
 
-def human_size(n: int, lang: str | None = None) -> str:
+def human_size(n: int | None, lang: str | None = None) -> str:
     """Bytes → a human size in the UI language («۱٫۵ کیلوبایت», «1.5 KB»)."""
+    if n is None or not isinstance(n, (int, float)) or n < 0:
+        return "—"          # missing/corrupt size never crashes the table
     lang = lang or i18n.language()
     for unit, key in (("B", "unit_b"), ("KB", "unit_kb"),
                       ("MB", "unit_mb"), ("GB", "unit_gb")):
@@ -71,7 +73,9 @@ def chapter_lesson_display(chapter, lesson) -> str:
     return " / ".join(parts) if parts else "—"
 
 
-def jalali_date(iso: str) -> str:
+def jalali_date(iso: str | None) -> str:
+    if not iso or not isinstance(iso, str):
+        return "—"          # missing date (old/partial rows) never crashes the table
     # F4 (perf audit): jdatetime costs ~200 ms of import time, but rows
     # need it only when the table fills — deferring it past window show
     # speeds up source runs (Python caches the module after first call).
@@ -84,7 +88,7 @@ def jalali_date(iso: str) -> str:
         gregorian = _dt.datetime.fromisoformat(iso)
         return jdatetime.datetime.fromgregorian(
             datetime=gregorian).strftime("%Y/%m/%d")
-    except ValueError:
+    except (ValueError, TypeError, OverflowError):
         return iso          # bad input never crashes the table — passes through
 
 
@@ -1022,39 +1026,45 @@ class MainWindow(QMainWindow):
         # so mid-fill repaints are off and only column 0 carries the file id
         # (selected_file_id reads selectedItems()[0]; selection is row-wide).
         self.table.setUpdatesEnabled(False)
-        self.table.setRowCount(len(rows))
-        from ..core.normalize import persian_digits
-        for i, row in enumerate(rows):
-            date_str, size_str = self._display_strs_for(row)
-            year_str = row["school_year"] or "—"
-            values = [row["original_name"],
-                      row["subject_name"] or "—",
-                      chapter_lesson_display(row["chapter"], row["lesson"]),
-                      row["kind"] or "—", size_str,
-                      persian_digits(date_str), persian_digits(year_str)]
-            sort_keys = [
-                row["original_name"].lower(),
-                row["subject_name"] or "",
-                (row["chapter"] or 0, row["lesson"] or 0),
-                row["kind"] or "",
-                row["size_bytes"] or 0,
-                row["imported_at"] or "",
-                row["school_year"] or "",
-            ]
-            for col, value in enumerate(values):
-                item = TableSortItem(value)
-                item.setData(TableSortItem.SORT_KEY_ROLE, sort_keys[col])
-                if col == 0:
-                    item.setData(Qt.UserRole, row["id"])
-                    item.setIcon(self._file_icon_for(row["original_name"]))
-                    item.setToolTip(row["original_name"])
-                elif col == 1:
-                    item.setToolTip(row["subject_name"] or "—")
-                self.table.setItem(i, col, item)
-        active_col = self.table.horizontalHeader().sortIndicatorSection()
-        if self.table.horizontalHeader().isSortIndicatorShown() and active_col in self._sort_orders:
-            self.table.sortItems(active_col, self._sort_orders[active_col])
-        self.table.setUpdatesEnabled(True)
+        # try/finally: one bad row must never leave the table frozen with
+        # repaints disabled for the rest of the session.
+        try:
+            self.table.setRowCount(len(rows))
+            from ..core.normalize import persian_digits
+            for i, row in enumerate(rows):
+                date_str, size_str = self._display_strs_for(row)
+                name = row["original_name"] or "—"
+                year_str = str(row["school_year"] or "—")
+                values = [name,
+                          row["subject_name"] or "—",
+                          chapter_lesson_display(row["chapter"], row["lesson"]),
+                          row["kind"] or "—", size_str or "—",
+                          persian_digits(str(date_str or "—")),
+                          persian_digits(year_str)]
+                sort_keys = [
+                    name.lower(),
+                    row["subject_name"] or "",
+                    (row["chapter"] or 0, row["lesson"] or 0),
+                    row["kind"] or "",
+                    row["size_bytes"] or 0,
+                    row["imported_at"] or "",
+                    row["school_year"] or "",
+                ]
+                for col, value in enumerate(values):
+                    item = TableSortItem(value)
+                    item.setData(TableSortItem.SORT_KEY_ROLE, sort_keys[col])
+                    if col == 0:
+                        item.setData(Qt.UserRole, row["id"])
+                        item.setIcon(self._file_icon_for(name))
+                        item.setToolTip(name)
+                    elif col == 1:
+                        item.setToolTip(row["subject_name"] or "—")
+                    self.table.setItem(i, col, item)
+            active_col = self.table.horizontalHeader().sortIndicatorSection()
+            if self.table.horizontalHeader().isSortIndicatorShown() and active_col in self._sort_orders:
+                self.table.sortItems(active_col, self._sort_orders[active_col])
+        finally:
+            self.table.setUpdatesEnabled(True)
         self._update_empty_state(len(rows))
         self._update_action_states()
         # One query for both numbers (B10): the status bar wants the total
@@ -1275,7 +1285,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             norm_path = os.path.normpath(str(path))
-            subprocess.Popen(f'explorer.exe /select,"{norm_path}"')
+            try:
+                subprocess.Popen(f'explorer.exe /select,"{norm_path}"')
+            except (OSError, ValueError):
+                # Policy limits / out of resources: open the folder at least.
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 
