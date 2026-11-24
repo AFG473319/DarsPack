@@ -140,16 +140,55 @@ def test_verify_rejects_zip_without_manifest(tmp_path):
     assert report.problems == ["manifest.json در بسته نیست — بسته معتبر نیست"]
 
 
-def test_verify_raises_on_non_zip_input(tmp_path):
-    # known quirk (⚖️): a non-zip file raises BadZipFile instead of coming
-    # back as a Persian report — the desktop verify dialog calls this
-    # straight from a file picker, so a corrupt zip currently shows the
-    # crash dialog. Pinned as current behavior; the maintainer decides in the
-    # later review whether verify_package should catch it instead.
+def test_verify_returns_report_on_non_zip_input(tmp_path):
+    # A corrupt or non-zip file returns a Persian VerifyReport cleanly
+    # instead of raising BadZipFile straight into the global crash dialog.
     not_a_zip = tmp_path / "not-a-zip.zip"
     not_a_zip.write_bytes(b"just some bytes")
-    with pytest.raises(zipfile.BadZipFile):
-        verify_package(not_a_zip)
+    report = verify_package(not_a_zip)
+    assert report.ok is False
+    assert report.problems
+
+
+def test_verify_handles_corrupt_member_stream_and_bad_shapes(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "جزوه بلند.txt"
+        src.write_bytes(b"hello darspack " * 400)
+        import_file(lib, src)
+        fid = lib.conn.execute("SELECT id FROM files").fetchone()["id"]
+        pkg = tmp_path / "stream.zip"
+        export_package(lib.conn, lib.files_dir, [fid], pkg)
+
+    raw = bytearray(pkg.read_bytes())
+    with zipfile.ZipFile(pkg) as zf:
+        victim = next(i for i in zf.infolist() if i.filename.startswith("files/"))
+    # Flip bytes inside the deflated member payload (after local header + filename)
+    pos = victim.header_offset + 40 + len(victim.filename.encode("utf-8"))
+    for k in range(pos, min(pos + 24, len(raw))):
+        raw[k] ^= 0xFF
+    bad_stream = tmp_path / "bad_stream.zip"
+    bad_stream.write_bytes(bytes(raw))
+    report = verify_package(bad_stream)
+    assert report.ok is False
+    assert any("خراب یا ناخوانا" in p or "خراب یا تغییرکرده" in p for p in report.problems)
+
+    for bad_manifest in ("[]", json.dumps({"files": []}), json.dumps({"format": "darspack-package", "files": "oops"})):
+        z = tmp_path / "badshape.zip"
+        with zipfile.ZipFile(z, "w") as zf:
+            zf.writestr("manifest.json", bad_manifest)
+        r = verify_package(z)
+        assert r.ok is False
+        assert r.problems
+
+
+def test_export_package_failure_preserves_existing_file(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        out = tmp_path / "existing.zip"
+        out.write_bytes(b"pre-existing-content")
+        with pytest.raises(KeyError):
+            export_package(lib.conn, lib.files_dir, [999999], out)
+        assert out.read_bytes() == b"pre-existing-content"
+        assert list(tmp_path.glob("*.tmp.zip")) == []
 
 
 def test_manifest_entry_carries_classification(tmp_path):

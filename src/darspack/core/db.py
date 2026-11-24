@@ -11,6 +11,31 @@ from __future__ import annotations
 import datetime as _dt
 import sqlite3
 
+# Keep in lockstep with SCHEMA's CHECK constraint on files.kind.
+ALLOWED_KINDS = ("جزوه", "نمونه‌سوال", "کاربرگ", "تکلیف", "سایر")
+
+
+def resolve_kind(kind: object) -> str | None:
+    """Map user/import kind text to a canonical ALLOWED_KINDS value, or None.
+
+    Accepts Arabic letters / space vs ZWNJ (e.g. «نمونه سوال» -> «نمونه‌سوال»)
+    so imports and API inputs never crash SQLite's CHECK constraint.
+    """
+    if not isinstance(kind, str):
+        return None
+    text = kind.strip()
+    if not text:
+        return None
+    if text in ALLOWED_KINDS:
+        return text
+    from .normalize import match_key
+    key = match_key(text)
+    for allowed in ALLOWED_KINDS:
+        if match_key(allowed) == key:
+            return allowed
+    return None
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS subjects (
   id          INTEGER PRIMARY KEY,

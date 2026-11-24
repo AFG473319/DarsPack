@@ -24,7 +24,7 @@ from .normalize import match_key
 from .suggest import WORD_NUMBERS
 
 _BASE_SQL = """
-SELECT f.id, f.original_name, f.size_bytes, f.imported_at,
+SELECT f.id, f.stored_name, f.original_name, f.size_bytes, f.imported_at,
        f.chapter, f.lesson, f.kind, f.school_year, f.note, f.sha256, f.available,
        s.name AS subject_name,
        {rank} AS rank

@@ -100,8 +100,14 @@ def import_file(lib, src, meta: dict | None = None,
     never auto-applied); they travel back on the result as `prefill`
     so the classify dialog can offer them for review.
     """
+    if src is None or (isinstance(src, str) and not src.strip()):
+        return ImportResult("error", "فایل پیدا نشد: —")
     src = Path(src)
-    if not src.is_file():
+    try:
+        is_file = src.is_file()
+    except OSError as exc:
+        return ImportResult("error", f"{src.name}: {exc.__class__.__name__}", path=src)
+    if not is_file:
         return ImportResult("error", f"فایل پیدا نشد: {src}")
     conn = lib.conn
     size = src.stat().st_size          # the ONLY stat: hashing reuses it
@@ -109,8 +115,12 @@ def import_file(lib, src, meta: dict | None = None,
 
     shown_name = display_name or src.name
     suggestion = suggest(Path(shown_name).stem)
-    meta = meta or {}
-    kind = meta.get("kind") or suggestion["kind"]
+    meta = meta if isinstance(meta, dict) else {}
+    # Resolve any incoming kind through the canonical CHECK list so an
+    # external package manifest with an unknown kind cannot trigger
+    # sqlite3.IntegrityError.
+    raw_kind = meta.get("kind")
+    kind = db.resolve_kind(raw_kind) or suggestion["kind"]
     # The SUBJECT is deliberately NOT auto-applied: categorizing is the
     # app's main job and belongs to the user. Suggestions only pre-fill
     # the classification dialog; until then the file counts as
@@ -164,7 +174,17 @@ def import_file(lib, src, meta: dict | None = None,
                  kind))
             file_id = cur.lastrowid
 
-            final = lib.files_dir / f"{file_id:06d}{src.suffix}"
+            # Restored trash files keep their historic stored_name, so a
+            # newly assigned rowid could collide with an existing filename
+            # in files/. Never overwrite an occupied stored_name.
+            stem = f"{file_id:06d}"
+            final = lib.files_dir / f"{stem}{src.suffix}"
+            n = 0
+            while final.exists() or conn.execute(
+                "SELECT 1 FROM files WHERE stored_name=?", (final.name,)
+            ).fetchone():
+                n += 1
+                final = lib.files_dir / f"{stem}~{n}{src.suffix}"
             os.replace(tmp, final)  # atomic rename on the same volume
             conn.execute("UPDATE files SET stored_name=? WHERE id=?",
                          (final.name, file_id))
@@ -175,11 +195,35 @@ def import_file(lib, src, meta: dict | None = None,
                         path=src, file_id=file_id, prefill=prefill)
 
 
+def _walk_dir_files(folder: Path) -> list[Path]:
+    """Collect regular files inside `folder`, skipping unreadable folders."""
+    found: list[Path] = []
+    for root, _dirs, names in os.walk(folder, onerror=lambda _exc: None):
+        root_p = Path(root)
+        for name in names:
+            candidate = root_p / name
+            try:
+                if candidate.is_file():
+                    found.append(candidate)
+            except OSError:
+                continue
+    found.sort()
+    return found
+
+
 def iter_files(paths):
     """Expand a mix of files and folders into individual files (sorted)."""
-    for p in map(Path, paths):
-        if p.is_dir():
-            yield from sorted(q for q in p.rglob("*") if q.is_file())
+    for raw in paths:
+        if raw is None:
+            continue
+        p = Path(raw)
+        try:
+            is_dir = p.is_dir()
+        except OSError:
+            yield p
+            continue
+        if is_dir:
+            yield from _walk_dir_files(p)
         else:
             yield p
 

@@ -84,3 +84,5 @@ def test_match_key_none_and_whitespace():
     assert match_key("   \t\n  ") == ""
     assert latin_digits("") == ""
     assert persian_digits("") == ""
+    assert latin_digits(None) == ""
+    assert persian_digits(None) == ""

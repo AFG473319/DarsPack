@@ -35,13 +35,17 @@ _NORMALIZE_TABLE = {
 }
 
 
-def latin_digits(text: str) -> str:
+def latin_digits(text: str | None) -> str:
     """Convert Persian/Arabic digits to Latin digits."""
+    if not text:
+        return ""
     return text.translate(_TO_LATIN)
 
 
-def persian_digits(text: str) -> str:
+def persian_digits(text: str | None) -> str:
     """Convert Latin digits to Persian digits (for UI display)."""
+    if not text:
+        return ""
     return text.translate(_TO_PERSIAN)
 
 

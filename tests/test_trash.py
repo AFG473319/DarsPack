@@ -155,3 +155,44 @@ def test_trash_dialog_ui(tmp_path, qapp, monkeypatch):
         assert win.lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"] == 1
     finally:
         win.lib.close()
+
+
+def test_empty_trash_commits_log_and_allows_immediate_backup(tmp_path):
+    """empty_trash() must commit its activity log row so subsequent
+    backup_library(lib, ...) does not deadlock on an open transaction."""
+    import json
+    from darspack.core.backup import backup_library
+
+    with Library(tmp_path / "lib") as lib:
+        keep = tmp_path / "keep.pdf"
+        keep.write_bytes(b"keep-bytes")
+        import_file(lib, keep)
+        victim = tmp_path / "victim.pdf"
+        victim.write_bytes(b"victim-bytes")
+        res = import_file(lib, victim)
+        lib.move_to_trash(res.file_id)
+
+        out = lib.empty_trash()
+        assert out["deleted"] == 1
+        assert not lib.conn.in_transaction
+
+        backup_zip = tmp_path / "after-empty.zip"
+        info = backup_library(lib, backup_zip)
+        assert info["count"] == 1
+
+        # Restore should also ignore invalid kind and empty-normalized tags
+        gone = tmp_path / "badmeta.pdf"
+        gone.write_bytes(b"badmeta-bytes")
+        r2 = import_file(lib, gone)
+        tr = lib.move_to_trash(r2.file_id)
+        meta_p = lib.trash_meta_dir / f"{tr['trash_name']}.json"
+        meta = json.loads(meta_p.read_text(encoding="utf-8"))
+        meta["kind"] = "nonexistent-kind"
+        meta["tags"] = ["---", "جزوه", "   "]
+        meta_p.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+        restored = lib.restore_trash_file(tr["trash_name"])
+        row = lib.conn.execute("SELECT kind FROM files WHERE id=?", (restored["id"],)).fetchone()
+        assert row["kind"] is None
+        null_tags = lib.conn.execute("SELECT COUNT(*) c FROM file_tags WHERE tag_id IS NULL").fetchone()["c"]
+        assert null_tags == 0

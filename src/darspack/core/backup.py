@@ -110,9 +110,20 @@ def backup_library(lib, out_path, progress=None) -> dict:
             # cleanup: an open handle would make Windows refuse to delete
             # the folder.
             dst = sqlite3.connect(snapshot)
+            src_conn = None
             try:
-                lib.conn.backup(dst)
+                # If the caller left an uncommitted transaction open on
+                # lib.conn, calling lib.conn.backup(dst) directly can hang in
+                # SQLite; in WAL mode a fresh connection snapshots the last
+                # committed state without blocking.
+                if lib.conn.in_transaction and lib.db_path.exists():
+                    src_conn = sqlite3.connect(lib.db_path, timeout=5.0)
+                    src_conn.backup(dst)
+                else:
+                    lib.conn.backup(dst)
             finally:
+                if src_conn is not None:
+                    src_conn.close()
                 dst.close()
             # Read the file list from the snapshot, not the live DB: the
             # manifest and the catalog inside one ZIP are one point in time.

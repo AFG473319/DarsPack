@@ -18,8 +18,11 @@ import datetime as _dt
 import hashlib
 import html
 import json
+import os
 import re
+import tempfile
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,23 +49,28 @@ def _now() -> str:
 def _fetch_entries(conn, file_ids) -> list[dict]:
     """Manifest entries for `file_ids`, in the order given (B13).
 
-    Two queries for the whole batch instead of two per file: the catalog
-    row (with its subject name) and the tag names, both keyed by id.
+    Chunked IN queries stay well below SQLite's variable limit even when
+    exporting thousands of files at once.
     """
     ids = list(file_ids)
     if not ids:
         return []
-    marks = ",".join("?" * len(ids))
-    rows = {row["id"]: row for row in conn.execute(
-        f"""SELECT f.*, s.name AS subject_name
-            FROM files f LEFT JOIN subjects s ON s.id = f.subject_id
-            WHERE f.id IN ({marks})""", ids)}
+    rows = {}
     tags: dict[int, list[str]] = {}
-    for tag in conn.execute(
-            f"""SELECT ft.file_id, t.name FROM tags t
-                JOIN file_tags ft ON ft.tag_id = t.id
-                WHERE ft.file_id IN ({marks})""", ids):
-        tags.setdefault(tag["file_id"], []).append(tag["name"])
+    chunk_size = 500
+    for start in range(0, len(ids), chunk_size):
+        chunk = ids[start:start + chunk_size]
+        marks = ",".join("?" * len(chunk))
+        for row in conn.execute(
+                f"""SELECT f.*, s.name AS subject_name
+                    FROM files f LEFT JOIN subjects s ON s.id = f.subject_id
+                    WHERE f.id IN ({marks})""", chunk):
+            rows[row["id"]] = row
+        for tag in conn.execute(
+                f"""SELECT ft.file_id, t.name FROM tags t
+                    JOIN file_tags ft ON ft.tag_id = t.id
+                    WHERE ft.file_id IN ({marks})""", chunk):
+            tags.setdefault(tag["file_id"], []).append(tag["name"])
     entries = []
     for file_id in ids:
         row = rows.get(file_id)
@@ -93,6 +101,10 @@ def export_package(conn, files_dir, file_ids, out_path, progress=None,
     (with ``missing_count``), so the ZIP that comes out is complete and
     verifiable. With skip_missing=False (the default, plain package
     export) a missing file still raises FileNotFoundError as before.
+
+    The ZIP is staged into a temporary file next to ``out_path`` and moved
+    into place atomically only on success, so an interrupted export never
+    destroys an existing file or leaves a half-written archive behind.
     """
     # By default each member is filed under a friendly «NNN - name» label,
     # which keeps a shipped package browsable. A full-library backup passes
@@ -105,33 +117,45 @@ def export_package(conn, files_dir, file_ids, out_path, progress=None,
     manifest = {"format": FORMAT, "version": VERSION, "created": _now(),
                 "files": []}
     out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     missing: list[str] = []
     kept = 0
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for entry in entries:
-            stored = entry.pop("stored_name")
-            src = Path(files_dir) / stored
-            if not src.is_file():
-                if skip_missing:
-                    missing.append(entry["name"])
-                    continue
-                raise FileNotFoundError(
-                    f"file missing on disk: {src} "
-                    f"(catalogued as {entry['name']!r})")
-            kept += 1
-            if stored_names:
-                arc = f"files/{stored}"
-            else:
-                arc = f"files/{kept:03d} - {safe_name(entry['name'])}"
-            zf.write(src, arc)
-            entry["path"] = arc
-            manifest["files"].append(entry)
-            if progress is not None:
-                progress(kept, len(entries))
-        manifest_bytes = json.dumps(
-            manifest, ensure_ascii=False, indent=2).encode("utf-8")
-        zf.writestr("manifest.json", manifest_bytes)
-        zf.writestr("index.html", make_index_html(manifest).encode("utf-8"))
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=out_path.stem + ".", suffix=".tmp.zip",
+        dir=str(out_path.parent))
+    os.close(fd)
+    tmp_path: Path | None = Path(tmp_name)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for entry in entries:
+                stored = entry.pop("stored_name")
+                src = Path(files_dir) / stored
+                if not stored or not src.is_file():
+                    if skip_missing:
+                        missing.append(entry["name"])
+                        continue
+                    raise FileNotFoundError(
+                        f"file missing on disk: {src} "
+                        f"(catalogued as {entry['name']!r})")
+                kept += 1
+                if stored_names:
+                    arc = f"files/{stored}"
+                else:
+                    arc = f"files/{kept:03d} - {safe_name(entry['name'])}"
+                zf.write(src, arc)
+                entry["path"] = arc
+                manifest["files"].append(entry)
+                if progress is not None:
+                    progress(kept, len(entries))
+            manifest_bytes = json.dumps(
+                manifest, ensure_ascii=False, indent=2).encode("utf-8")
+            zf.writestr("manifest.json", manifest_bytes)
+            zf.writestr("index.html", make_index_html(manifest).encode("utf-8"))
+        os.replace(tmp_path, out_path)
+        tmp_path = None
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
     return {
         "path": str(out_path),
         "count": len(manifest["files"]),
@@ -178,9 +202,12 @@ def read_manifest(zip_path) -> list[dict]:
     """
     with zipfile.ZipFile(zip_path) as zf:
         manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
-    if manifest.get("format") != FORMAT:
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
         raise KeyError("not a darspack package manifest")
-    return list(manifest.get("files", []))
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise KeyError("invalid darspack manifest file list")
+    return list(files)
 
 
 @dataclass
@@ -192,33 +219,54 @@ class VerifyReport:
 def verify_package(zip_path, progress=None) -> VerifyReport:
     """Check a package against its manifest: missing / size / SHA-256."""
     problems: list[str] = []
-    with zipfile.ZipFile(zip_path) as zf:
+    try:
+        zf_cm = zipfile.ZipFile(zip_path)
+    except (zipfile.BadZipFile, OSError):
+        return VerifyReport(False, ["فایل بسته معتبر نیست یا باز نشد"])
+    with zf_cm as zf:
         names = set(zf.namelist())
         try:
             manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
         except KeyError:
             return VerifyReport(False, ["manifest.json در بسته نیست — بسته معتبر نیست"])
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, UnicodeDecodeError,
+                zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, OSError):
             return VerifyReport(False, ["manifest.json مخدوش است — بسته معتبر نیست"])
 
+        if not isinstance(manifest, dict):
+            return VerifyReport(False, ["ساختار manifest.json معتبر نیست"])
+        if manifest.get("format") != FORMAT:
+            return VerifyReport(False, ["این فایل یک بسته‌ی معتبر درس‌پک نیست"])
+        files = manifest.get("files")
+        if not isinstance(files, list):
+            return VerifyReport(False, ["فهرست فایل‌ها در manifest.json معتبر نیست"])
+
         listed = set()
-        for entry in manifest.get("files", []):
+        for entry in files:
+            if not isinstance(entry, dict):
+                problems.append("رکورد نامعتبر در فهرست بسته")
+                continue
             arc = entry.get("path")
+            name = str(entry.get("name") or arc or "؟")
             if progress is not None:
-                progress(entry.get("name", ""), arc or "")
-            if not arc or arc not in names:
-                problems.append(f"گم‌شده: {entry.get('name')} ({arc})")
+                progress(name, arc if isinstance(arc, str) else "")
+            if not isinstance(arc, str) or not arc or arc not in names:
+                problems.append(f"گم‌شده: {name} ({arc})")
                 continue
             listed.add(arc)
             if zf.getinfo(arc).file_size != entry.get("size"):
-                problems.append(f"اندازه‌ی فایل متفاوت است: {entry['name']}")
+                problems.append(f"اندازه‌ی فایل متفاوت است: {name}")
                 continue
             digest = hashlib.sha256()
-            with zf.open(arc) as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    digest.update(chunk)
+            try:
+                with zf.open(arc) as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        digest.update(chunk)
+            except (zipfile.BadZipFile, zlib.error, EOFError, RuntimeError, OSError):
+                problems.append(f"خراب یا ناخوانا: {name}")
+                continue
             if digest.hexdigest() != entry.get("sha256"):
-                problems.append(f"خراب یا تغییرکرده: {entry['name']}")
+                problems.append(f"خراب یا تغییرکرده: {name}")
 
         for extra in sorted(names - listed - {"manifest.json", "index.html"}
                             - KNOWN_EXTRA_MEMBERS):

@@ -362,3 +362,54 @@ def test_concurrent_same_content_imports_yield_one_row(tmp_path, monkeypatch):
     with Library(root) as lib:
         count = lib.conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
     assert count == 1
+
+
+def test_import_after_trash_restore_does_not_overwrite_restored_file(lib, sample):
+    """Restoring 000002.pdf into an empty files table assigns it id=1,
+    so the next import gets id=2 and MUST pick a non-colliding stored_name
+    instead of overwriting files/000002.pdf."""
+    r1 = import_file(lib, sample("first.pdf", data=b"FIRST-BYTES"))
+    r2 = import_file(lib, sample("second.pdf", data=b"SECOND-BYTES"))
+    t1 = lib.move_to_trash(r1.file_id)
+    t2 = lib.move_to_trash(r2.file_id)
+    assert t1["trash_name"] == "000001.pdf"
+
+    restored = lib.restore_trash_file(t2["trash_name"])
+    assert restored["id"] == 1
+    assert restored["stored_name"] == "000002.pdf"
+
+    r3 = import_file(lib, sample("third.pdf", data=b"THIRD-BYTES"))
+    assert r3.status == "imported"
+    assert r3.file_id == 2
+    row3 = lib.conn.execute("SELECT stored_name FROM files WHERE id=2").fetchone()
+    assert row3["stored_name"] != "000002.pdf"
+    assert (lib.files_dir / "000002.pdf").read_bytes() == b"SECOND-BYTES"
+    assert (lib.files_dir / row3["stored_name"]).read_bytes() == b"THIRD-BYTES"
+
+
+def test_import_file_unknown_manifest_kind_and_none_path(lib, sample):
+    assert import_file(lib, None).status == "error"
+    res = import_file(lib, sample("جزوه جدید.pdf"), meta={"kind": "badkind"})
+    assert res.status == "imported"
+    row = lib.conn.execute("SELECT kind FROM files WHERE id=?", (res.file_id,)).fetchone()
+    assert row["kind"] == "جزوه"
+
+
+def test_import_paths_skips_unreadable_subdirs(lib, tmp_path, monkeypatch):
+    from darspack.core import importer
+
+    folder = tmp_path / "mixed"
+    folder.mkdir()
+    ok_file = folder / "ok.pdf"
+    ok_file.write_bytes(b"ok")
+
+    real_walk = importer.os.walk
+
+    def flaky_walk(root, onerror=None, **kwargs):
+        if onerror is not None:
+            onerror(PermissionError("denied"))
+        yield from real_walk(root, onerror=onerror, **kwargs)
+
+    monkeypatch.setattr(importer.os, "walk", flaky_walk)
+    results = import_paths(lib, [folder, None])
+    assert len(results) == 1 and results[0].status == "imported"

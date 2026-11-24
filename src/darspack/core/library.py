@@ -225,11 +225,24 @@ class Library:
             return
         known = {r["stored_name"] for r in self.conn.execute(
             "SELECT stored_name FROM files")}
-        unknown = [p for p in self.files_dir.iterdir()
-                   if p.is_file() and p.name not in known]
+        unknown = []
+        for p in self.files_dir.iterdir():
+            try:
+                is_f = p.is_file()
+            except OSError:
+                continue
+            if is_f and p.name not in known:
+                unknown.append(p)
         if unknown:
             self._rescue_unknowns(unknown)
-            unknown = [p for p in unknown if p.is_file()]
+            still = []
+            for p in unknown:
+                try:
+                    if p.is_file():
+                        still.append(p)
+                except OSError:
+                    continue
+            unknown = still
         for p in unknown:
             if self._is_fresh_tmp(p):
                 continue
@@ -352,42 +365,47 @@ class Library:
         self.trash_dir.mkdir(exist_ok=True)
         self.trash_meta_dir.mkdir(exist_ok=True)
 
-        stored_p = Path(row["stored_name"])
-        dest = self.trash_dir / row["stored_name"]
-        n = 0
-        while dest.exists():
-            n += 1
-            dest = self.trash_dir / f"{stored_p.stem}~{n}{stored_p.suffix}"
+        stored_name = (row["stored_name"] or "").strip()
+        if stored_name:
+            stored_p = Path(stored_name)
+            dest = self.trash_dir / stored_p.name
+            n = 0
+            while dest.exists():
+                n += 1
+                dest = self.trash_dir / f"{stored_p.stem}~{n}{stored_p.suffix}"
 
-        src_file = self.stored_path(row)
-        try:
-            os.replace(src_file, dest)
-            tag_rows = self.conn.execute(
-                "SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id WHERE ft.file_id=?",
-                (file_id,)
-            ).fetchall()
-            file_tags = [r[0] for r in tag_rows]
-            meta = {
-                "original_name": row["original_name"],
-                "stored_name": row["stored_name"],
-                "subject_id": row["subject_id"],
-                "subject_name": row["subject_name"],
-                "chapter": row["chapter"],
-                "lesson": row["lesson"] if "lesson" in row.keys() else None,
-                "kind": row["kind"],
-                "school_year": row["school_year"],
-                "sha256": row["sha256"],
-                "size": row["size_bytes"],
-                "imported_at": row["imported_at"] if "imported_at" in row.keys() else None,
-                "deleted_at": datetime.now().isoformat(),
-                "note": row["note"] if "note" in row.keys() else "",
-                "tags": file_tags,
-            }
-            meta_dest = self.trash_meta_dir / f"{dest.name}.json"
-            meta_dest.write_text(
-                json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        except FileNotFoundError:
-            pass
+            src_file = self.stored_path(row)
+            try:
+                os.replace(src_file, dest)
+                tag_rows = self.conn.execute(
+                    "SELECT t.name FROM tags t JOIN file_tags ft ON ft.tag_id=t.id WHERE ft.file_id=?",
+                    (file_id,)
+                ).fetchall()
+                file_tags = [r[0] for r in tag_rows]
+                meta = {
+                    "original_name": row["original_name"],
+                    "stored_name": stored_name,
+                    "subject_id": row["subject_id"],
+                    "subject_name": row["subject_name"],
+                    "chapter": row["chapter"],
+                    "lesson": row["lesson"] if "lesson" in row.keys() else None,
+                    "kind": row["kind"],
+                    "school_year": row["school_year"],
+                    "sha256": row["sha256"],
+                    "size": row["size_bytes"],
+                    "imported_at": row["imported_at"] if "imported_at" in row.keys() else None,
+                    "deleted_at": datetime.now().isoformat(),
+                    "note": row["note"] if "note" in row.keys() else "",
+                    "tags": file_tags,
+                }
+                meta_dest = self.trash_meta_dir / f"{dest.name}.json"
+                meta_dest.write_text(
+                    json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            except FileNotFoundError:
+                pass
+            trash_name = dest.name
+        else:
+            trash_name = ""
 
         with self.conn:
             self.conn.execute("DELETE FROM files WHERE id=?", (file_id,))
@@ -396,33 +414,34 @@ class Library:
         return {
             "id": file_id,
             "original_name": row["original_name"],
-            "trash_name": dest.name,
+            "trash_name": trash_name,
         }
 
     def restore_trash_file(self, trash_filename: str) -> dict:
         """Restore a single file from .trash back into files/ and catalog."""
-        clean_name = Path(trash_filename).name
+        clean_name = Path(trash_filename or "").name
         src = self.trash_dir / clean_name
-        if not src.exists():
+        try:
+            is_src_file = bool(clean_name and clean_name not in {".", ".."}
+                               and src.is_file())
+        except OSError:
+            is_src_file = False
+        if not is_src_file:
             raise FileNotFoundError(f"Trash file not found: {trash_filename}")
 
         meta_path = self.trash_meta_dir / f"{clean_name}.json"
-        meta = {}
+        meta: dict = {}
         if meta_path.exists():
             try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    meta = loaded
             except Exception:
                 pass
 
-        original_name = meta.get("original_name") or clean_name
-        # Find a non-colliding stored name in files/
-        base_stored = meta.get("stored_name") or clean_name
-        dest = self.files_dir / base_stored
+        original_name = str(meta.get("original_name") or clean_name)
+        base_stored = Path(str(meta.get("stored_name") or clean_name)).name or clean_name
         p_base = Path(base_stored)
-        n = 0
-        while dest.exists():
-            n += 1
-            dest = self.files_dir / f"{p_base.stem}~{n}{p_base.suffix}"
 
         # Always re-hash the actual file (M7): a trashed file may have
         # been altered while in trash, and the saved hash would then lie
@@ -432,12 +451,23 @@ class Library:
         sha = sha256_file(src)
 
         imported_at = meta.get("imported_at") or datetime.now().isoformat()
-        tags = meta.get("tags") or []
+        raw_tags = meta.get("tags")
+        tags = raw_tags if isinstance(raw_tags, list) else []
+        kind = db.resolve_kind(meta.get("kind"))
 
         # Atomic restore: file move is performed inside the DB transaction.
         # If filesystem move fails, SQLite transaction rolls back.
         # If DB insert fails, the file has not been moved from .trash/ yet.
         with self.conn:
+            # Find a non-colliding stored name in files/ and the catalog.
+            dest = self.files_dir / base_stored
+            n = 0
+            while dest.exists() or self.conn.execute(
+                "SELECT 1 FROM files WHERE stored_name=?", (dest.name,)
+            ).fetchone():
+                n += 1
+                dest = self.files_dir / f"{p_base.stem}~{n}{p_base.suffix}"
+
             # Resolve the subject now, inside the transaction (M7): the
             # saved subject_id may point at a subject deleted since the
             # file was trashed, and the saved name may differ in spelling
@@ -474,21 +504,28 @@ class Library:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
                 (dest.name, original_name, normalize(original_name), sha, size,
                  imported_at, subject_id, meta.get("chapter"),
-                 meta.get("lesson"), meta.get("kind"), meta.get("school_year"),
-                 meta.get("note", "")))
+                 meta.get("lesson"), kind, meta.get("school_year"),
+                 meta.get("note", "") or ""))
             new_id = cur.lastrowid
 
             for t in tags:
                 if t and str(t).strip():
                     tag_id = db.get_or_create(self.conn, "tags", str(t).strip())
-                    self.conn.execute(
-                        "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?, ?)",
-                        (new_id, tag_id))
+                    if tag_id is not None:
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO file_tags (file_id, tag_id) VALUES (?, ?)",
+                            (new_id, tag_id))
 
             db.log(self.conn, "restore", f"{original_name} (id={new_id})")
 
             os.replace(src, dest)
+
+        # Clean metadata outside the committed transaction so an AV lock on
+        # the .json never rolls back a file that was already moved out of trash.
+        try:
             meta_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
         return {"id": new_id, "original_name": original_name, "stored_name": dest.name}
 
@@ -506,9 +543,9 @@ class Library:
         failed_names: list[str] = []
         if self.trash_dir.exists():
             for p in list(self.trash_dir.iterdir()):
-                if not p.is_file():
-                    continue
                 try:
+                    if not p.is_file():
+                        continue
                     p.unlink()
                 except OSError:
                     failed_names.append(p.name)
@@ -516,7 +553,10 @@ class Library:
                 deleted += 1
         if self.trash_meta_dir.exists():
             for m in list(self.trash_meta_dir.iterdir()):
-                if not m.is_file():
+                try:
+                    if not m.is_file():
+                        continue
+                except OSError:
                     continue
                 # keep the metadata of any file that survived (failed
                 # delete): it must stay listed in the trash. Drop the
@@ -532,6 +572,7 @@ class Library:
             detail = f"{deleted} files permanently deleted"
             if failed_names:
                 detail += f", {len(failed_names)} could not be deleted"
-            db.log(self.conn, "empty_trash", detail)
+            with self.conn:
+                db.log(self.conn, "empty_trash", detail)
         return {"deleted": deleted, "failed": len(failed_names),
                 "failed_names": failed_names}

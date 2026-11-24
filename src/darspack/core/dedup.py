@@ -34,7 +34,7 @@ def duplicate_groups(conn) -> list[Group]:
         rows = conn.execute(
             "SELECT * FROM files WHERE sha256=? ORDER BY imported_at",
             (sha,)).fetchall()
-        wasted = (len(rows) - 1) * rows[0]["size_bytes"]
+        wasted = (len(rows) - 1) * (rows[0]["size_bytes"] or 0)
         groups.append(Group(
             "تکراری کامل", list(rows),
             f"{len(rows)} نسخه‌ی یکسان — فضای اشغال‌شده‌ی تکراری: {wasted} بایت"))
