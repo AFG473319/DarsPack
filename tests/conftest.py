@@ -66,6 +66,15 @@ def qapp():
     shiboken6.delete(app)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_default_library(tmp_path, monkeypatch):
+    """Keep every test away from the user's real default library: the
+    settings dialog also writes the bootstrap settings.json there."""
+    from darspack.ui import app as app_module
+    monkeypatch.setattr(app_module, "DEFAULT_LIBRARY",
+                        tmp_path / "default-lib")
+
+
 @pytest.fixture()
 def library(tmp_path):
     """One open Library under tmp_path/lib, closed automatically.

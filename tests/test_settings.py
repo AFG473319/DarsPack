@@ -334,3 +334,23 @@ def test_sanitize_settings_repairs_and_reports_damage():
     assert sanitize_settings({"library": "   "}) == ({"font_size": 10}, True)
     # not a dict at all
     assert sanitize_settings("nope") == ({}, True)
+
+
+# --- relocating the library twice (bootstrap desync) -------------------------
+
+def test_second_relocation_survives_restart(qapp, app_default, tmp_path):
+    """The bootstrap settings.json in the default library must follow every
+    relocation, not only the first one, or load_settings reopens Lib1."""
+    lib1, lib2 = tmp_path / "Lib1", tmp_path / "Lib2"
+    lib1.mkdir()
+    lib2.mkdir()
+    _write_settings(app_default / "settings.json",
+                    json.dumps({"library": str(lib1)}))
+    settings, path, _ = load_settings()
+    assert path == lib1 / "settings.json"
+    dlg = SettingsDialog(None, settings, path)
+    dlg.library.setText(str(lib2))
+    dlg._save()
+    settings, path, _ = load_settings()
+    assert path == lib2 / "settings.json"
+    assert settings["library"] == str(lib2)

@@ -1851,9 +1851,20 @@ class SettingsDialog(QDialog):
         self.settings["library"] = library_text
         self.settings["feedback_endpoint"] = self.fb_endpoint.text().strip()
         self.settings["feedback_form_url"] = self.fb_form_url.text().strip()
-        self.settings_path.write_text(
-            json.dumps(self.settings, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+        payload = json.dumps(self.settings, ensure_ascii=False, indent=2)
+        self.settings_path.write_text(payload, encoding="utf-8")
+        # load_settings() only ever reads the bootstrap file in the default
+        # library, so it must always learn the current library path;
+        # otherwise a second relocation is forgotten on the next launch.
+        from . import app as _app      # same constant load_settings reads
+        bootstrap = Path(_app.DEFAULT_LIBRARY) / "settings.json"
+        try:
+            if bootstrap.resolve() != Path(self.settings_path).resolve():
+                bootstrap.parent.mkdir(parents=True, exist_ok=True)
+                bootstrap.write_text(payload, encoding="utf-8")
+        except OSError:
+            QMessageBox.warning(self, tr("settings_title"),
+                                tr("settings_lib_mkdir_failed"))
         self.accept()
 
 
