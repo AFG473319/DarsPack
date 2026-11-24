@@ -108,7 +108,7 @@ def _parse_range(header: str, size: int) -> tuple[int, int] | None:
     if m is None or size <= 0:
         return None
     first, last = m.group(1), m.group(2)
-    if first == "" and last == "":
+    if (first == "" and last == "") or len(first) > 20 or len(last) > 20:
         return None
     if first == "":
         n = int(last)
@@ -139,14 +139,30 @@ _INLINE_TYPES = {
 }
 
 
+_SQLITE_INT_MAX = (1 << 63) - 1
+
+
+def _safe_pos_int(raw: str) -> int | None:
+    """Parse a non-negative integer fitting SQLite's 64-bit signed range.
+
+    Accepts Persian/Arabic or ASCII decimal digits only — avoids Python
+    str.isdigit() accepting superscripts like '²' (which raise ValueError
+    in int()) and rejects huge numbers that raise OverflowError in SQLite.
+    """
+    digits = latin_digits(raw).strip()
+    if not digits or len(digits) > 19 or not (digits.isascii() and digits.isdigit()):
+        return None
+    val = int(digits)
+    return val if val <= _SQLITE_INT_MAX else None
+
+
 def _int_param(query: dict, key: str) -> int | None:
     """Read an integer query parameter, Persian or Latin digits allowed.
 
     Anything non-numeric is ignored (the filter just doesn't apply) —
     a malformed value must never crash a request.
     """
-    raw = latin_digits((query.get(key) or [""])[0])
-    return int(raw) if raw.isdigit() else None
+    return _safe_pos_int((query.get(key) or [""])[0])
 
 
 def _flag_param(query: dict, key: str) -> bool:
@@ -542,7 +558,12 @@ def _make_handler(server: ShareServer):
             # M10: a full disk must fail fast with a clear error, not
             # halfway through the copy — the staging temp plus the final
             # copy both need room, on top of a reserve for the catalog.
-            free = shutil.disk_usage(server.library_root).free
+            try:
+                free = shutil.disk_usage(server.library_root).free
+            except OSError:
+                self.close_connection = True
+                self._json({"error": "space"}, 507)
+                return
             if free < length + _DISK_RESERVE:
                 self.close_connection = True   # body (partly) unread
                 self._json({"error": "space"}, 507)
@@ -557,34 +578,50 @@ def _make_handler(server: ShareServer):
             # stored (classification-first: only the desktop classify
             # dialog may set it) — it travels back on the response as
             # `prefill`, and the file lands in «بدون درس».
+            from ..core import db
             meta: dict = {}
             kind_hint = (query.get("kind") or [None])[0]
             lesson_hint = _int_param(query, "lesson")
             subject_hint = (query.get("subject") or [None])[0]
             if kind_hint:
-                meta["kind"] = kind_hint
+                resolved_kind = db.resolve_kind(kind_hint)
+                if resolved_kind is None:
+                    self.close_connection = True   # body unread
+                    self._json({"error": "kind"}, 400)
+                    return
+                meta["kind"] = resolved_kind
             if lesson_hint is not None:
                 meta["lesson"] = lesson_hint
             if subject_hint:
                 meta["subject"] = subject_hint
             safe_suffix = re.sub(r"[^A-Za-z0-9._-]", "", Path(name).suffix)[:16]
-            fd, tmp_name = tempfile.mkstemp(prefix="darspack-upload-",
-                                            suffix=safe_suffix or ".bin")
+            try:
+                fd, tmp_name = tempfile.mkstemp(prefix="darspack-upload-",
+                                                suffix=safe_suffix or ".bin")
+            except OSError:
+                self.close_connection = True
+                self._json({"error": "space"}, 507)
+                return
             tmp = Path(tmp_name)
             try:
-                with os.fdopen(fd, "wb") as f:
-                    remaining = length
-                    while remaining:
-                        if server._stopping:
-                            # M12: sharing was stopped mid-upload — stop
-                            # reading now; the partial temp file is removed
-                            # by the finally below, nothing is imported.
-                            break
-                        chunk = self.rfile.read(min(1 << 20, remaining))
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        f.write(chunk)
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        remaining = length
+                        while remaining:
+                            if server._stopping:
+                                # M12: sharing was stopped mid-upload — stop
+                                # reading now; the partial temp file is removed
+                                # by the finally below, nothing is imported.
+                                break
+                            chunk = self.rfile.read(min(1 << 20, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            f.write(chunk)
+                except OSError:
+                    self.close_connection = True
+                    self._json({"error": "space"}, 507)
+                    return
                 if remaining > 0:
                     self.close_connection = True
                     self._json({"error": "incomplete"}, 400)
@@ -611,13 +648,15 @@ def _make_handler(server: ShareServer):
             if result.prefill:
                 reply["prefill"] = result.prefill
             self._json(reply)
-            from ..core import db
             # Committed NOW (fixes limitations #17): this request thread's
             # connection outlives the request, and an uncommitted write
             # used to hold SQLite's write lock for the whole share session
             # — the second distinct upload then stalled and failed.
-            with _library().conn:
-                db.log(_library().conn, "web_upload", name)
+            try:
+                with _library().conn:
+                    db.log(_library().conn, "web_upload", name)
+            except sqlite3.OperationalError:
+                pass  # HTTP response is already on the wire
 
         # ---- file routes ----------------------------------------------
 
@@ -665,19 +704,24 @@ def _make_handler(server: ShareServer):
             self._serve_static(asset_path(f"fonts/{name}"), "font/ttf")
 
         def _serve_file(self, file_id: str, query: dict | None = None) -> None:
-            if not latin_digits(file_id).isdigit():
+            parsed_id = _safe_pos_int(file_id)
+            if parsed_id is None:
                 self._json({"error": "id"}, 400)
                 return
             row = _library().conn.execute(
-                "SELECT * FROM files WHERE id=?", (int(file_id),)).fetchone()
+                "SELECT * FROM files WHERE id=?", (parsed_id,)).fetchone()
             if row is None:
                 self._json({"error": "not found"}, 404)
                 return
             path = _library().stored_path(row)
-            if not path.is_file():
+            try:
+                if not path.is_file():
+                    self._json({"error": "file missing"}, 404)
+                    return
+                size = path.stat().st_size
+            except OSError:
                 self._json({"error": "file missing"}, 404)
                 return
-            size = path.stat().st_size
             # M11: a phone on flaky school Wi-Fi resumes a failed download
             # instead of restarting from zero. Single ranges only — a
             # multi-range or out-of-range request gets 416, per RFC 9110.

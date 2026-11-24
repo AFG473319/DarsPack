@@ -402,6 +402,8 @@ class DarsPackMcpServer:
 
         subject_id = None
         if subject_name:
+            if not isinstance(subject_name, str):
+                return {"error": "subject must be a string"}
             s_row = self.lib.conn.execute(
                 "SELECT id FROM subjects WHERE normalized=?", (match_key(subject_name),)
             ).fetchone()
@@ -412,7 +414,7 @@ class DarsPackMcpServer:
                 # through to an unfiltered search of the whole catalog.
                 return {"results": [], "note": "subject not found"}
 
-        rows = search(self.lib.conn, query=query, subject_id=subject_id, kind=kind, limit=limit)
+        rows = search(self.lib.conn, query=str(query or ""), subject_id=subject_id, kind=kind, limit=limit)
         items = []
         for r in rows:
             items.append({
@@ -428,7 +430,15 @@ class DarsPackMcpServer:
         return {"results": items}
 
     def tool_preview_file(self, args: dict) -> dict:
-        fid = int(args["file_id"])
+        raw_fid = args.get("file_id")
+        if isinstance(raw_fid, bool):
+            return {"error": "file_id is required and must be an integer"}
+        try:
+            fid = int(raw_fid)
+        except (TypeError, ValueError):
+            return {"error": "file_id is required and must be an integer"}
+        if fid < 0 or fid > (1 << 63) - 1:
+            return {"error": f"File with id {fid} not found"}
         row = self.lib.conn.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
         if not row:
             return {"error": f"File with id {fid} not found"}
@@ -464,9 +474,26 @@ class DarsPackMcpServer:
         if not _is_valid_chapter_lesson(lesson):
             return {"error": "Lesson must be an integer between 1 and 40"}
         kind = args.get("kind")
+        resolved_kind = None
+        if kind is not None and kind != "":
+            resolved_kind = db.resolve_kind(kind)
+            if resolved_kind is None:
+                return {
+                    "error": (
+                        f"Invalid kind {kind!r}; expected one of: "
+                        + ", ".join(db.ALLOWED_KINDS)
+                    )
+                }
         school_year = args.get("school_year")
-        tags = args.get("tags") or []
+        if school_year is not None and not isinstance(school_year, str):
+            return {"error": "school_year must be a string"}
+        raw_tags = args.get("tags")
+        if raw_tags is not None and not isinstance(raw_tags, list):
+            return {"error": "tags must be a list of strings"}
+        tags = raw_tags or []
         note = args.get("note")
+        if note is not None and not isinstance(note, str):
+            return {"error": "note must be a string"}
 
         conn = self.lib.conn
         # Fetch the file FIRST: creating the subject before this check used
@@ -481,7 +508,7 @@ class DarsPackMcpServer:
 
             # Unspecified fields keep their current values — classifying by
             # subject only must never wipe chapter/lesson.
-            final_kind = kind or cur_row["kind"]
+            final_kind = resolved_kind or cur_row["kind"]
             final_year = school_year if school_year is not None else cur_row["school_year"]
             final_note = note if note is not None else cur_row["note"]
             final_chapter = chapter if chapter is not None else cur_row["chapter"]
@@ -497,14 +524,17 @@ class DarsPackMcpServer:
             # Update tags if provided
             if tags:
                 conn.execute("DELETE FROM file_tags WHERE file_id=?", (fid,))
-                for t in tags:
-                    t = t.strip()
+                for raw_t in tags:
+                    if not isinstance(raw_t, str):
+                        continue
+                    t = raw_t.strip()
                     if t:
                         tag_id = db.get_or_create(conn, "tags", t)
-                        conn.execute(
-                            "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
-                            (fid, tag_id),
-                        )
+                        if tag_id is not None:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
+                                (fid, tag_id),
+                            )
 
             # Learn hint tokens
             for token in match_key(Path(cur_row["original_name"]).stem).split():
@@ -523,7 +553,11 @@ class DarsPackMcpServer:
         }
 
     def tool_batch_classify(self, args: dict) -> dict:
-        items = args.get("items", [])
+        items = args.get("items")
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            return {"error": "items must be a list"}
         results = []
         for it in items:
             if not isinstance(it, dict):
@@ -549,7 +583,13 @@ class DarsPackMcpServer:
         }
 
     def tool_trash_file(self, args: dict) -> dict:
-        file_id = int(args["file_id"])
+        raw_fid = args.get("file_id")
+        if isinstance(raw_fid, bool):
+            return {"error": "file_id is required and must be an integer"}
+        try:
+            file_id = int(raw_fid)
+        except (TypeError, ValueError):
+            return {"error": "file_id is required and must be an integer"}
         res = self.lib.move_to_trash(file_id)
         return {
             "status": "success",
@@ -562,7 +602,10 @@ class DarsPackMcpServer:
         return {"count": len(items), "items": items}
 
     def tool_restore_trash_file(self, args: dict) -> dict:
-        trash_name = args["trash_name"].strip()
+        raw_name = args.get("trash_name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            return {"error": "trash_name is required and must be a non-empty string"}
+        trash_name = raw_name.strip()
         res = self.lib.restore_trash_file(trash_name)
         return {
             "status": "success",
@@ -597,8 +640,21 @@ class DarsPackMcpServer:
         }
 
     def tool_export_package(self, args: dict) -> dict:
-        file_ids = [int(fid) for fid in args.get("file_ids", [])]
-        out_path = Path(args["output_path"])
+        raw_ids = args.get("file_ids")
+        if not isinstance(raw_ids, list):
+            return {"error": "file_ids must be a list of integers"}
+        file_ids = []
+        for fid in raw_ids:
+            if isinstance(fid, bool):
+                return {"error": "file_ids must contain integers"}
+            try:
+                file_ids.append(int(fid))
+            except (TypeError, ValueError):
+                return {"error": "file_ids must contain integers"}
+        raw_out = args.get("output_path")
+        if not isinstance(raw_out, str) or not raw_out.strip():
+            return {"error": "output_path is required"}
+        out_path = Path(raw_out)
         if not file_ids:
             return {"error": "file_ids cannot be empty"}
 
@@ -614,7 +670,10 @@ class DarsPackMcpServer:
         }
 
     def tool_verify_package(self, args: dict) -> dict:
-        pkg_path = Path(args["package_path"])
+        raw_pkg = args.get("package_path")
+        if not isinstance(raw_pkg, str) or not raw_pkg.strip():
+            return {"error": "package_path is required"}
+        pkg_path = Path(raw_pkg)
         if not pkg_path.is_file():
             return {"error": f"Package file not found: {pkg_path}"}
         report = verify_package(pkg_path)
@@ -663,9 +722,28 @@ class DarsPackMcpServer:
             non_null = [r for r in replies if r is not None]
             return non_null or None
 
+        if not isinstance(req, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid Request"},
+            }
+
         msg_id = req.get("id")
         method = req.get("method")
-        params = req.get("params") or {}
+        raw_params = req.get("params")
+        if raw_params is None:
+            params: dict = {}
+        elif isinstance(raw_params, dict):
+            params = raw_params
+        else:
+            if msg_id is None:
+                return None
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {"code": -32602, "message": "Invalid params"},
+            }
 
         # Notifications (no id) never get a reply.
         if msg_id is None:
@@ -709,7 +787,17 @@ class DarsPackMcpServer:
 
         elif method == "tools/call":
             tool_name = params.get("name")
-            arguments = params.get("arguments") or {}
+            raw_args = params.get("arguments")
+            if raw_args is None:
+                arguments: dict = {}
+            elif isinstance(raw_args, dict):
+                arguments = raw_args
+            else:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {"code": -32602, "message": "Invalid params"},
+                }
             if tool_name not in self.tools:
                 return {
                     "jsonrpc": "2.0",
@@ -900,7 +988,7 @@ def run_stdio_server(library_path: Path | str | None = None) -> None:
             out_data = (json.dumps(resp, ensure_ascii=False) + "\n").encode("utf-8")
             stdout.write(out_data)
             stdout.flush()
-    except (KeyboardInterrupt, BrokenPipeError):
+    except (KeyboardInterrupt, BrokenPipeError, OSError):
         pass
     finally:
         server.close()

@@ -934,3 +934,46 @@ def test_open_server_library_opens_a_connection_without_maintenance(tmp_path):
                 srv.conn.execute("SELECT original_name FROM files")] == ["ریاضی.pdf"]
     finally:
         srv.close()
+
+
+def test_malformed_query_params_file_ids_and_kind_do_not_drop_connection(ro_server):
+    share, _ = ro_server
+    base = f"http://127.0.0.1:{share.port}"
+
+    # Superscript digit '²' passes str.isdigit() in Python, and >64-bit ints
+    # overflow SQLite — neither should drop the socket or return 500.
+    for path in (
+        f"/api/search?pin={share.pin}&subject_id=%C2%B2",
+        f"/api/search?pin={share.pin}&subject_id=99999999999999999999999",
+    ):
+        status, body = _get(base + path)
+        assert status == 200
+        assert "files" in json.loads(body)
+
+    for bad_id in (urllib.parse.quote("²"), "99999999999999999999999"):
+        status, body = _get_error(f"{base}/api/file/{bad_id}?pin={share.pin}")
+        assert status == 400
+        assert json.loads(body)["error"] == "id"
+
+    status, reply = _post(
+        f"{base}/api/upload?pin={share.pin}&name=x.pdf&kind=badkind",
+        b"payload",
+    )
+    assert status == 400
+    assert reply == {"error": "kind"}
+
+
+def test_empty_trash_before_upload_does_not_busy_lock_server(server):
+    share, lib = server
+    p = Path(lib.root).parent / "gone.pdf"
+    p.write_bytes(b"to-delete")
+    res = import_file(lib, p)
+    lib.move_to_trash(res.file_id)
+    lib.empty_trash()
+
+    status, reply = _post(
+        f"http://127.0.0.1:{share.port}/api/upload?pin={share.pin}&name=fresh.pdf",
+        b"fresh-phone-bytes",
+    )
+    assert status == 200
+    assert reply["status"] == "imported"

@@ -863,3 +863,60 @@ def test_main_stdio_returns_zero_on_eof(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdout", _FakeOut())
     assert main([str(tmp_path / "lib")]) == 0
     assert stdout_buf.getvalue() == b""
+
+
+def test_mcp_rejects_malformed_requests_and_bad_tool_args(tmp_path):
+    from darspack.core.importer import import_file
+    from darspack.core.library import Library
+    from darspack.mcp.server import DarsPackMcpServer
+
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "جزوه تست.pdf"
+        src.write_bytes(b"mcp-test")
+        res = import_file(lib, src)
+        fid = res.file_id
+
+    srv = DarsPackMcpServer(str(tmp_path / "lib"))
+    try:
+        r_scalar = srv.handle_request(123)
+        assert r_scalar["error"]["code"] == -32600
+
+        r_batch = srv.handle_request([None, {"jsonrpc": "2.0", "id": 7, "method": "ping"}])
+        assert len(r_batch) == 2
+        assert r_batch[0]["error"]["code"] == -32600
+        assert r_batch[1]["result"] == {}
+
+        r_bad_params = srv.handle_request({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": "bad"})
+        assert r_bad_params["error"]["code"] == -32602
+
+        # String tags must not be iterated char-by-char; bad kind rejected; punctuation tags ignored
+        bad_tags = srv.tool_classify_file({"file_id": fid, "subject": "ریاضی", "tags": "امتحان"})
+        assert "error" in bad_tags
+        bad_kind = srv.tool_classify_file({"file_id": fid, "subject": "ریاضی", "kind": "badkind"})
+        assert "error" in bad_kind
+
+        ok = srv.tool_classify_file({"file_id": fid, "subject": "ریاضی", "tags": ["---", "امتحان"]})
+        assert ok["status"] == "success"
+        null_tags = srv.lib.conn.execute(
+            "SELECT COUNT(*) c FROM file_tags WHERE tag_id IS NULL").fetchone()["c"]
+        assert null_tags == 0
+    finally:
+        srv.close()
+
+
+def test_extractor_handles_utf8_bom_and_large_text_boundary(tmp_path):
+    from darspack.mcp import extractor
+
+    bom_file = tmp_path / "bom.txt"
+    bom_file.write_bytes(b"\xef\xbb\xbf" + "سلام درس‌پک".encode("utf-8"))
+    out_bom = extractor.extract_preview(bom_file)
+    assert not out_bom.startswith("\ufeff")
+    assert "سلام درس‌پک" in out_bom
+
+    # 2-byte UTF-8 Persian letter split right on MAX_TEXT_BYTES boundary
+    chunk = ("س" * 600_000).encode("utf-8")
+    big_txt = tmp_path / "big.txt"
+    big_txt.write_bytes(b"a" + chunk)  # shifts alignment across 1 MB boundary
+    out_big = extractor.extract_preview(big_txt, max_chars=200)
+    assert out_big.startswith("aس")
+    assert "[truncated]" in out_big
