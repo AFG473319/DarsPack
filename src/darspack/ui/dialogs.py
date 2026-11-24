@@ -893,7 +893,8 @@ class ExportDialog(QDialog):
     def _export_finished(self, result: dict) -> None:
         progress = self._pkg_progress
         path = self._pkg_path
-        progress.accept()
+        if progress is not None:      # already closed by Esc / cancel
+            progress.accept()
         # The worker deletes itself when its thread finishes — drop the
         # references now, while the object is still alive.
         self._pkg_worker = None
@@ -913,6 +914,35 @@ class ExportDialog(QDialog):
             self, tr("export_title"),
             tr("export_done").format(num(info["count"]), info["manifest_sha256"][:16]))
         self.accept()
+
+    def reject(self) -> None:
+        _stop_pkg_thread(self)
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        _stop_pkg_thread(self)
+        super().closeEvent(event)
+
+
+def _stop_pkg_thread(dialog) -> None:
+    """Cancel and join a still-running package worker before its parent
+    dialog goes away. Qt aborts the whole process (qFatal "QThread:
+    Destroyed while thread is still running") if a child thread outlives
+    the dialog that owns it."""
+    worker = getattr(dialog, "_pkg_worker", None)
+    thread = getattr(dialog, "_pkg_thread", None)
+    if worker is not None:
+        try:
+            worker.cancel()
+        except RuntimeError:          # C++ object already deleted
+            pass
+    if thread is not None:
+        try:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait()
+        except RuntimeError:
+            pass
 
 
 def _save_tags(conn, fid: int, text: str) -> None:
@@ -2277,7 +2307,12 @@ class StatsProgressDialog(QDialog):
         worker = getattr(parent, self._worker_attr, None)
         if worker is not None:
             worker.cancel()
-        self.reject()
+        super().reject()
+
+    def reject(self) -> None:
+        # Esc and the window's X call reject(); route them through cancel
+        # so the background worker is stopped as well.
+        self._cancel()
 
 
 class PackageProgressDialog(QDialog):
@@ -2317,7 +2352,12 @@ class PackageProgressDialog(QDialog):
         worker = getattr(parent, "_pkg_worker", None)
         if worker is not None:
             worker.cancel()
-        self.reject()
+        super().reject()
+
+    def reject(self) -> None:
+        # Esc and the window's X call reject(); route them through cancel
+        # so the background worker is stopped as well.
+        self._cancel()
 
 
 class StatsDialog(QDialog):
@@ -2897,7 +2937,8 @@ class ExamPackDialog(QDialog):
     def _create_finished(self, result: dict) -> None:
         progress = self._pkg_progress
         path = self._pkg_path
-        progress.accept()
+        if progress is not None:      # already closed by Esc / cancel
+            progress.accept()
         # The worker deletes itself when its thread finishes — drop the
         # references now, while the object is still alive.
         self._pkg_worker = None
@@ -2917,6 +2958,16 @@ class ExamPackDialog(QDialog):
             self, tr("exam_pack_title"),
             tr("exam_pack_done").format(i18n.num(info["count"])))
         self.accept()
+
+    def reject(self) -> None:
+        _stop_pkg_thread(self)
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        _stop_pkg_thread(self)
+        super().closeEvent(event)
+
+
 class WelcomeDialog(QDialog):
     """Interactive first-run welcome tour with 3 visual slides."""
 

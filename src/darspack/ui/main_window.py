@@ -1591,7 +1591,8 @@ class MainWindow(QMainWindow):
     def _package_finished(self, result: dict) -> None:
         progress = self._pkg_progress
         on_done = self._pkg_on_done
-        progress.accept()
+        if progress is not None:  # Esc may have closed it already
+            progress.accept()
         # The worker deletes itself when its thread finishes — drop the
         # references now, while the object is still alive.
         self._pkg_worker = None
@@ -1629,7 +1630,8 @@ class MainWindow(QMainWindow):
 
     def _duplicates_finished(self, report) -> None:
         progress = self._dups_progress
-        progress.accept()        # closes the progress dialog either way
+        if progress is not None:  # Esc may have closed it already
+            progress.accept()
         # The worker deletes itself when its thread finishes — drop the
         # references now, while the object is still alive.
         self._dups_worker = None
@@ -1667,7 +1669,8 @@ class MainWindow(QMainWindow):
 
     def _stats_finished(self, stats) -> None:
         progress = self._stats_progress
-        progress.accept()        # closes the progress dialog either way
+        if progress is not None:  # Esc may have closed it already
+            progress.accept()
         # The worker deletes itself when its thread finishes — drop the
         # references now, while the object is still alive.
         self._stats_worker = None
