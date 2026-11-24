@@ -1044,3 +1044,70 @@ def test_bulk_delete_partial_failure_reports_split(tmp_path, qapp, monkeypatch):
             assert "منتقل نشد" in win.statusBar().currentMessage()
         finally:
             win.lib.close()
+
+
+def test_open_card_file_reads_stored_name_and_handles_missing_disk_file(tmp_path, qapp, monkeypatch):
+    from darspack.ui import main_window as mw_mod
+
+    with Library(tmp_path / "lib") as lib:
+        src = tmp_path / "کارت تست.pdf"
+        src.write_bytes(b"card")
+        import_file(lib, src)
+        win = mw_mod.MainWindow(
+            lib.root,
+            {"language": "fa", "font_size": 10, "library": str(lib.root)},
+            tmp_path / "settings.json",
+        )
+        try:
+            win.refresh()
+            row = win.last_rows[0]
+            assert "stored_name" in row.keys()
+            opened = []
+            monkeypatch.setattr(mw_mod.QDesktopServices, "openUrl",
+                                lambda url: opened.append(url) or True)
+            win._open_card_file(row)
+            assert len(opened) == 1
+
+            # Remove stored file behind the catalog's back -> friendly status, no crash
+            win.lib.stored_path(row).unlink()
+            win._open_card_file(row)
+            assert "دیگر در کتابخانه نیست" in win.statusBar().currentMessage()
+        finally:
+            win.lib.close()
+
+
+def test_reload_filters_preserves_unclassified_and_nav_sync(tmp_path, qapp):
+    with Library(tmp_path / "lib") as lib:
+        win = mw_module.MainWindow(
+            lib.root,
+            {"language": "fa", "font_size": 10, "library": str(lib.root)},
+            tmp_path / "settings.json",
+        )
+        try:
+            win._select_nav_filter(-1, None)
+            assert win.subject_combo.currentData() == -1
+            assert win.nav_unclassified.property("active") is True
+
+            win.reload_filters()
+            assert win.subject_combo.currentData() == -1
+            assert win.nav_unclassified.property("active") is True
+        finally:
+            win.lib.close()
+
+
+def test_share_log_rows_commit_immediately(tmp_path, qapp, monkeypatch):
+    from darspack.ui import dialogs
+
+    with Library(tmp_path / "lib") as lib:
+        win = mw_module.MainWindow(
+            lib.root,
+            {"language": "fa", "font_size": 10, "library": str(lib.root)},
+            tmp_path / "settings.json",
+        )
+        try:
+            monkeypatch.setattr(dialogs.ShareDialog, "exec", lambda self: 0)
+            win.toggle_share()
+            assert not win.lib.conn.in_transaction
+        finally:
+            win.stop_share(sync=True)
+            win.lib.close()

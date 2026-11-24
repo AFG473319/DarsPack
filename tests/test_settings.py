@@ -354,3 +354,21 @@ def test_second_relocation_survives_restart(qapp, app_default, tmp_path):
     settings, path, _ = load_settings()
     assert path == lib2 / "settings.json"
     assert settings["library"] == str(lib2)
+
+
+def test_offer_restart_uses_module_flag_when_not_frozen(tmp_path, qapp, monkeypatch):
+    win = mw_module.MainWindow(
+        tmp_path / "lib",
+        {"language": "fa", "font_size": 10, "library": str(tmp_path / "lib")},
+        tmp_path / "settings.json")
+    try:
+        launched = []
+        monkeypatch.setattr(mw_module.QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.Yes)
+        monkeypatch.setattr("PySide6.QtCore.QProcess.startDetached",
+                            lambda exe, args: launched.append((exe, args)) or True)
+        monkeypatch.setattr("PySide6.QtWidgets.QApplication.quit", lambda: None)
+        win._offer_restart_for_library_change()
+        assert launched and launched[0][1][:2] == ["-m", "darspack"]
+    finally:
+        win.lib.close()

@@ -177,3 +177,16 @@ def test_package_progress_dialog_updates_bar_and_label(qapp):
     assert dlg._bar.value() == 10 and dlg._label.text() == "Step 2"
     dlg.set_progress(1, 2, "")          # empty name keeps the label
     assert dlg._label.text() == "Step 2" and dlg._bar.value() == 1
+
+
+def test_export_worker_error_preserves_preexisting_destination(tmp_path):
+    lib, _file_id = _lib_with_file(tmp_path)
+    try:
+        out = tmp_path / "existing.zip"
+        out.write_bytes(b"keep-my-bytes")
+        result = _run_worker(
+            PackageWorker(str(lib.root), "export", str(out), [999999]))
+        assert "error" in result
+        assert out.read_bytes() == b"keep-my-bytes"
+    finally:
+        lib.close()

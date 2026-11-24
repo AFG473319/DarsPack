@@ -664,3 +664,83 @@ def test_text_dialog_shows_message_and_confirm_button(qapp, monkeypatch):
     dialogs.text_dialog(None, "about-title", "about-body")
     assert created[0].windowTitle() == "about-title"
     assert created[0].text() == "about-body"
+
+
+def test_share_dialog_rotate_pin_keeps_latin_digits(lib_with_file, qapp):
+    from PySide6.QtWidgets import QLabel, QPushButton
+    from darspack.i18n import tr
+    from darspack.ui.dialogs import ShareDialog
+
+    class _Server:
+        def __init__(self):
+            self.pin = "123456"
+            self.port = 8765
+
+        def rotate_pin(self):
+            self.pin = "654321"
+
+    server = _Server()
+    dlg = ShareDialog(None, server, ["http://192.168.1.5:8765/?pin=123456"],
+                      on_close=lambda: None)
+    btn = next(b for b in dlg.findChildren(QPushButton) if b.text() == tr("new_pin"))
+    btn.click()
+    pin_label = dlg.findChild(QLabel, "PinDigits")
+    assert pin_label.text() == "654321"
+    assert "۶۵۴۳۲۱" not in pin_label.text()
+
+
+def test_bulk_edit_subject_db_locked_shows_warning_not_crash(lib_with_file, qapp, monkeypatch):
+    import sqlite3
+    from darspack.core import db
+    from darspack.ui import dialogs
+
+    lib, file_id, _ = lib_with_file
+    dlg = dialogs.BulkEditDialog(None, lib, [file_id])
+    dlg.subject.setEditText("فیزیک")
+    monkeypatch.setattr(
+        db, "get_or_create",
+        lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("database is locked")),
+    )
+    warnings = []
+    monkeypatch.setattr(dialogs.QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+    dlg._apply()
+    assert len(warnings) == 1
+
+
+def test_settings_save_write_error_shows_warning(tmp_path, qapp, monkeypatch):
+    from darspack.ui import dialogs
+
+    lib_dir = tmp_path / "lib"
+    lib_dir.mkdir()
+    settings_path = tmp_path / "settings.json"
+    settings = {"language": "fa", "font_size": 10, "library": str(lib_dir)}
+    dlg = dialogs.SettingsDialog(None, settings, settings_path)
+    monkeypatch.setattr(Path, "write_text",
+                        lambda *a, **k: (_ for _ in ()).throw(PermissionError("denied")))
+    warnings = []
+    monkeypatch.setattr(dialogs.QMessageBox, "warning", lambda *a, **k: warnings.append(a))
+    dlg._save()
+    assert len(warnings) == 1
+
+
+def test_verify_report_import_handles_empty_package_without_crashing(lib_with_file, qapp, monkeypatch):
+    from darspack.core.manifest import export_package, verify_package
+    from darspack.ui import dialogs
+    from darspack.ui.main_window import MainWindow
+
+    lib, _, tmp_path = lib_with_file
+    empty_pkg = tmp_path / "empty.darspack.zip"
+    export_package(lib.conn, lib.files_dir, [], empty_pkg)
+    report = verify_package(empty_pkg)
+
+    win = MainWindow(lib.root, {"language": "fa", "font_size": 10, "library": str(lib.root)},
+                     tmp_path / "settings.json")
+    try:
+        dlg = dialogs.VerifyReportDialog(win, empty_pkg, report, library=win.lib, offer_import=True)
+        infos = []
+        monkeypatch.setattr(dialogs.QMessageBox, "information", lambda *a, **k: infos.append(a))
+        dlg._import_contents()
+        assert len(infos) == 1
+        assert not getattr(win, "_import_busy", False)
+    finally:
+        win.lib.close()

@@ -10,7 +10,7 @@ import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile, Qt, QTranslator
+from PySide6.QtCore import QLockFile, Qt, QThread, QTranslator
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -227,34 +227,41 @@ def _install_excepthook() -> None:
     The windowed exe has no console, so without this an uncaught
     exception in the UI thread would close the app with no message.
     """
+    import threading
     import traceback
+    from PySide6.QtCore import QObject, Signal
     from PySide6.QtWidgets import QMessageBox
+
+    # Background Python threads (LAN web server, helpers) bypass
+    # sys.excepthook, and Qt signals can also fire off non-GUI threads.
+    # A QMessageBox may only be created on the GUI thread, so hop there
+    # through a queued signal whenever we are off the UI thread.
+    class _Bridge(QObject):
+        report = Signal(str)
+
+        def show(self, text: str) -> None:
+            try:
+                QMessageBox.critical(None, APP_NAME, text)
+            except Exception:
+                pass
+
+    bridge = _Bridge()            # lives on the GUI thread
+    bridge.report.connect(bridge.show)
+    _install_excepthook._bridge = bridge      # keep it alive
 
     def hook(etype, value, tb):
         text = "".join(traceback.format_exception(etype, value, tb))[-1500:]
         try:
-            QMessageBox.critical(None, APP_NAME, text)
+            app = QApplication.instance()
+            if app is not None and QThread.currentThread() != app.thread():
+                bridge.report.emit(text)
+            else:
+                QMessageBox.critical(None, APP_NAME, text)
         except Exception:
             pass
         sys.__excepthook__(etype, value, tb)
 
     sys.excepthook = hook
-
-    # Background Python threads (LAN web server, helpers) bypass
-    # sys.excepthook. Report them too, but a QMessageBox may only be
-    # created on the GUI thread, so hop there through a queued signal.
-    import threading
-    from PySide6.QtCore import QObject, Signal
-
-    class _Bridge(QObject):
-        report = Signal(str)
-
-        def show(self, text: str) -> None:
-            QMessageBox.critical(None, APP_NAME, text)
-
-    bridge = _Bridge()            # lives on the GUI thread
-    bridge.report.connect(bridge.show)
-    _install_excepthook._bridge = bridge      # keep it alive
 
     def thread_hook(args):
         if args.exc_type is SystemExit:
@@ -271,6 +278,19 @@ def _install_excepthook() -> None:
     threading.excepthook = thread_hook
 
 
+def _try_acquire_instance_lock(library: Path) -> tuple[QLockFile | None, object]:
+    """Acquire the per-library lock and return ``(lock, error)``."""
+    try:
+        library.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None, QLockFile.PermissionError
+    lock = QLockFile(str(library / ".darspack.lock"))
+    # tryLock() takes a timeout in ms — 0 means "don't wait at all".
+    if lock.tryLock(0):
+        return lock, None
+    return None, lock.error()
+
+
 def acquire_instance_lock(library: Path) -> QLockFile | None:
     """One running copy per library (M20).
 
@@ -284,9 +304,8 @@ def acquire_instance_lock(library: Path) -> QLockFile | None:
     already holds it. The caller must keep the returned object alive
     for the whole session; destroying it releases the lock.
     """
-    lock = QLockFile(str(library / ".darspack.lock"))
-    # tryLock() takes a timeout in ms — 0 means "don't wait at all".
-    return lock if lock.tryLock(0) else None
+    lock, _ = _try_acquire_instance_lock(library)
+    return lock
 
 
 def run() -> None:
@@ -294,11 +313,17 @@ def run() -> None:
     i18n.set_language(settings.get("language", "fa"))
 
     app = QApplication(sys.argv)
+    _install_excepthook()
     # A second copy shows a message and exits instead of opening
-    # a second window on the same library.
-    lock = acquire_instance_lock(Path(settings["library"]))
+    # a second window on the same library; permission/path errors report cleanly.
+    lock, lock_err = _try_acquire_instance_lock(Path(settings["library"]))
     if lock is None:
-        QMessageBox.information(None, APP_NAME, i18n.tr("already_running"))
+        if lock_err == QLockFile.LockFailedError:
+            QMessageBox.information(None, APP_NAME, i18n.tr("already_running"))
+        else:
+            QMessageBox.critical(
+                None, APP_NAME,
+                i18n.tr("lock_open_failed").format(path=settings["library"]))
         return
     app._instance_lock = lock           # held until the app quits
     if damaged:
@@ -319,7 +344,6 @@ def run() -> None:
     theme.apply_palette(app)
     app.setStyleSheet(theme.build_qss())
     apply_font_size(settings, app)
-    _install_excepthook()
 
     from .main_window import MainWindow
     window = MainWindow(Path(settings["library"]), settings, settings_path)

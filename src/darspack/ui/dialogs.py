@@ -388,6 +388,7 @@ class FeedbackDialog(QDialog):
         self._poster = None
         self._poster_thread = None
         self._poster_threads = []    # every poster thread this dialog started
+        self._closed = False
 
         layout = QVBoxLayout(self)
         self.notice = QLabel("")          # «پیش‌نویسِ قبلی بازگردانده شد»
@@ -583,8 +584,9 @@ class FeedbackDialog(QDialog):
             return
         self._submitted = True
         try:
-            db.log(self.parent_window.lib.conn, "feedback",
-                   payload["category"])
+            with self.parent_window.lib.conn:
+                db.log(self.parent_window.lib.conn, "feedback",
+                       payload["category"])
         except Exception:
             pass                          # the log must not sink feedback
 
@@ -638,9 +640,14 @@ class FeedbackDialog(QDialog):
         from_chain = self._posting_from_chain
         self._posting = False
         self._active_payload = None
-        self.submit.setText(tr("fb_submit"))
-        self._on_message_changed()        # recompute counter + submit state
+        closed = getattr(self, "_closed", False)
+        if not closed:
+            self.submit.setText(tr("fb_submit"))
+            self._on_message_changed()    # recompute counter + submit state
         if not ok:
+            if closed:
+                self._chain_active = False
+                return
             if from_chain:
                 self._chain_active = False
                 QMessageBox.warning(self, tr("btn_feedback"),
@@ -661,6 +668,9 @@ class FeedbackDialog(QDialog):
                                   entry["payload"])
                 except OSError:
                     pass
+        if closed:
+            self._chain_active = False
+            return
         if from_chain:
             self._send_next_pending()
         else:
@@ -693,6 +703,14 @@ class FeedbackDialog(QDialog):
                                     tr("fb_all_sent"))
             return
         self._start_post(entries[0]["payload"], from_chain=True)
+
+    def reject(self) -> None:
+        self._closed = True
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        self._closed = True
+        super().closeEvent(event)
 
 
 class ImportDialog(QDialog):
@@ -871,6 +889,9 @@ class ExportDialog(QDialog):
     def _export(self, file_ids: list) -> None:
         if not file_ids:
             return
+        old_thread = getattr(self, "_pkg_thread", None)
+        if old_thread is not None and old_thread.isRunning():
+            return
         default = f"darspack-{datetime.now():%Y%m%d-%H%M}.zip"
         path, _ = QFileDialog.getSaveFileName(
             self, tr("export_title"), default, "ZIP (*.zip)")
@@ -912,8 +933,11 @@ class ExportDialog(QDialog):
             return
         info = result["info"]
         lib = self.parent_window.lib
-        with lib.conn:
-            db.log(lib.conn, "export", f"{info['count']} files → {path}")
+        try:
+            with lib.conn:
+                db.log(lib.conn, "export", f"{info['count']} files → {path}")
+        except sqlite3.OperationalError:
+            pass
         QMessageBox.information(
             self, tr("export_title"),
             tr("export_done").format(num(info["count"]), info["manifest_sha256"][:16]))
@@ -969,9 +993,10 @@ def _save_tags(conn, fid: int, text: str) -> None:
         if not tag:
             continue
         tag_id = db.get_or_create(conn, "tags", tag)
-        conn.execute(
-            "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
-            (fid, tag_id))
+        if tag_id is not None:
+            conn.execute(
+                "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES (?,?)",
+                (fid, tag_id))
 
 
 class ClassifyDialog(QDialog):
@@ -998,13 +1023,16 @@ class ClassifyDialog(QDialog):
         # anyway, so this doubles as the existence check (B11).
         rows_by_id = {}
         if file_ids:
-            marks = ",".join("?" * len(file_ids))
-            rows_by_id = {
-                row["id"]: row for row in lib.conn.execute(
-                    f"""SELECT f.*, s.name AS subject_name
-                        FROM files f
-                        LEFT JOIN subjects s ON s.id=f.subject_id
-                        WHERE f.id IN ({marks})""", list(file_ids))}
+            ids = list(file_ids)
+            for start in range(0, len(ids), 500):
+                chunk = ids[start:start + 500]
+                marks = ",".join("?" * len(chunk))
+                for row in lib.conn.execute(
+                        f"""SELECT f.*, s.name AS subject_name
+                            FROM files f
+                            LEFT JOIN subjects s ON s.id=f.subject_id
+                            WHERE f.id IN ({marks})""", chunk):
+                    rows_by_id[row["id"]] = row
         file_ids = [fid for fid in file_ids if fid in rows_by_id]
         self.resize(1120, max(360, min(580, 230 + len(file_ids) * 46)))
 
@@ -1320,9 +1348,12 @@ class VerifyReportDialog(QDialog):
             b_lay.addWidget(bad_hint)
         layout.addWidget(body)
 
-        with library.conn:
-            db.log(library.conn, "verify",
-                   f"{'ok' if report.ok else len(report.problems)} problems — {path}")
+        try:
+            with library.conn:
+                db.log(library.conn, "verify",
+                       f"{'ok' if report.ok else len(report.problems)} problems — {path}")
+        except sqlite3.OperationalError:
+            pass
         if report.ok and offer_import:
             btn = QPushButton(tr("pkg_import_btn"))
             btn.setObjectName("Primary")
@@ -1340,9 +1371,17 @@ class VerifyReportDialog(QDialog):
         for the classify dialog — never auto-applied. The extracted temp
         folder is removed by the import worker after it finishes (the
         worker outlives this dialog, which returns right away)."""
+        if getattr(self.parent_window, "_import_busy", False) or (
+                getattr(self.parent_window, "_worker_thread", None) is not None
+                and self.parent_window._worker_thread.isRunning()):
+            QMessageBox.information(self, self.windowTitle(), tr("import_running_busy"))
+            return
         tmp = None
         try:
             metas = package_metas(self.path)
+            if not metas:
+                QMessageBox.information(self, self.windowTitle(), tr("pkg_empty"))
+                return
             tmp = tempfile.mkdtemp(prefix="darspack-pkg-")
             with zipfile.ZipFile(self.path) as zf:
                 zf.extractall(tmp)
@@ -1353,6 +1392,10 @@ class VerifyReportDialog(QDialog):
             QMessageBox.warning(self, self.windowTitle(), str(exc))
             return
         files_dir = Path(tmp) / "files"
+        if not files_dir.is_dir():
+            shutil.rmtree(tmp, ignore_errors=True)
+            QMessageBox.information(self, self.windowTitle(), tr("pkg_empty"))
+            return
         self.parent_window.run_import_worker(
             [files_dir], metas=metas, meta_base=files_dir, cleanup_dir=Path(tmp))
         self.accept()
@@ -1684,22 +1727,23 @@ class BulkEditDialog(QDialog):
         return sets, params
 
     def _apply(self) -> None:
-        sets, params = self._changes()
-        if not sets:                  # nothing chosen → no write at all
-            self.reject()
-            return
         conn = self.lib.conn
         try:
             with conn:
-                for fid in self.file_ids:
-                    conn.execute(
-                        f"UPDATE files SET {', '.join(sets)} WHERE id=?",
-                        (*params, fid))
-                db.log(conn, "bulk_edit", f"{len(self.file_ids)} files")
+                sets, params = self._changes()
+                if sets:
+                    for fid in self.file_ids:
+                        conn.execute(
+                            f"UPDATE files SET {', '.join(sets)} WHERE id=?",
+                            (*params, fid))
+                    db.log(conn, "bulk_edit", f"{len(self.file_ids)} files")
         except sqlite3.OperationalError as exc:
             # e.g. "database is locked" while a phone upload writes; the
             # transaction rolled back, so the user can simply retry.
             QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        if not sets:                  # nothing chosen → no write at all
+            self.reject()
             return
         self.accept()
 
@@ -1860,7 +1904,13 @@ class SettingsDialog(QDialog):
         self.settings["feedback_endpoint"] = self.fb_endpoint.text().strip()
         self.settings["feedback_form_url"] = self.fb_form_url.text().strip()
         payload = json.dumps(self.settings, ensure_ascii=False, indent=2)
-        self.settings_path.write_text(payload, encoding="utf-8")
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            self.settings_path.write_text(payload, encoding="utf-8")
+        except OSError:
+            QMessageBox.warning(self, tr("settings_title"),
+                                tr("settings_lib_mkdir_failed"))
+            return
         # load_settings() only ever reads the bootstrap file in the default
         # library, so it must always learn the current library path;
         # otherwise a second relocation is forgotten on the next launch.
@@ -1953,7 +2003,7 @@ class ShareDialog(QDialog):
 
         def _rotate_pin() -> None:
             server.rotate_pin()
-            pin_label.setText(persian_digits(str(server.pin)))
+            pin_label.setText(str(server.pin))
             parent = self.parent()
             if parent is not None and hasattr(parent, "info_bar_label"):
                 parent.info_bar_label.setText(
@@ -2293,9 +2343,16 @@ class ActivityDialog(QDialog):
         row = self.rule_table.currentRow()
         if row < 0:
             return
-        token = self.rule_table.item(row, 0).text()
-        with self.lib.conn:
-            forget_hint(self.lib.conn, token)
+        item = self.rule_table.item(row, 0)
+        if item is None:
+            return
+        token = item.text()
+        try:
+            with self.lib.conn:
+                forget_hint(self.lib.conn, token)
+        except sqlite3.OperationalError as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
         self.rule_table.removeRow(row)
         if self.rule_table.rowCount() == 0:
             self.rule_table.hide()
@@ -2967,6 +3024,9 @@ class ExamPackDialog(QDialog):
             self._chk_header.set_check_state(Qt.PartiallyChecked)
 
     def _create_package(self) -> None:
+        old_thread = getattr(self, "_pkg_thread", None)
+        if old_thread is not None and old_thread.isRunning():
+            return
         ids, _ = self._selected_file_ids_and_size()
         if not ids:
             QMessageBox.information(
@@ -2976,7 +3036,8 @@ class ExamPackDialog(QDialog):
         subject = self.subject_combo.currentText()
         if not self.subject_combo.currentData():
             subject = "جامع"
-        default_name = f"بسته-امتحان-{subject}-{datetime.now():%Y%m%d}.zip"
+        safe_subj = manifest_core.safe_name(subject)
+        default_name = f"بسته-امتحان-{safe_subj}-{datetime.now():%Y%m%d}.zip"
 
         path, _ = QFileDialog.getSaveFileName(
             self, tr("exam_pack_title"), default_name, "ZIP (*.zip)")
@@ -3016,8 +3077,11 @@ class ExamPackDialog(QDialog):
                                  result["error"])
             return
         info = result["info"]
-        with self.lib.conn:
-            db.log(self.lib.conn, "exam_pack", f"{info['count']} files -> {path}")
+        try:
+            with self.lib.conn:
+                db.log(self.lib.conn, "exam_pack", f"{info['count']} files -> {path}")
+        except sqlite3.OperationalError:
+            pass
         QMessageBox.information(
             self, tr("exam_pack_title"),
             tr("exam_pack_done").format(i18n.num(info["count"])))

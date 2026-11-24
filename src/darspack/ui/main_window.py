@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -193,8 +194,12 @@ class _StopShareWorker(QObject):
 
     @Slot()
     def run(self) -> None:
-        self._server.stop()
-        self.done.emit()
+        try:
+            self._server.stop()
+        except Exception:
+            pass
+        finally:
+            self.done.emit()
 
 
 class MainWindow(QMainWindow):
@@ -209,7 +214,10 @@ class MainWindow(QMainWindow):
         # Perf audit F2.4: (Jalali date, size) strings per file id — a
         # row's date never changes, re-formatting it on every keystroke
         # was the single most expensive part of the refresh fill.
+        # _display_stamps tracks (imported_at, size_bytes) so SQLite id
+        # reuse after an external delete still refreshes cached labels.
         self._display_strs: dict = {}
+        self._display_stamps: dict = {}
 
         self.setWindowTitle(tr("app_title"))
         self.resize(1150, 720)
@@ -938,7 +946,15 @@ class MainWindow(QMainWindow):
             self.card_grid.addWidget(card, r_idx, c_idx)
 
     def _open_card_file(self, row) -> None:
+        stored = row["stored_name"] if "stored_name" in row.keys() else ""
+        if not stored:
+            self.statusBar().showMessage(tr("err_file_gone"), 3000)
+            return
         p = self.lib.stored_path(row)
+        if not p.is_file():
+            self.statusBar().showMessage(tr("err_file_gone"), 3000)
+            self.refresh()
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
 
     def _update_clear_button(self, text: str) -> None:
@@ -950,6 +966,10 @@ class MainWindow(QMainWindow):
     # ---- catalog view -------------------------------------------------
 
     def reload_filters(self) -> None:
+        prev_subject = self.subject_combo.currentData()
+        prev_kind = self.kind_combo.currentData()
+        prev_year = self.year_combo.currentData()
+
         self.subject_combo.blockSignals(True)
         self.kind_combo.blockSignals(True)
         self.year_combo.blockSignals(True)
@@ -971,9 +991,19 @@ class MainWindow(QMainWindow):
             reverse=True)
         for y in years:
             self.year_combo.addItem(persian_digits(y), y)
+
+        for combo, prev in (
+            (self.subject_combo, prev_subject),
+            (self.kind_combo, prev_kind),
+            (self.year_combo, prev_year),
+        ):
+            idx = combo.findData(prev)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+
         self.subject_combo.blockSignals(False)
         self.kind_combo.blockSignals(False)
         self.year_combo.blockSignals(False)
+        self._sync_nav_to_filters()
 
     def _file_icon_for(self, name: str):
         ext = Path(name).suffix.lower()
@@ -1003,11 +1033,14 @@ class MainWindow(QMainWindow):
 
     def _display_strs_for(self, row) -> tuple:
         """Cached (Jalali date, human size) for one file id (perf F2.4)."""
-        cached = self._display_strs.get(row["id"])
-        if cached is None:
+        fid = row["id"]
+        stamp = (row["imported_at"], row["size_bytes"])
+        cached = self._display_strs.get(fid)
+        if cached is None or self._display_stamps.get(fid) != stamp:
             cached = (jalali_date(row["imported_at"]),
                       human_size(row["size_bytes"]))
-            self._display_strs[row["id"]] = cached
+            self._display_strs[fid] = cached
+            self._display_stamps[fid] = stamp
         return cached
 
     def refresh(self) -> None:
@@ -1248,8 +1281,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(tr("err_file_gone"), 3000)
             self.refresh()
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(
-            str(self.lib.stored_path(row))))
+        path = self.lib.stored_path(row)
+        if not row["stored_name"] or not path.is_file():
+            self.statusBar().showMessage(tr("err_file_gone"), 3000)
+            self.refresh()
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def reveal_selected_file(self) -> None:
         """Reveal the selected file in the system file manager."""
@@ -1441,11 +1478,12 @@ class MainWindow(QMainWindow):
         for row in rows:
             try:
                 self.lib.move_to_trash(row["id"])
-            except (OSError, KeyError):
+            except (OSError, KeyError, sqlite3.OperationalError):
                 failed.append(row["original_name"])
                 continue
             moved.append(row)
             self._display_strs.pop(row["id"], None)
+            self._display_stamps.pop(row["id"], None)
         self.reload_filters()
         self.refresh()
         if failed and moved:
@@ -1587,6 +1625,9 @@ class MainWindow(QMainWindow):
         `on_done(result)` runs on the UI thread with the worker's
         result dict. Modelled on show_stats / StatsProgressDialog.
         """
+        old_thread = getattr(self, "_pkg_thread", None)
+        if old_thread is not None and old_thread.isRunning():
+            return
         from .workers import PackageWorker
         self._pkg_worker = PackageWorker(str(self.lib.root), kind, path,
                                          file_ids)
@@ -1630,6 +1671,9 @@ class MainWindow(QMainWindow):
         dialog opens instantly and offers a real cancel, exactly like
         «آمار» (show_stats).
         """
+        old_thread = getattr(self, "_dups_thread", None)
+        if old_thread is not None and old_thread.isRunning():
+            return
         from .workers import DuplicatesWorker
         self._dups_worker = DuplicatesWorker(str(self.lib.root))
         progress = dialogs.StatsProgressDialog(
@@ -1671,6 +1715,9 @@ class MainWindow(QMainWindow):
         the results dialog appears only when the worker finishes. The UI
         thread never blocks on the queries.
         """
+        old_thread = getattr(self, "_stats_thread", None)
+        if old_thread is not None and old_thread.isRunning():
+            return
         from .workers import StatsWorker
         self._stats_worker = StatsWorker(str(self.lib.root))
         progress = dialogs.StatsProgressDialog(self)
@@ -1732,7 +1779,12 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if answer == QMessageBox.Yes:
             from PySide6.QtCore import QProcess
-            QProcess.startDetached(sys.executable, sys.argv)
+            # From source (`python -m darspack`), sys.argv[0] points directly at
+            # __main__.py whose relative imports fail unless invoked with -m.
+            launch_args = (sys.argv[1:] if getattr(sys, "frozen", False)
+                           else ["-m", "darspack", *sys.argv[1:]])
+            QProcess.startDetached(sys.executable, launch_args)
+            self.close()
             QApplication.quit()
 
     def open_help_dialog(self) -> None:
@@ -1756,8 +1808,12 @@ class MainWindow(QMainWindow):
                 self.share_server = None
                 return
             from ..core import db
-            db.log(self.lib.conn, "share_start",
-                   f"port={self.share_server.port}")
+            try:
+                with self.lib.conn:
+                    db.log(self.lib.conn, "share_start",
+                           f"port={self.share_server.port}")
+            except sqlite3.OperationalError:
+                pass
             # Update Fluent InfoBar banner
             if hasattr(self, "info_bar"):
                 self.info_bar_icon.setPixmap(
@@ -1784,7 +1840,11 @@ class MainWindow(QMainWindow):
             return
         self.share_server = None
         from ..core import db
-        db.log(self.lib.conn, "share_stop", "")
+        try:
+            with self.lib.conn:
+                db.log(self.lib.conn, "share_stop", "")
+        except sqlite3.OperationalError:
+            pass
         if sync:
             server.stop()
             if hasattr(self, "info_bar"):
@@ -1825,7 +1885,6 @@ class MainWindow(QMainWindow):
             thread.wait()
         self.stop_share(sync=True)   # never leave the server thread running
         self._stop_background_workers()   # never destroy a running QThread
-        self.stop_share()          # never leave the server thread running
         self.lib.close()
         super().closeEvent(event)
 
@@ -1887,5 +1946,5 @@ class MainWindow(QMainWindow):
             # start_worker only fires once run() returns, and a worker
             # still mid-file has not emitted done yet.
             thread.quit()
-            thread.wait(3000 if worker is not None
-                        and hasattr(worker, "cancel") else 9000)
+            thread.wait(5000 if worker is not None
+                        and hasattr(worker, "cancel") else 10000)

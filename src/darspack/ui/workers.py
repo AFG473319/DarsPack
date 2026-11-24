@@ -243,13 +243,9 @@ class PackageWorker(QObject):
                     pass
 
     def _discard_partial(self) -> None:
-        """A cancelled/failed export must not leave a half-written ZIP
-        that looks like a real package."""
-        if self.kind == "export":
-            try:
-                Path(self.path).unlink(missing_ok=True)
-            except OSError:
-                pass
+        """export_package writes atomically to a sibling temp file, so an
+        aborted/failed export never modifies or creates `self.path`."""
+        # Deliberately keep any pre-existing file at self.path untouched.
 
 
 class StatsWorker(QObject):

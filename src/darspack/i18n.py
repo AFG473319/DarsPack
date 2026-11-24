@@ -349,6 +349,8 @@ STRINGS = {
         "pkg_verifying": "در حال بررسی بسته…",
         "pkg_exporting": "در حال ساخت بسته…",
         "pkg_cancelled": "عملیات لغو شد.",
+        "pkg_empty": "این بسته فایلی برای وارد کردن ندارد.",
+        "lock_open_failed": "باز کردن پوشه‌ی کتابخانه ممکن نشد: {path}",
     },
     "en": {
         "app_title": "DarsPack",
@@ -687,6 +689,8 @@ STRINGS = {
         "pkg_verifying": "Verifying package…",
         "pkg_exporting": "Building package…",
         "pkg_cancelled": "Operation cancelled.",
+        "pkg_empty": "This package contains no files to import.",
+        "lock_open_failed": "Could not open the library folder: {path}",
     },
 }
 
