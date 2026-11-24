@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import sqlite3
 import tempfile
 import zipfile
 from datetime import datetime
@@ -945,6 +947,14 @@ def _stop_pkg_thread(dialog) -> None:
             pass
 
 
+def _file_exists(conn, fid: int) -> bool:
+    """True while the file row is still in the catalog. Dialogs check it
+    before writing tags: with foreign keys ON, tagging a row deleted
+    meanwhile raises sqlite3.IntegrityError."""
+    return conn.execute("SELECT 1 FROM files WHERE id=?",
+                        (fid,)).fetchone() is not None
+
+
 def _save_tags(conn, fid: int, text: str) -> None:
     """Replace a file's tags with the comma/«،»-separated text field.
 
@@ -1195,21 +1205,36 @@ class ClassifyDialog(QDialog):
         conn = self.lib.conn
         subject_keys = {match_key(r["name"])
                         for r in conn.execute("SELECT name FROM subjects")}
-        with conn:
-            for fid, subject, chapter, kind, lesson, year, tags in self.rows:
-                name = subject.currentText().strip()
-                subject_id = (db.get_or_create(conn, "subjects", name)
-                              if name else None)
-                conn.execute(
-                    """UPDATE files SET subject_id=?, chapter=?, kind=?,
-                       lesson=?, school_year=? WHERE id=?""",
-                    (subject_id, chapter.value() or None,
-                     kind.currentText(), lesson.value() or None,
-                     latin_digits(year.currentText().strip()) or None, fid))
-                if name:
-                    self._learn_tokens(fid, name, subject_keys)
-                _save_tags(conn, fid, tags.text())
-            db.log(conn, "classify", f"{len(self.rows)} files")
+        skipped = 0
+        try:
+            with conn:
+                for fid, subject, chapter, kind, lesson, year, tags in self.rows:
+                    # A file deleted while this dialog was open (trash, web
+                    # client, another instance) is skipped, not a crash.
+                    if not _file_exists(conn, fid):
+                        skipped += 1
+                        continue
+                    name = subject.currentText().strip()
+                    subject_id = (db.get_or_create(conn, "subjects", name)
+                                  if name else None)
+                    conn.execute(
+                        """UPDATE files SET subject_id=?, chapter=?, kind=?,
+                           lesson=?, school_year=? WHERE id=?""",
+                        (subject_id, chapter.value() or None,
+                         kind.currentText(), lesson.value() or None,
+                         latin_digits(year.currentText().strip()) or None, fid))
+                    if name:
+                        self._learn_tokens(fid, name, subject_keys)
+                    _save_tags(conn, fid, tags.text())
+                db.log(conn, "classify", f"{len(self.rows) - skipped} files")
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(self, self.windowTitle(), tr("err_file_gone"))
+            return
+        except sqlite3.OperationalError as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        if skipped:
+            QMessageBox.information(self, self.windowTitle(), tr("err_file_gone"))
         self.accept()
 
 
@@ -1488,21 +1513,33 @@ class MetadataDialog(QDialog):
 
     def _save(self) -> None:
         conn = self.lib.conn
-        with conn:
-            subject_id = (db.get_or_create(conn, "subjects",
-                                           self.subject.currentText())
-                          if self.subject.currentText().strip() else None)
-            chapter = self.chapter.value() or None
-            conn.execute(
-                """UPDATE files SET subject_id=?, chapter=?, lesson=?,
-                   kind=?, school_year=?, note=?
-                   WHERE id=?""",
-                (subject_id, chapter, self.lesson.value() or None,
-                 self.kind.currentText(),
-                 latin_digits(self.year.currentText().strip()) or None,
-                 self.note.text(), self.file_id))
-            _save_tags(conn, self.file_id, self.tags.text())
-            db.log(conn, "edit_meta", f"id={self.file_id}")
+        if not _file_exists(conn, self.file_id):
+            QMessageBox.warning(self, self.windowTitle(), tr("err_file_gone"))
+            self.reject()
+            return
+        try:
+            with conn:
+                subject_id = (db.get_or_create(conn, "subjects",
+                                               self.subject.currentText())
+                              if self.subject.currentText().strip() else None)
+                chapter = self.chapter.value() or None
+                conn.execute(
+                    """UPDATE files SET subject_id=?, chapter=?, lesson=?,
+                       kind=?, school_year=?, note=?
+                       WHERE id=?""",
+                    (subject_id, chapter, self.lesson.value() or None,
+                     self.kind.currentText(),
+                     latin_digits(self.year.currentText().strip()) or None,
+                     self.note.text(), self.file_id))
+                _save_tags(conn, self.file_id, self.tags.text())
+                db.log(conn, "edit_meta", f"id={self.file_id}")
+        except sqlite3.IntegrityError:
+            QMessageBox.warning(self, self.windowTitle(), tr("err_file_gone"))
+            self.reject()
+            return
+        except sqlite3.OperationalError as exc:   # e.g. "database is locked"
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
         self.accept()
 
 
