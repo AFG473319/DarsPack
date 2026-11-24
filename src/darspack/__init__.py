@@ -5,7 +5,7 @@ from pathlib import Path
 
 APP_NAME = "DarsPack"
 APP_NAME_FA = "درس‌پک"
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 
 def asset_path(relative: str) -> Path:

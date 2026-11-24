@@ -22,7 +22,7 @@
 ; AppId is a stable GUID (generate once, never change after first
 ; release — it tells Windows "this is the same app" for upgrades).
 #define MyAppName "DarsPack"
-#define MyAppVersion "0.2.2"
+#define MyAppVersion "0.2.3"
 
 [Setup]
 AppId={{15da954e-9bf3-4804-85db-fe556307e417}
