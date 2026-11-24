@@ -43,7 +43,9 @@ from . import icons, theme
 
 def text_dialog(parent, title: str, text: str) -> None:
     msg = QMessageBox(QMessageBox.Information, title, text, QMessageBox.Ok, parent)
-    msg.setButtonText(QMessageBox.Ok, tr("btn_confirm"))
+    ok = msg.button(QMessageBox.Ok)   # setButtonText is deprecated in Qt 6
+    if ok is not None:
+        ok.setText(tr("btn_confirm"))
     msg.exec()
 
 
@@ -1687,12 +1689,18 @@ class BulkEditDialog(QDialog):
             self.reject()
             return
         conn = self.lib.conn
-        with conn:
-            for fid in self.file_ids:
-                conn.execute(
-                    f"UPDATE files SET {', '.join(sets)} WHERE id=?",
-                    (*params, fid))
-            db.log(conn, "bulk_edit", f"{len(self.file_ids)} files")
+        try:
+            with conn:
+                for fid in self.file_ids:
+                    conn.execute(
+                        f"UPDATE files SET {', '.join(sets)} WHERE id=?",
+                        (*params, fid))
+                db.log(conn, "bulk_edit", f"{len(self.file_ids)} files")
+        except sqlite3.OperationalError as exc:
+            # e.g. "database is locked" while a phone upload writes; the
+            # transaction rolled back, so the user can simply retry.
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
         self.accept()
 
 

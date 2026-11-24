@@ -240,6 +240,36 @@ def _install_excepthook() -> None:
 
     sys.excepthook = hook
 
+    # Background Python threads (LAN web server, helpers) bypass
+    # sys.excepthook. Report them too, but a QMessageBox may only be
+    # created on the GUI thread, so hop there through a queued signal.
+    import threading
+    from PySide6.QtCore import QObject, Signal
+
+    class _Bridge(QObject):
+        report = Signal(str)
+
+        def show(self, text: str) -> None:
+            QMessageBox.critical(None, APP_NAME, text)
+
+    bridge = _Bridge()            # lives on the GUI thread
+    bridge.report.connect(bridge.show)
+    _install_excepthook._bridge = bridge      # keep it alive
+
+    def thread_hook(args):
+        if args.exc_type is SystemExit:
+            return
+        text = "".join(traceback.format_exception(
+            args.exc_type, args.exc_value, args.exc_traceback))[-1500:]
+        name = getattr(args.thread, "name", "?")
+        try:
+            bridge.report.emit(f"[{name}]\n{text}")
+        except Exception:
+            pass
+        threading.__excepthook__(args)
+
+    threading.excepthook = thread_hook
+
 
 def acquire_instance_lock(library: Path) -> QLockFile | None:
     """One running copy per library (M20).
