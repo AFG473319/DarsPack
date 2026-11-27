@@ -1549,6 +1549,11 @@ class MainWindow(QMainWindow):
     def _import_finished(self, imported, duplicates, errors, messages,
                          new_ids) -> None:
         try:
+            # `_import_progress` used a message with no timeout, so it stayed
+            # on the status bar forever. Clear it as soon as the worker is
+            # done — before the review dialog — so «در حال وارد کردن 1/1» can
+            # never outlive the import it describes.
+            self.statusBar().clearMessage()
             self.reload_filters()
             self.refresh()
             # Categorizing is the app's main job ? ask for the new files' info
@@ -1564,6 +1569,8 @@ class MainWindow(QMainWindow):
             if messages:
                 text += "\n" + "\n".join(messages[:5])
             QMessageBox.information(self, APP_NAME, text)
+            self.statusBar().showMessage(
+                tr("import_done_status").format(i18n.num(imported)), 5000)
         finally:
             # The worker deletes itself when its thread finishes — drop
             # the references now, while the object is still alive, so
