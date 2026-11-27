@@ -1132,6 +1132,8 @@ class ClassifyDialog(QDialog):
             # add a new subject: just type its name.
             subject.lineEdit().setPlaceholderText(
                 tr("subject_type_new") if subjects else tr("subject_first_hint"))
+            # the column is narrow, so the full explanation lives in a tooltip
+            subject.setToolTip(tr("subject_new_tip"))
             subject.setCurrentText(
                 file_row["subject_name"] or prefill.get("subject")
                 or suggested["subject"] or "")
