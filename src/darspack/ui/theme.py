@@ -444,6 +444,8 @@ QComboBox::down-arrow {
     width: 14px;
     height: 14px;
 }
+QComboBox[emptyList="true"]::down-arrow { image: none; width: 0; height: 0; }
+QComboBox[emptyList="true"]::drop-down { width: 4px; }
 QComboBox QAbstractItemView {
     background: $surface_2; border: 1px solid $border;
     border-radius: $radius; padding: 4px; outline: 0;

@@ -149,6 +149,45 @@ class _PersianSpinBox(QSpinBox):
         return super().valueFromText(latin_digits(text))
 
 
+class _SubjectCombo(QComboBox):
+    """Editable subject picker that stays tidy when it has nothing to list.
+
+    With no entries (first run: the user has added no subjects yet) the
+    popup would open as an empty highlighted sliver, so it is suppressed
+    and the theme hides the arrow (property `emptyList`). Typing a new
+    subject still works -- the box is editable.
+    """
+
+    def showPopup(self) -> None:
+        if self.count() > 0:
+            super().showPopup()
+
+    def refresh_empty_state(self) -> None:
+        empty = self.count() == 0
+        if self.property("emptyList") != empty:
+            self.setProperty("emptyList", empty)
+            self.style().unpolish(self)
+            self.style().polish(self)
+
+
+def make_subject_combo(names, *, blank: bool = False) -> QComboBox:
+    """Editable subject combo listing only the given (used) subjects.
+
+    blank=True adds a leading empty entry («no subject») -- but only when
+    there are real names to choose from, so the first-run list is truly
+    empty. The placeholder tells the user they can type a new subject.
+    """
+    combo = _SubjectCombo()
+    combo.setEditable(True)
+    combo.lineEdit().setPlaceholderText(tr("subject_new_placeholder"))
+    names = list(names)
+    if blank and names:
+        combo.addItem("")
+    combo.addItems(names)
+    combo.refresh_empty_state()
+    return combo
+
+
 def make_year_combo(current: str | None) -> QComboBox:
     """Editable school-year combo (A3): the row's year (or the current
     school year) plus the years around it — anything else can be typed,
@@ -1082,11 +1121,7 @@ class ClassifyDialog(QDialog):
             suggested = suggest(Path(file_row["original_name"]).stem,
                                 learned=hints)
             prefill = (prefills or {}).get(fid) or {}
-            subject = QComboBox()
-            subject.setEditable(True)
-            subject.lineEdit().setPlaceholderText(tr("subject_new_placeholder"))
-            subject.addItem("")                   # «no subject» stays possible
-            subject.addItems(subjects)
+            subject = make_subject_combo(subjects, blank=True)
             subject.setCurrentText(
                 file_row["subject_name"] or prefill.get("subject")
                 or suggested["subject"] or "")
@@ -1485,11 +1520,8 @@ class MetadataDialog(QDialog):
             # edit_metadata) and show "no longer in the library".
             raise ValueError(f"File id {file_id} not found in catalog")
 
-        self.subject = QComboBox()
-        self.subject.setEditable(True)
-        self.subject.lineEdit().setPlaceholderText(tr("subject_new_placeholder"))
-        for r in lib.used_subjects():
-            self.subject.addItem(r["name"])
+        self.subject = make_subject_combo(
+            r["name"] for r in lib.used_subjects())
         self.subject.setCurrentText(self.row["subject_name"] or "")
 
         self.chapter = make_spinbox()         # 0 = no chapter

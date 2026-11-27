@@ -743,3 +743,16 @@ def test_verify_report_import_handles_empty_package_without_crashing(lib_with_fi
         assert not getattr(win, "_import_busy", False)
     finally:
         win.lib.close()
+
+def test_subject_combo_is_tidy_when_empty(qapp):
+    from darspack.ui.dialogs import make_subject_combo
+    empty = make_subject_combo([], blank=True)
+    assert empty.count() == 0                  # no stray blank entry on first run
+    assert empty.property("emptyList") is True
+    assert empty.lineEdit().placeholderText() != ""
+    empty.showPopup()                          # suppressed: no empty sliver
+    assert not empty.view().isVisible()
+
+    one = make_subject_combo(["math"], blank=True)
+    assert [one.itemText(i) for i in range(one.count())] == ["", "math"]
+    assert one.property("emptyList") is False
