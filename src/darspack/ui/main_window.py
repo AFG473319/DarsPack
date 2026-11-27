@@ -20,6 +20,7 @@ from PySide6.QtCore import (QEvent, QObject, QPoint, QSize, Qt, QThread,
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
@@ -1229,6 +1230,7 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._install_outside_click_filter()
         self._apply_dark_titlebar()
         if not getattr(self, "_welcome_checked", False):
             self._welcome_checked = True
@@ -1246,7 +1248,42 @@ class MainWindow(QMainWindow):
         if fluent_win32.apply_fluent_window_effects(self):
             self._dark_titlebar = True
 
+    def _install_outside_click_filter(self) -> None:
+        """Watch real pointer input at the window level so a left-click
+        anywhere outside the file list can clear its selection: the old
+        row used to stay «half-blue» — Qt's inactive-selection paint —
+        once focus left the table, and nothing ever removed it.
+
+        The filter lives on the windowHandle (the QWindow every real
+        pointer event for this window tree reaches BEFORE Qt routes it
+        to the child widget), so it sees nav rail, toolbar and canvas
+        presses that a widget-level filter would miss — while staying
+        clear of the application-wide event flood (paint, timer, hover):
+        an application-level Python filter pays a C++→Python round trip
+        for EVERY app event, which measurably starved the debounced
+        search timer and destabilized long Qt sessions. A handle may be
+        recreated after destroy(), so reinstall whenever a new one
+        shows up.
+        """
+        handle = self.windowHandle()
+        if handle is None:
+            return
+        if getattr(self, "_outside_click_handle", None) is handle:
+            return
+        handle.installEventFilter(self)
+        self._outside_click_handle = handle
+
     def eventFilter(self, obj, event) -> bool:
+        if (event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton
+                and obj is self.windowHandle()):
+            # «کلیک بیرون از لیست، انتخاب را پاک می‌کند» — the press is
+            # never consumed: after this, QWidgetWindow routes it to the
+            # child widget as usual, so buttons, combos and the table
+            # behave exactly as before.
+            local = event.position().toPoint()
+            self._clear_selection_on_outside_click(self.childAt(local))
+            return False
         table = getattr(self, "table", None)
         if (table is not None
                 and obj is table.viewport()
@@ -1275,6 +1312,46 @@ class MainWindow(QMainWindow):
                 QToolTip.hideText()
                 return True
         return super().eventFilter(obj, event)
+
+    def _clear_selection_on_outside_click(self, watched) -> None:
+        """A left-press on the main window outside the file list drops its
+        selection, so no old row keeps the inactive «half-blue» tint after
+        focus moved away. The clear flows through itemSelectionChanged →
+        _update_action_states, so edit/delete disable exactly as when
+        nothing was selected. `watched` is the widget under the press as
+        resolved by childAt (None = the window's own surface, which is
+        always outside the table).
+
+        Deliberately left alone:
+        - clicks inside the table (viewport, header, scrollbars) — the
+          table manages its own selection;
+        - clicks in dialogs and popups — they are their own window()/QWindow,
+          and a click blocked behind an open modal must not silently drop
+          the rows the modal is working on (delete confirm, import…);
+        - menu-opening buttons («بسته‌ها», «بیشتر») — their menus act on
+          the selection (export scope, edit/delete), so the press must
+          not discard it first.
+        """
+        table = getattr(self, "table", None)
+        if table is None or not table.selectedItems():
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        if watched is not None:
+            if not isinstance(watched, QWidget):
+                return
+            if watched.window() is not self:
+                return
+            if table.isAncestorOf(watched):  # covers the table itself
+                return
+            if isinstance(watched, QAbstractButton) and watched.menu() is not None:
+                return
+        table.clearSelection()
+        # Clear the current cell too: when the click lands on a widget
+        # that does not take focus (the empty canvas), the table keeps
+        # focus and the current cell would still paint its outline —
+        # «clears completely», half-blue or otherwise.
+        table.setCurrentCell(-1, -1)
 
     def _cell_text_fits(self, index) -> bool:
         """True when the cell shows its text in full; tooltips then add
