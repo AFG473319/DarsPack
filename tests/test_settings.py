@@ -372,3 +372,59 @@ def test_offer_restart_uses_module_flag_when_not_frozen(tmp_path, qapp, monkeypa
         assert launched and launched[0][1][:2] == ["-m", "darspack"]
     finally:
         win.lib.close()
+
+
+# --- theme setting (پوسته) ----------------------------------------------------
+
+def test_load_settings_defaults_theme_to_dark(app_default):
+    settings, _, damaged = load_settings()
+    assert damaged is False
+    assert settings["theme"] == "dark"
+
+
+def test_load_settings_repairs_bad_theme(app_default):
+    _write_settings(app_default / "settings.json", json.dumps({"theme": "blue"}))
+    settings, _, damaged = load_settings()
+    assert damaged is True
+    assert settings["theme"] == "dark"
+
+
+def test_sanitize_settings_repairs_bad_theme():
+    from darspack.ui.app import sanitize_settings
+    assert sanitize_settings({"theme": "blue"}) == (
+        {"theme": "dark", "font_size": 10}, True)
+    clean = {"language": "en", "font_size": 12, "theme": "light"}
+    assert sanitize_settings(dict(clean)) == (clean, False)
+
+
+def test_settings_dialog_theme_defaults_to_dark(tmp_path, qapp):
+    dlg = SettingsDialog(None, {"language": "fa", "font_size": 10,
+                                "library": ""}, tmp_path / "settings.json")
+    assert dlg.theme_choice.currentData() == "dark"
+
+
+def test_settings_dialog_remembers_light_theme(tmp_path, qapp):
+    dlg = SettingsDialog(None, {"language": "fa", "font_size": 10,
+                                "theme": "light", "library": ""},
+                         tmp_path / "settings.json")
+    assert dlg.theme_choice.currentData() == "light"
+
+
+def test_settings_dialog_saves_theme_choice(tmp_path, qapp):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    settings = {"language": "fa", "font_size": 10, "library": str(lib)}
+    dlg = SettingsDialog(None, settings, tmp_path / "settings.json")
+    dlg.theme_choice.setCurrentIndex(dlg.theme_choice.findData("light"))
+    dlg._save()
+    assert settings["theme"] == "light"
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert saved["theme"] == "light"
+
+
+def test_settings_dialog_reset_restores_dark(tmp_path, qapp):
+    dlg = SettingsDialog(None, {"language": "en", "font_size": 12,
+                                "theme": "light", "library": ""},
+                         tmp_path / "settings.json")
+    dlg._reset_defaults()
+    assert dlg.theme_choice.currentData() == "dark"
