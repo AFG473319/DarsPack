@@ -941,9 +941,28 @@ class MainWindow(QMainWindow):
             # Double-click to open
             card.mouseDoubleClickEvent = lambda e, r=row: self._open_card_file(r)
 
+            # Why: a QGridLayout hands spare height to its rows, so with only
+            # a few cards each card was stretched to the viewport height and
+            # the chip labels grew into tall bars. Cards keep their natural
+            # height; the leftover space goes to an empty row at the bottom.
+            card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+            for i in range(chips_row.count()):
+                w = chips_row.itemAt(i).widget()
+                if w is not None:
+                    w.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+
             r_idx = idx // cols
             c_idx = idx % cols
-            self.card_grid.addWidget(card, r_idx, c_idx)
+            self.card_grid.addWidget(card, r_idx, c_idx, Qt.AlignTop)
+
+        # Equal-width columns even when the last row is short, and an empty
+        # stretch row at the bottom that absorbs all extra vertical space.
+        for c in range(cols):
+            self.card_grid.setColumnStretch(c, 1)
+        last_row = (len(self.last_rows) + cols - 1) // cols
+        for r in range(last_row):
+            self.card_grid.setRowStretch(r, 0)
+        self.card_grid.setRowStretch(last_row, 1)
 
     def _open_card_file(self, row) -> None:
         stored = row["stored_name"] if "stored_name" in row.keys() else ""
