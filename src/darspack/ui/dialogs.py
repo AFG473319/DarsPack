@@ -1410,7 +1410,7 @@ class VerifyReportDialog(QDialog):
             for prob in report.problems:
                 p_lbl = QLabel(f"• {prob}")
                 p_lbl.setWordWrap(True)
-                p_lbl.setStyleSheet("color: #ff9d96;")
+                p_lbl.setStyleSheet(f"color: {theme.PALETTE['error_text']};")
                 p_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
                 inner_lay.addWidget(p_lbl)
             inner_lay.addStretch(1)
@@ -1843,6 +1843,12 @@ class SettingsDialog(QDialog):
             _font_size = 10  # damaged value (H5): fall back, don't crash
         self.font_size.setValue(max(8, min(18, _font_size)))
 
+        self.theme_choice = QComboBox()
+        self.theme_choice.addItem(tr("settings_theme_dark"), "dark")
+        self.theme_choice.addItem(tr("settings_theme_light"), "light")
+        self.theme_choice.setCurrentIndex(
+            0 if settings.get("theme", "dark") != "light" else 1)
+
         self.library = QLineEdit(str(settings.get("library", "")))
         self.library.setPlaceholderText(tr("settings_lib_placeholder"))
 
@@ -1880,6 +1886,7 @@ class SettingsDialog(QDialog):
         row_labels: list[QLabel] = []
         for label, widget in ((tr("settings_lang"), self.lang),
                               (tr("settings_font"), self.font_size),
+                              (tr("settings_theme"), self.theme_choice),
                               (tr("settings_lib"), None)):
             row = QHBoxLayout()
             lab = QLabel(label)
@@ -1937,6 +1944,7 @@ class SettingsDialog(QDialog):
         from .. import feedback_config
         self.lang.setCurrentIndex(0)
         self.font_size.setValue(10)
+        self.theme_choice.setCurrentIndex(0)
         self.fb_endpoint.setText(feedback_config.FEEDBACK_ENDPOINT)
         self.fb_form_url.setText(feedback_config.FEEDBACK_FORM_URL)
 
@@ -1974,6 +1982,7 @@ class SettingsDialog(QDialog):
                 return
         self.settings["language"] = self.lang.currentData()
         self.settings["font_size"] = self.font_size.value()
+        self.settings["theme"] = self.theme_choice.currentData()
         self.settings["library"] = library_text
         self.settings["feedback_endpoint"] = self.fb_endpoint.text().strip()
         self.settings["feedback_form_url"] = self.fb_form_url.text().strip()
@@ -3224,7 +3233,8 @@ class WelcomeDialog(QDialog):
             badge_wrap.setObjectName("WelcomeIconBadge")
             badge_wrap.setFixedSize(76, 76)
             badge_wrap.setStyleSheet(
-                "#WelcomeIconBadge { background: #242a38; border: 1px solid #354159; border-radius: 38px; } "
+                f"#WelcomeIconBadge {{ background: {theme.PALETTE['welcome_badge_bg']}; "
+                f"border: 1px solid {theme.PALETTE['welcome_badge_border']}; border-radius: 38px; }} "
                 "#WelcomeIconBadge QLabel { background: transparent; border: none; }"
             )
             bw_lay = QVBoxLayout(badge_wrap)
@@ -3300,7 +3310,8 @@ class WelcomeDialog(QDialog):
         for d_idx, dot in enumerate(getattr(self, "_step_dots", [])):
             is_cur = (d_idx == idx)
             dot.setFixedWidth(22 if is_cur else 6)
-            color = theme.PALETTE["accent"] if is_cur else "#3c4659"
+            color = (theme.PALETTE["accent"] if is_cur
+                     else theme.PALETTE["step_dot"])
             dot.setStyleSheet(f"QFrame {{ background: {color}; border-radius: 3px; }}")
         self.btn_prev.setEnabled(idx > 0)
         if idx == count - 1:
@@ -3699,8 +3710,8 @@ class HelpDialog(QDialog):
         prompt_lines = self._mcp_prompt.count("\n") + 4
         prompt_box.setFixedHeight(max(210, min(320, prompt_lines * 19)))
         prompt_box.setStyleSheet(
-            f"QTextEdit#McpCodeBox {{ background: #141720; color: {theme.PALETTE['text']}; "
-            f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
+            f"QTextEdit#McpCodeBox {{ background: {theme.PALETTE['code_bg']}; color: {theme.PALETTE['text']}; "
+            f"border: 1px solid {theme.PALETTE['code_border']}; border-radius: {theme.METRICS['radius']}px; "
             f"font-family: Consolas, 'Cascadia Code', monospace; font-size: 12px; padding: 12px; }}"
         )
         auto_lay.addWidget(prompt_box)
@@ -3730,8 +3741,8 @@ class HelpDialog(QDialog):
             field.setToolTip(command)
             field.setCursorPosition(0)
             field.setStyleSheet(
-                f"QLineEdit#McpCliInput {{ background: #141720; color: {theme.PALETTE['text']}; "
-                f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
+                f"QLineEdit#McpCliInput {{ background: {theme.PALETTE['code_bg']}; color: {theme.PALETTE['text']}; "
+                f"border: 1px solid {theme.PALETTE['code_border']}; border-radius: {theme.METRICS['radius']}px; "
                 f"font-family: Consolas, monospace; font-size: 12px; padding: 6px 10px; }}"
             )
             row.addWidget(field, 1)
@@ -3798,8 +3809,8 @@ class HelpDialog(QDialog):
         json_lines = self._mcp_json_str.count("\n") + 2
         json_box.setFixedHeight(max(150, min(260, json_lines * 19)))
         json_box.setStyleSheet(
-            f"QTextEdit#McpJsonBox {{ background: #141720; color: {theme.PALETTE['text']}; "
-            f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
+            f"QTextEdit#McpJsonBox {{ background: {theme.PALETTE['code_bg']}; color: {theme.PALETTE['text']}; "
+            f"border: 1px solid {theme.PALETTE['code_border']}; border-radius: {theme.METRICS['radius']}px; "
             f"font-family: Consolas, monospace; font-size: 12px; padding: 12px; }}"
         )
         manual_lay.addWidget(json_box)
