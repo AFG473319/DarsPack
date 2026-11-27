@@ -17,8 +17,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont
+from PySide6.QtCore import QLocale, QSize, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QProgressBar,
 
@@ -714,6 +714,29 @@ class FeedbackDialog(QDialog):
         super().closeEvent(event)
 
 
+def downloads_dir() -> str:
+    """The user's Downloads folder, where downloaded جزوه usually land.
+
+    Falls back to the home folder, then to "" (Qt's own default), if the
+    path cannot be resolved or does not exist.
+    """
+    for loc in (QStandardPaths.DownloadLocation, QStandardPaths.HomeLocation):
+        path = QStandardPaths.writableLocation(loc)
+        if path and Path(path).is_dir():
+            return path
+    return ""
+
+
+def paths_from_mime(mime) -> list:
+    """Local file/folder paths carried by a drop or the clipboard.
+
+    Shared by drag-and-drop and Ctrl+V, so both feed the same import path.
+    """
+    if mime is None or not mime.hasUrls():
+        return []
+    return [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+
+
 class ImportDialog(QDialog):
     """Pick files or a folder; import runs in a background worker."""
 
@@ -797,20 +820,37 @@ class ImportDialog(QDialog):
             event.ignore()
 
     def dropEvent(self, event) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        paths = paths_from_mime(event.mimeData())
         if paths:
             event.acceptProposedAction()
             self._start(paths)
         else:
             event.ignore()
 
+    def keyPressEvent(self, event) -> None:
+        """Ctrl+V pastes files/folders copied in Explorer (2026-11-27).
+
+        Why: copying a file and pasting it is as common as dragging it.
+        The clipboard carries the same file URLs as a drop, so the paths
+        go through the very same _start() as drag-and-drop; there is no
+        second import path. Folders work too (the importer walks them).
+        """
+        if event.matches(QKeySequence.Paste):
+            paths = paths_from_mime(QApplication.clipboard().mimeData())
+            if paths:
+                self._start(paths)
+            return
+        super().keyPressEvent(event)
+
     def _pick_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, tr("import_title"))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, tr("import_title"), downloads_dir())
         if paths:
             self._start(paths)
 
     def _pick_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, tr("import_title"))
+        path = QFileDialog.getExistingDirectory(
+            self, tr("import_title"), downloads_dir())
         if path:
             self._start([path])
 
@@ -1087,6 +1127,11 @@ class ClassifyDialog(QDialog):
             subject.setEditable(True)
             subject.addItem("")                   # «no subject» stays possible
             subject.addItems(subjects)
+            # Only the user's own subjects are listed (2026-11-27). On a
+            # first run the list is empty, so the placeholder shows how to
+            # add a new subject: just type its name.
+            subject.lineEdit().setPlaceholderText(
+                tr("subject_type_new") if subjects else tr("subject_first_hint"))
             subject.setCurrentText(
                 file_row["subject_name"] or prefill.get("subject")
                 or suggested["subject"] or "")
