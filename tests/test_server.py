@@ -19,6 +19,9 @@ from darspack.web.server import ShareServer, _open_server_library, _parse_range,
 def server(tmp_path):
     """A library with two files + a running ShareServer on a random port."""
     with Library(tmp_path / "lib") as lib:
+        # no presets on open since 2026-11-27; the tests below look up
+        # «علوم تجربی», so register the subjects explicitly
+        lib.seed_subjects()
         for i, name in enumerate(("نمونه سوال ریاضی فصل 3.pdf", "جزوه علوم.pdf")):
             p = tmp_path / name
             p.write_bytes(f"content-{i}".encode())

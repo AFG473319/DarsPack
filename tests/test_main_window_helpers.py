@@ -1078,6 +1078,12 @@ def test_open_card_file_reads_stored_name_and_handles_missing_disk_file(tmp_path
 
 def test_reload_filters_preserves_unclassified_and_nav_sync(tmp_path, qapp):
     with Library(tmp_path / "lib") as lib:
+        # «بدون درس» is listed only when an uncategorised file exists
+        # (2026-11-27), so give the library one.
+        from darspack.core.importer import import_file
+        src = tmp_path / "note.pdf"
+        src.write_bytes(b"%PDF-u")
+        import_file(lib, src)
         win = mw_module.MainWindow(
             lib.root,
             {"language": "fa", "font_size": 10, "library": str(lib.root)},

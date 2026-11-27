@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, __version__, asset_path, i18n
+from ..core.library import has_unclassified, used_subjects
 from ..core.search import search as catalog_search
 from ..i18n import tr
 from . import dialogs, icons, theme
@@ -975,9 +976,13 @@ class MainWindow(QMainWindow):
         self.year_combo.blockSignals(True)
         self.subject_combo.clear()
         self.subject_combo.addItem(tr("all_subjects"), None)
-        self.subject_combo.addItem(tr("unclassified"), -1)  # files missing info
-        for row in self.lib.conn.execute(
-                "SELECT id, name FROM subjects ORDER BY name"):
+        # «بدون درس» only when such files exist — or when it is the active
+        # filter, so the user's current view is never silently dropped.
+        if has_unclassified(self.lib.conn) or prev_subject == -1:
+            self.subject_combo.addItem(tr("unclassified"), -1)
+        # Only subjects that hold files: presets seeded into old libraries
+        # stay in the database but are hidden (decision 2026-11-27).
+        for row in used_subjects(self.lib.conn):
             self.subject_combo.addItem(row["name"], row["id"])
         self.kind_combo.clear()
         self.kind_combo.addItem(tr("all_kinds"), None)

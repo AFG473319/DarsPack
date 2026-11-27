@@ -17,8 +17,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont
+from PySide6.QtCore import QLocale, QSize, QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QProgressBar,
 
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from .. import asset_path, i18n
 from ..core import db, manifest as manifest_core
+from ..core.library import used_subjects
 from ..core.normalize import latin_digits, match_key, persian_digits
 from ..core.stats import library_stats as library_stats   # re-exported for callers
 from ..core.suggest import learn_hint, load_hints, suggest
@@ -713,6 +714,29 @@ class FeedbackDialog(QDialog):
         super().closeEvent(event)
 
 
+def downloads_dir() -> str:
+    """The user's Downloads folder, where downloaded جزوه usually land.
+
+    Falls back to the home folder, then to "" (Qt's own default), if the
+    path cannot be resolved or does not exist.
+    """
+    for loc in (QStandardPaths.DownloadLocation, QStandardPaths.HomeLocation):
+        path = QStandardPaths.writableLocation(loc)
+        if path and Path(path).is_dir():
+            return path
+    return ""
+
+
+def paths_from_mime(mime) -> list:
+    """Local file/folder paths carried by a drop or the clipboard.
+
+    Shared by drag-and-drop and Ctrl+V, so both feed the same import path.
+    """
+    if mime is None or not mime.hasUrls():
+        return []
+    return [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+
+
 class ImportDialog(QDialog):
     """Pick files or a folder; import runs in a background worker."""
 
@@ -796,20 +820,37 @@ class ImportDialog(QDialog):
             event.ignore()
 
     def dropEvent(self, event) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        paths = paths_from_mime(event.mimeData())
         if paths:
             event.acceptProposedAction()
             self._start(paths)
         else:
             event.ignore()
 
+    def keyPressEvent(self, event) -> None:
+        """Ctrl+V pastes files/folders copied in Explorer (2026-11-27).
+
+        Why: copying a file and pasting it is as common as dragging it.
+        The clipboard carries the same file URLs as a drop, so the paths
+        go through the very same _start() as drag-and-drop; there is no
+        second import path. Folders work too (the importer walks them).
+        """
+        if event.matches(QKeySequence.Paste):
+            paths = paths_from_mime(QApplication.clipboard().mimeData())
+            if paths:
+                self._start(paths)
+            return
+        super().keyPressEvent(event)
+
     def _pick_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, tr("import_title"))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, tr("import_title"), downloads_dir())
         if paths:
             self._start(paths)
 
     def _pick_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, tr("import_title"))
+        path = QFileDialog.getExistingDirectory(
+            self, tr("import_title"), downloads_dir())
         if path:
             self._start([path])
 
@@ -1063,8 +1104,7 @@ class ClassifyDialog(QDialog):
                 hi.setTextAlignment(name_align if col == 0 else Qt.AlignCenter)
         self._scroller = enable_smooth_scroll(self.table)
 
-        subjects = [r["name"] for r in lib.conn.execute(
-            "SELECT name FROM subjects ORDER BY name")]
+        subjects = [r["name"] for r in used_subjects(lib.conn)]
         hints = load_hints(lib.conn)       # one query, not one per file (B11)
         self._names: dict[int, str] = {}
         self.rows = []                            # (file_id, widgets)
@@ -1087,6 +1127,13 @@ class ClassifyDialog(QDialog):
             subject.setEditable(True)
             subject.addItem("")                   # «no subject» stays possible
             subject.addItems(subjects)
+            # Only the user's own subjects are listed (2026-11-27). On a
+            # first run the list is empty, so the placeholder shows how to
+            # add a new subject: just type its name.
+            subject.lineEdit().setPlaceholderText(
+                tr("subject_type_new") if subjects else tr("subject_first_hint"))
+            # the column is narrow, so the full explanation lives in a tooltip
+            subject.setToolTip(tr("subject_new_tip"))
             subject.setCurrentText(
                 file_row["subject_name"] or prefill.get("subject")
                 or suggested["subject"] or "")
@@ -1487,7 +1534,7 @@ class MetadataDialog(QDialog):
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
-        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+        for r in used_subjects(lib.conn):
             self.subject.addItem(r["name"])
         self.subject.setCurrentText(self.row["subject_name"] or "")
 
@@ -1616,7 +1663,7 @@ class BulkEditDialog(QDialog):
         self.subject = QComboBox()
         self.subject.setEditable(True)
         self.subject.addItem(none)
-        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+        for r in used_subjects(lib.conn):
             self.subject.addItem(r["name"])
 
         self.chapter = make_spinbox()
@@ -2836,7 +2883,7 @@ class ExamPackDialog(QDialog):
         self.subject_combo = QComboBox()
         self.subject_combo.setMinimumWidth(160)
         self.subject_combo.addItem(tr("all_subjects"), "")
-        subjects = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name")]
+        subjects = [r["name"] for r in used_subjects(lib.conn)]
         for s in subjects:
             self.subject_combo.addItem(s, s)
         self.subject_combo.currentIndexChanged.connect(self._reload_files)

@@ -278,7 +278,6 @@ def test_metadata_clearing_tags_removes_links(lib_with_file, qapp):
 
 def test_metadata_subject_reuse_across_spellings(lib_with_file, qapp):
     """«رياضي» (Arabic ي) after «ریاضی» must reuse the same subjects row."""
-    from darspack.core.suggest import DEFAULT_SUBJECTS
     from darspack.ui.dialogs import MetadataDialog
     lib, file_id, _ = lib_with_file
     dlg = MetadataDialog(None, lib, file_id)
@@ -291,11 +290,11 @@ def test_metadata_subject_reuse_across_spellings(lib_with_file, qapp):
     dlg2._save()
     second = lib.conn.execute(
         "SELECT subject_id FROM files WHERE id=?", (file_id,)).fetchone()["subject_id"]
-    # both spellings land on ONE subjects row («ریاضی» is among the A1
-    # seeded defaults, so nothing new is created at all)
+    # both spellings land on ONE subjects row (no presets since
+    # 2026-11-27, so exactly one subject exists)
     count = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
     assert second == first
-    assert count == len(DEFAULT_SUBJECTS)
+    assert count == 1
 
 
 def test_settings_dialog_writes_json(tmp_path, qapp):
