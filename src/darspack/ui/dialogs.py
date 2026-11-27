@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from .. import asset_path, i18n
 from ..core import db, manifest as manifest_core
+from ..core.library import used_subjects
 from ..core.normalize import latin_digits, match_key, persian_digits
 from ..core.stats import library_stats as library_stats   # re-exported for callers
 from ..core.suggest import learn_hint, load_hints, suggest
@@ -1063,8 +1064,7 @@ class ClassifyDialog(QDialog):
                 hi.setTextAlignment(name_align if col == 0 else Qt.AlignCenter)
         self._scroller = enable_smooth_scroll(self.table)
 
-        subjects = [r["name"] for r in lib.conn.execute(
-            "SELECT name FROM subjects ORDER BY name")]
+        subjects = [r["name"] for r in used_subjects(lib.conn)]
         hints = load_hints(lib.conn)       # one query, not one per file (B11)
         self._names: dict[int, str] = {}
         self.rows = []                            # (file_id, widgets)
@@ -1487,7 +1487,7 @@ class MetadataDialog(QDialog):
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
-        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+        for r in used_subjects(lib.conn):
             self.subject.addItem(r["name"])
         self.subject.setCurrentText(self.row["subject_name"] or "")
 
@@ -1616,7 +1616,7 @@ class BulkEditDialog(QDialog):
         self.subject = QComboBox()
         self.subject.setEditable(True)
         self.subject.addItem(none)
-        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+        for r in used_subjects(lib.conn):
             self.subject.addItem(r["name"])
 
         self.chapter = make_spinbox()
@@ -2836,7 +2836,7 @@ class ExamPackDialog(QDialog):
         self.subject_combo = QComboBox()
         self.subject_combo.setMinimumWidth(160)
         self.subject_combo.addItem(tr("all_subjects"), "")
-        subjects = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name")]
+        subjects = [r["name"] for r in used_subjects(lib.conn)]
         for s in subjects:
             self.subject_combo.addItem(s, s)
         self.subject_combo.currentIndexChanged.connect(self._reload_files)

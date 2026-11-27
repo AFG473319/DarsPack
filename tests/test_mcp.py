@@ -18,6 +18,9 @@ from darspack.paths import opencode_command
 @pytest.fixture
 def mcp_server(tmp_path):
     server = DarsPackMcpServer(tmp_path / "lib")
+    # no presets on open since 2026-11-27; these tests expect the
+    # well-known subjects to be registered
+    server.lib.seed_subjects()
     yield server
     server.close()
 

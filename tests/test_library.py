@@ -16,30 +16,45 @@ from darspack.core.suggest import DEFAULT_SUBJECTS
 
 # --- A1: the default subject list is pre-filled on first open -------------
 
-def test_fresh_library_seeds_default_subjects(tmp_path):
+def test_fresh_library_has_no_preset_subjects(tmp_path):
+    # Decision 2026-11-27: no presets; pickers show only the user's subjects.
     with Library(tmp_path / "lib") as lib:
-        names = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects")]
-        assert len(names) == len(DEFAULT_SUBJECTS)
-        assert "ریاضی" in names
-        # the canonical science subject (design decision 2026-10-24);
-        # the bare «علوم» entry was removed
-        assert "علوم تجربی" in names and "علوم" not in names
+        count = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
+        assert count == 0
         action = lib.conn.execute(
             "SELECT detail FROM activity_log WHERE action='seed_subjects'"
         ).fetchone()
-        assert action is not None
+        assert action is None
 
 
-def test_reopen_does_not_duplicate_seeds(tmp_path):
-    with Library(tmp_path / "lib"):
-        pass
+def test_seed_subjects_still_works_when_called_explicitly(tmp_path):
+    # kept for scripts/tests; the canonical science subject is «علوم تجربی»
     with Library(tmp_path / "lib") as lib:
-        count = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
-        assert count == len(DEFAULT_SUBJECTS)
-        logs = lib.conn.execute(
-            "SELECT COUNT(*) c FROM activity_log WHERE action='seed_subjects'"
-        ).fetchone()["c"]
-        assert logs == 1
+        lib.seed_subjects()
+        names = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects")]
+        assert len(names) == len(DEFAULT_SUBJECTS)
+        assert "علوم تجربی" in names and "علوم" not in names
+
+
+def test_used_subjects_hides_empty_presets(tmp_path):
+    # Old libraries still hold seeded presets: hidden, never deleted.
+    from darspack.core.library import has_unclassified, used_subjects
+    src = tmp_path / "جزوه.pdf"
+    src.write_bytes(b"%PDF-x")
+    with Library(tmp_path / "lib") as lib:
+        lib.seed_subjects()
+        assert used_subjects(lib.conn) == []
+        assert not has_unclassified(lib.conn)
+        import_file(lib, src)
+        assert has_unclassified(lib.conn)
+        math = lib.conn.execute(
+            "SELECT id FROM subjects WHERE name='ریاضی'").fetchone()["id"]
+        lib.conn.execute("UPDATE files SET subject_id=?", (math,))
+        lib.conn.commit()
+        assert [r["name"] for r in used_subjects(lib.conn)] == ["ریاضی"]
+        assert not has_unclassified(lib.conn)
+        total = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
+        assert total == len(DEFAULT_SUBJECTS)       # nothing deleted
 
 
 def test_existing_library_is_never_reseeded(tmp_path):
@@ -145,12 +160,11 @@ def test_for_background_skips_the_startup_passes(tmp_path):
         after = lib.conn.execute(
             "SELECT COUNT(*) c FROM activity_log").fetchone()["c"]
         assert after == before                     # no new startup log rows
-        assert lib.conn.execute(
-            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] > 0
-    # a folder with no catalog yet still gets a usable schema
+    # a folder with no catalog yet still gets a usable schema (the table
+    # exists; it is empty because there are no presets since 2026-11-27)
     with Library.for_background(tmp_path / "fresh") as lib:
         assert lib.conn.execute(
-            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] > 0
+            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] == 0
 
 
 def test_list_trash_with_corrupted_metadata_json(tmp_path):

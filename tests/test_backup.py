@@ -24,6 +24,11 @@ def library_with_files(tmp_path):
             src = tmp_path / name
             src.write_bytes(f"content {i}".encode("utf-8"))
             import_file(lib, src)
+        # No preset subjects since 2026-11-27: add one user subject so the
+        # backup test can check that subjects ride along in catalog.db.
+        lib.conn.execute(
+            "INSERT INTO subjects(name, normalized) VALUES ('ریاضی', 'ریاضی')")
+        lib.conn.commit()
     return root
 
 
@@ -61,7 +66,7 @@ def test_backup_is_a_valid_package_and_carries_the_catalog(tmp_path,
     finally:
         check.close()
     assert count == 2
-    assert subjects > 0                      # the A1 seeds rode along
+    assert subjects > 0                      # the user's subjects rode along
 
 
 def test_backup_of_empty_library_verifies(tmp_path):

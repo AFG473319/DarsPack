@@ -19,6 +19,26 @@ from .normalize import normalize
 from .suggest import DEFAULT_SUBJECTS
 
 
+def used_subjects(conn) -> list:
+    """Subjects (درس‌ها) that hold at least one file, sorted by name.
+
+    Why: libraries created before 2026-11-27 still contain the seeded
+    preset subjects. Hiding empty subjects (instead of deleting them)
+    keeps the user's data untouched while the pickers show only subjects
+    the user really added lessons for. Returns rows with `id` and `name`.
+    """
+    return conn.execute(
+        """SELECT s.id, s.name FROM subjects s
+           WHERE EXISTS (SELECT 1 FROM files f WHERE f.subject_id = s.id)
+           ORDER BY s.name""").fetchall()
+
+
+def has_unclassified(conn) -> bool:
+    """True if any file has no subject (feeds the «بدون درس» filter)."""
+    return conn.execute(
+        "SELECT 1 FROM files WHERE subject_id IS NULL LIMIT 1").fetchone() is not None
+
+
 class Library:
     def __init__(self, root, maintain: bool = True):
         self.root = Path(root)
@@ -33,7 +53,10 @@ class Library:
         self.conn = db.connect(self.db_path)
         if self.maintain:
             db.init_schema(self.conn)      # creates tables + runs migrations
-            self.seed_subjects()
+            # No preset subjects any more (student decision 2026-11-27): the
+            # pickers list only subjects that already hold files, and a new
+            # subject is created by typing its name. seed_subjects() stays
+            # for scripts/tests but is no longer called on open.
             self.sweep_orphans()
             self.health_check()
         return self
