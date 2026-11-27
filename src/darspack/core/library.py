@@ -16,7 +16,6 @@ from pathlib import Path
 from . import db
 from .hashing import sha256_file
 from .normalize import normalize
-from .suggest import DEFAULT_SUBJECTS
 
 
 class Library:
@@ -57,20 +56,15 @@ class Library:
         return cls(root, maintain=fresh).open()
 
     def seed_subjects(self) -> None:
-        """Pre-fill the subjects table on a brand-new library only (A1).
+        """No-op: presets are no longer seeded (subjects appear once used)."""
+        return
 
-        The classify dialog's subject combo reads this table — on a fresh
-        install it would be empty and the user would type «ریاضی»
-        letter-by-letter for a dozen imports. An existing library is never
-        touched: the user's own subjects are authoritative.
-        """
-        count = self.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
-        if count:
-            return
-        with self.conn:
-            for name in DEFAULT_SUBJECTS:
-                db.get_or_create(self.conn, "subjects", name)
-            db.log(self.conn, "seed_subjects", f"{len(DEFAULT_SUBJECTS)} درس پیش‌فرض")
+    def used_subjects(self) -> list:
+        """Subjects with at least one file, ordered by name (rows: id, name)."""
+        return self.conn.execute(
+            "SELECT s.id, s.name FROM subjects s "
+            "WHERE EXISTS (SELECT 1 FROM files f WHERE f.subject_id = s.id) "
+            "ORDER BY s.name").fetchall()
 
     def health_check(self) -> int:
         """Verify every stored file is still on disk (B1) — return how many are not.

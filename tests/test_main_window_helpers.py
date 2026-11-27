@@ -1154,3 +1154,31 @@ def test_share_log_rows_commit_immediately(tmp_path, qapp, monkeypatch):
         finally:
             win.stop_share(sync=True)
             win.lib.close()
+
+def test_filter_lists_only_used_subjects_and_hides_empty_unclassified(tmp_path, qapp):
+    from darspack.core import db
+    with Library(tmp_path / "lib") as lib:
+        win = mw_module.MainWindow(
+            lib.root,
+            {"language": "fa", "font_size": 10, "library": str(lib.root)},
+            tmp_path / "settings.json",
+        )
+        try:
+            # first run: only the "all subjects" entry, no presets, no empty chip
+            assert win.subject_combo.count() == 1
+            assert win.subject_combo.itemData(0) is None
+
+            sid = db.get_or_create(lib.conn, "subjects", "math-only")
+            db.get_or_create(lib.conn, "subjects", "unused")
+            with lib.conn:
+                lib.conn.execute(
+                    "INSERT INTO files(stored_name, original_name, name_norm, "
+                    "size_bytes, sha256, imported_at, subject_id, available) "
+                    "VALUES ('a','a.pdf','a',1,'sha-a','2026-10-24T12:00:00',?,1)",
+                    (sid,))
+            win.reload_filters()
+            names = [win.subject_combo.itemText(i)
+                     for i in range(win.subject_combo.count())]
+            assert names[1:] == ["math-only"]          # used only; no unclassified
+        finally:
+            win.lib.close()

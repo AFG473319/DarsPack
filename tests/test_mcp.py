@@ -43,8 +43,7 @@ def test_mcp_tool_list_subjects(mcp_server):
     resp = mcp_server.handle_request(req)
     content = json.loads(resp["result"]["content"][0]["text"])
     subjects = [s["name"] for s in content["subjects"]]
-    assert "ریاضی" in subjects
-    assert "علوم تجربی" in subjects
+    assert subjects == []                 # no preset subjects
 
 
 def test_mcp_tool_add_subject(mcp_server):

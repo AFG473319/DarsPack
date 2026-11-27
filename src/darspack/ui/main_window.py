@@ -842,8 +842,12 @@ class MainWindow(QMainWindow):
         self.year_combo.blockSignals(True)
         if subject_id == -1:
             idx = self.subject_combo.findData(-1)
-            if idx >= 0:
-                self.subject_combo.setCurrentIndex(idx)
+            if idx < 0:
+                # the entry is only listed while uncategorised files exist;
+                # an explicit request for it (nav rail) must still work
+                self.subject_combo.insertItem(1, tr("unclassified"), -1)
+                idx = 1
+            self.subject_combo.setCurrentIndex(idx)
             self.kind_combo.setCurrentIndex(0)
             self.year_combo.setCurrentIndex(0)
         else:
@@ -994,9 +998,13 @@ class MainWindow(QMainWindow):
         self.year_combo.blockSignals(True)
         self.subject_combo.clear()
         self.subject_combo.addItem(tr("all_subjects"), None)
-        self.subject_combo.addItem(tr("unclassified"), -1)  # files missing info
+        # listed only while uncategorised files exist -- or while it is the active
+        # filter, so a selection is never silently dropped from under the user
+        if prev_subject == -1 or self.lib.conn.execute(
+                "SELECT 1 FROM files WHERE subject_id IS NULL LIMIT 1").fetchone():
+            self.subject_combo.addItem(tr("unclassified"), -1)
         for row in self.lib.conn.execute(
-                "SELECT id, name FROM subjects ORDER BY name"):
+                "SELECT DISTINCT s.id, s.name FROM subjects s JOIN files f ON f.subject_id = s.id ORDER BY s.name"):
             self.subject_combo.addItem(row["name"], row["id"])
         self.kind_combo.clear()
         self.kind_combo.addItem(tr("all_kinds"), None)

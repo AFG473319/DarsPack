@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from darspack.core import db
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.search import unclassified_count
@@ -379,8 +380,7 @@ def test_unknown_route_is_404(ro_server):
 def test_api_subjects_lists_counts(server):
     share, lib = server
     base = f"http://127.0.0.1:{share.port}"
-    sci = lib.conn.execute(
-        "SELECT id FROM subjects WHERE name='علوم تجربی'").fetchone()["id"]
+    sci = db.get_or_create(lib.conn, "subjects", "علوم تجربی")
     lib.conn.execute(
         "UPDATE files SET subject_id=? WHERE original_name LIKE 'جزوه%'",
         (sci,))
@@ -388,7 +388,7 @@ def test_api_subjects_lists_counts(server):
     _, body = _get(f"{base}/api/subjects?pin={share.pin}")
     data = json.loads(body)
     counts = {s["name"]: s["count"] for s in data["subjects"]}
-    assert counts["علوم تجربی"] == 1        # the seeded subjects, with counts
+    assert counts == {"علوم تجربی": 1}      # only used subjects, with counts
     assert all(s["id"] for s in data["subjects"])
     assert data["unclassified"] == 1        # the «بدون درس» chip count
 
@@ -453,8 +453,7 @@ def _fa_digits(number: int) -> str:
 def test_search_filter_params_through_http(server):
     share, lib = server
     base = f"http://127.0.0.1:{share.port}"
-    sci = lib.conn.execute(
-        "SELECT id FROM subjects WHERE name='علوم تجربی'").fetchone()["id"]
+    sci = db.get_or_create(lib.conn, "subjects", "علوم تجربی")
     lib.conn.execute(
         "UPDATE files SET subject_id=? WHERE original_name LIKE 'جزوه%'",
         (sci,))
