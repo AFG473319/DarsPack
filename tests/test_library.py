@@ -11,35 +11,41 @@ from darspack.core.hashing import sha256_file
 from darspack.core.importer import import_file
 from darspack.core.library import Library
 from darspack.core.search import search
-from darspack.core.suggest import DEFAULT_SUBJECTS
 
 
-# --- A1: the default subject list is pre-filled on first open -------------
+# --- subjects are never pre-seeded; only used ones are listed --------------
 
-def test_fresh_library_seeds_default_subjects(tmp_path):
+def test_fresh_library_has_no_preset_subjects(tmp_path):
     with Library(tmp_path / "lib") as lib:
-        names = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects")]
-        assert len(names) == len(DEFAULT_SUBJECTS)
-        assert "ریاضی" in names
-        # the canonical science subject (design decision 2026-10-24);
-        # the bare «علوم» entry was removed
-        assert "علوم تجربی" in names and "علوم" not in names
-        action = lib.conn.execute(
-            "SELECT detail FROM activity_log WHERE action='seed_subjects'"
-        ).fetchone()
-        assert action is not None
+        count = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
+        assert count == 0
+        assert lib.used_subjects() == []
+        assert lib.conn.execute(
+            "SELECT COUNT(*) c FROM activity_log WHERE action='seed_subjects'"
+        ).fetchone()["c"] == 0
 
 
-def test_reopen_does_not_duplicate_seeds(tmp_path):
+def test_reopen_keeps_zero_subjects(tmp_path):
     with Library(tmp_path / "lib"):
         pass
     with Library(tmp_path / "lib") as lib:
         count = lib.conn.execute("SELECT COUNT(*) c FROM subjects").fetchone()["c"]
-        assert count == len(DEFAULT_SUBJECTS)
-        logs = lib.conn.execute(
-            "SELECT COUNT(*) c FROM activity_log WHERE action='seed_subjects'"
-        ).fetchone()["c"]
-        assert logs == 1
+        assert count == 0
+
+
+def test_used_subjects_lists_only_subjects_with_files(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        used = db.get_or_create(lib.conn, "subjects", "ریاضی")
+        db.get_or_create(lib.conn, "subjects", "unused-subject")   # no file
+        with lib.conn:
+            lib.conn.execute(
+                """INSERT INTO files(stored_name, original_name, name_norm,
+                   size_bytes, sha256, imported_at, subject_id, available)
+                   VALUES ('a','a.pdf','a',1,'sha-x','2026-10-24T12:00:00',?,1)""",
+                (used,))
+        rows = lib.used_subjects()
+        assert [r["name"] for r in rows] == ["ریاضی"]
+        assert rows[0]["id"] == used
 
 
 def test_existing_library_is_never_reseeded(tmp_path):
@@ -146,11 +152,11 @@ def test_for_background_skips_the_startup_passes(tmp_path):
             "SELECT COUNT(*) c FROM activity_log").fetchone()["c"]
         assert after == before                     # no new startup log rows
         assert lib.conn.execute(
-            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] > 0
+            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] == 0
     # a folder with no catalog yet still gets a usable schema
     with Library.for_background(tmp_path / "fresh") as lib:
         assert lib.conn.execute(
-            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] > 0
+            "SELECT COUNT(*) c FROM subjects").fetchone()["c"] == 0
 
 
 def test_list_trash_with_corrupted_metadata_json(tmp_path):

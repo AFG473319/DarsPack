@@ -61,7 +61,7 @@ def test_backup_is_a_valid_package_and_carries_the_catalog(tmp_path,
     finally:
         check.close()
     assert count == 2
-    assert subjects > 0                      # the A1 seeds rode along
+    assert subjects == 0                     # no preset subjects are seeded
 
 
 def test_backup_of_empty_library_verifies(tmp_path):

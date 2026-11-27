@@ -1063,8 +1063,7 @@ class ClassifyDialog(QDialog):
                 hi.setTextAlignment(name_align if col == 0 else Qt.AlignCenter)
         self._scroller = enable_smooth_scroll(self.table)
 
-        subjects = [r["name"] for r in lib.conn.execute(
-            "SELECT name FROM subjects ORDER BY name")]
+        subjects = [r["name"] for r in lib.used_subjects()]
         hints = load_hints(lib.conn)       # one query, not one per file (B11)
         self._names: dict[int, str] = {}
         self.rows = []                            # (file_id, widgets)
@@ -1085,6 +1084,7 @@ class ClassifyDialog(QDialog):
             prefill = (prefills or {}).get(fid) or {}
             subject = QComboBox()
             subject.setEditable(True)
+            subject.lineEdit().setPlaceholderText(tr("subject_new_placeholder"))
             subject.addItem("")                   # «no subject» stays possible
             subject.addItems(subjects)
             subject.setCurrentText(
@@ -1487,7 +1487,8 @@ class MetadataDialog(QDialog):
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
-        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+        self.subject.lineEdit().setPlaceholderText(tr("subject_new_placeholder"))
+        for r in lib.used_subjects():
             self.subject.addItem(r["name"])
         self.subject.setCurrentText(self.row["subject_name"] or "")
 
@@ -1615,8 +1616,9 @@ class BulkEditDialog(QDialog):
 
         self.subject = QComboBox()
         self.subject.setEditable(True)
+        self.subject.lineEdit().setPlaceholderText(tr("subject_new_placeholder"))
         self.subject.addItem(none)
-        for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name"):
+        for r in lib.used_subjects():
             self.subject.addItem(r["name"])
 
         self.chapter = make_spinbox()
@@ -2836,7 +2838,7 @@ class ExamPackDialog(QDialog):
         self.subject_combo = QComboBox()
         self.subject_combo.setMinimumWidth(160)
         self.subject_combo.addItem(tr("all_subjects"), "")
-        subjects = [r["name"] for r in lib.conn.execute("SELECT name FROM subjects ORDER BY name")]
+        subjects = [r["name"] for r in lib.used_subjects()]
         for s in subjects:
             self.subject_combo.addItem(s, s)
         self.subject_combo.currentIndexChanged.connect(self._reload_files)
