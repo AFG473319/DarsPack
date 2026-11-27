@@ -32,6 +32,7 @@ from ..core.search import search as catalog_search
 from ..i18n import tr
 from . import dialogs, icons, theme
 from .delegates import FileNameDelegate, FileNameLabel, KindBadgeDelegate
+from .flow_layout import FlowLayout
 from .smooth_scroll import enable_smooth_scroll
 from .workers import ImportWorker, start_worker
 
@@ -280,6 +281,7 @@ class MainWindow(QMainWindow):
         for combo, width in ((self.subject_combo, 140),
                              (self.kind_combo, 118),
                              (self.year_combo, 128)):
+            combo._base_width = width   # apply_font_metrics re-scales it
             combo.setFixedWidth(width)
             combo.setFixedHeight(30)
             theme.setup_combobox(combo)
@@ -297,9 +299,10 @@ class MainWindow(QMainWindow):
 
         filter_bar = QWidget()
         filter_bar.setObjectName("FilterBar")
-        toolbar = QHBoxLayout(filter_bar)
+        # Wraps instead of clipping when the user's large font setting
+        # makes the row wider than the window (FlowLayout mirrors RTL).
+        toolbar = FlowLayout(filter_bar, spacing=8)
         toolbar.setContentsMargins(10, 6, 10, 6)
-        toolbar.setSpacing(8)
 
         self.packages_menu = QMenu(self)
         self._menu_action(self.packages_menu, tr("btn_export"), "upload",
@@ -402,7 +405,7 @@ class MainWindow(QMainWindow):
         self.table.setIconSize(QSize(16, 16))
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(
-            theme.METRICS["row_height"])
+            theme.scaled_int(theme.METRICS["row_height"]))
         self.table.setItemDelegateForColumn(
             0, FileNameDelegate(self.table))
         self.table.setItemDelegateForColumn(
@@ -495,7 +498,8 @@ class MainWindow(QMainWindow):
         # 1. Navigation Rail (سایدبار ناوبری روان)
         self.nav_rail = QWidget()
         self.nav_rail.setObjectName("NavRail")
-        self.nav_rail.setFixedWidth(210)
+        # Grows with the font setting: nav labels need the room or they clip.
+        self.nav_rail.setFixedWidth(theme.scaled_int(210))
         nav_vbox = QVBoxLayout(self.nav_rail)
         nav_vbox.setContentsMargins(8, 12, 8, 12)
         nav_vbox.setSpacing(4)
@@ -733,8 +737,45 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh)
         QShortcut(QKeySequence(Qt.Key_F1), self).activated.connect(self.open_help_dialog)
 
+        self.apply_font_metrics()
         self.reload_filters()
         self.refresh()
+
+    def apply_font_metrics(self) -> None:
+        """Size every font-dependent fixed dimension from the app font.
+
+        Fixed pixel heights and widths are computed at construction, so
+        a live font-size change (Settings) must recompute them or the
+        grown text clips: the nav rail and its rows, the command bar
+        controls, and the main table rows. Dialogs are built per-open
+        and size themselves from the font they are created with.
+        """
+        # Nav rail: labels need the room or they clip.
+        self.nav_rail.setFixedWidth(theme.scaled_int(210))
+        # Nav rows follow the text height (34 px at the 10 pt default);
+        # capping growth at the metrics keeps the rail inside short windows.
+        nav_h = max(34, self.fontMetrics().height() + 14)
+        badge_h = theme.scaled_int(18)
+        for btn in self._nav_items.values():
+            btn.setFixedHeight(nav_h)
+            if btn._badge is not None:
+                btn._badge.setFixedHeight(badge_h)
+        # Command bar controls.
+        self.search_shell.setFixedHeight(theme.scaled_int(38))
+        for combo in (self.subject_combo, self.kind_combo, self.year_combo):
+            combo.setFixedHeight(theme.scaled_int(30))
+            # Width too, or the wider labels clip at large font sizes.
+            combo.setFixedWidth(theme.scaled_int(combo._base_width))
+        self.import_button.setFixedHeight(theme.scaled_int(38))
+        for btn in (self.packages_button, self.duplicates_button,
+                    self.share_button):
+            btn.setFixedHeight(theme.scaled_int(30))
+        # Main table rows: grown text needs taller rows, now and later.
+        row_h = theme.scaled_int(theme.METRICS["row_height"])
+        header = self.table.verticalHeader()
+        header.setDefaultSectionSize(row_h)
+        for row in range(self.table.rowCount()):
+            header.resizeSection(row, row_h)
 
     def statusBar(self) -> QStatusBar:
         """Keep the status bar scoped to the canvas so the NavRail runs full height."""
@@ -1801,6 +1842,7 @@ class MainWindow(QMainWindow):
                                   self.settings_path).exec():
             from .app import apply_font_size
             apply_font_size(self.settings)
+            self.apply_font_metrics()
             if self.settings.get("library") != old_library:
                 self._offer_restart_for_library_change()
 

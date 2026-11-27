@@ -56,8 +56,8 @@ class PersianTranslator(QTranslator):
         return None
 
 
-FONT_SIZE_MIN = 8
-FONT_SIZE_MAX = 18
+FONT_SIZE_MIN = theme.FONT_SIZE_MIN
+FONT_SIZE_MAX = theme.FONT_SIZE_MAX
 
 
 def sanitize_settings(settings: dict) -> tuple[dict, bool]:
@@ -210,15 +210,24 @@ def load_settings() -> tuple[dict, Path, bool]:
 
 
 def apply_font_size(settings: dict, app: QApplication | None = None) -> None:
+    """Apply the user's font size to the whole UI, live and at startup.
+
+    The application font covers every widget without an explicit QSS
+    size; the stylesheet is rebuilt with its sizes scaled to the same
+    setting so the rest (nav rail, titles, chips, dialogs) follows too —
+    an explicit QSS font-size would otherwise override the app font.
+    """
     app = app or QApplication.instance()
     if app is not None:
         font = QFont(theme.load_fonts())
         try:
-            size = int(settings.get("font_size", 10))
+            size = int(settings.get("font_size", theme.BASE_FONT_SIZE))
         except (TypeError, ValueError):
-            size = 10
-        font.setPointSize(max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, size)))
+            size = theme.BASE_FONT_SIZE
+        size = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, size))
+        font.setPointSize(size)
         app.setFont(font)
+        app.setStyleSheet(theme.build_qss(font_size=size))
 
 
 def _install_excepthook() -> None:
@@ -342,7 +351,7 @@ def run() -> None:
     app.setStyle("Fusion")          # one predictable base before the QSS
     theme.load_fonts()
     theme.apply_palette(app)
-    app.setStyleSheet(theme.build_qss())
+    # Installs both the application font and the scaled stylesheet.
     apply_font_size(settings, app)
 
     from .main_window import MainWindow
