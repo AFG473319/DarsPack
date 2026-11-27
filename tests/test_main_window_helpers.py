@@ -1182,3 +1182,171 @@ def test_filter_lists_only_used_subjects_and_hides_empty_unclassified(tmp_path, 
             assert names[1:] == ["math-only"]          # used only; no unclassified
         finally:
             win.lib.close()
+
+
+# --- click outside the file list clears the selection -----------------------
+
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication
+
+
+def _with_two_files(window):
+    """Two imported rows so there is something to select. Distinct content:
+    identical bytes dedup into ONE catalog row."""
+    from darspack.core.importer import import_file
+    for name, content in (("f1.pdf", b"one"), ("f2.pdf", b"two")):
+        src = window.lib.root.parent / name
+        src.write_bytes(content)
+        import_file(window.lib, src)
+    window.refresh()
+    assert window.table.rowCount() == 2
+
+
+def _show(window):
+    """Show the window offscreen and settle the layout.
+
+    The outside-click filter installs on the windowHandle at first show,
+    and windowHandle() exists only afterwards — every simulated click
+    below targets the windowHandle, the exact path real mouse input
+    takes (Qt routes it to the child widget after the filter has seen
+    it, so row clicks still select normally)."""
+    window.resize(1000, 700)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    QApplication.processEvents()     # flush pending layout before geometry math
+
+
+def _window_point(widget, local=QPoint(10, 15)):
+    """A window-local point over `widget` (mapTo, never hardcoded x — the
+    RTL layout mirrors the sidebar to the right)."""
+    return widget.mapTo(widget.window(), local)
+
+
+def _click(window, widget, local=QPoint(10, 15)):
+    QTest.mouseClick(window.windowHandle(), Qt.LeftButton,
+                     pos=_window_point(widget, local))
+
+
+def test_click_outside_the_table_clears_the_selection(window):
+    """A left-click outside the file list (sidebar, another panel) drops
+    the selection: no stuck inactive «half-blue» row, the current cell
+    goes too, and edit/delete disable exactly as with an empty selection
+    (the clear flows through itemSelectionChanged)."""
+    _with_two_files(window)
+    _show(window)
+    window.table.selectRow(0)
+    assert window.edit_action.isEnabled()
+    assert window.delete_action.isEnabled()
+
+    _click(window, window.nav_rail)                    # the sidebar
+    assert len(window.table.selectedItems()) == 0
+    assert window.table.currentRow() == -1
+    assert not window.edit_action.isEnabled()
+    assert not window.delete_action.isEnabled()
+
+    window.table.selectRow(0)
+    cs = window.content_stack
+    _click(window, cs, QPoint(3, cs.height() // 2))    # canvas margin
+    assert len(window.table.selectedItems()) == 0
+
+    window.hide()
+    QApplication.processEvents()
+
+
+def test_click_inside_the_table_still_selects_normally(window):
+    """The outside-click rule must not eat the table's own clicks: a row
+    selects on click and another row replaces the selection as before."""
+    _with_two_files(window)
+    _show(window)
+    vp = window.table.viewport()
+
+    rect0 = window.table.visualItemRect(window.table.item(0, 0))
+    _click(window, vp, rect0.center())
+    assert window.table.item(0, 0).isSelected()
+
+    rect1 = window.table.visualItemRect(window.table.item(1, 0))
+    _click(window, vp, rect1.center())
+    assert window.table.item(1, 0).isSelected()
+    assert not window.table.item(0, 0).isSelected()
+
+    window.hide()
+    QApplication.processEvents()
+
+
+def test_ctrl_multiselect_clears_together_on_outside_click(window):
+    """Ctrl/Shift multi-select still works inside the table, and one click
+    outside clears all of it at once."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    _with_two_files(window)
+    _show(window)
+    window.table.selectRow(0)
+    window.table.selectionModel().select(
+        window.table.model().index(1, 0),
+        QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    assert len({i.row() for i in window.table.selectedItems()}) == 2
+
+    _click(window, window.nav_rail)
+    assert len(window.table.selectedItems()) == 0
+
+    window.hide()
+    QApplication.processEvents()
+
+
+def test_menu_buttons_keep_the_selection(window):
+    """«بسته‌ها»/«بیشتر» menus act on the selection (export scope,
+    edit/delete) — their press must not discard it first. Ordinary
+    buttons like «ورود فایل» do clear."""
+    _with_two_files(window)
+    window.table.selectRow(0)
+
+    window._clear_selection_on_outside_click(window.more_button)
+    assert len(window.table.selectedItems()) > 0
+    window._clear_selection_on_outside_click(window.packages_button)
+    assert len(window.table.selectedItems()) > 0
+
+    window._clear_selection_on_outside_click(window.import_button)
+    assert len(window.table.selectedItems()) == 0
+
+
+def test_click_behind_an_open_modal_keeps_the_selection(window):
+    """Clicks blocked behind an open modal (delete confirm, import dialog)
+    must not silently drop the rows the modal is working on."""
+    from PySide6.QtWidgets import QDialog
+
+    _with_two_files(window)
+    _show(window)
+    window.table.selectRow(0)
+    modal = QDialog(window)
+    modal.setModal(True)
+    modal.show()
+    try:
+        _click(window, window.nav_rail)
+        assert len(window.table.selectedItems()) > 0
+    finally:
+        # hide + drain NOW: deleteLater alone would leave the dialog
+        # registered as the session's active modal widget, blocking
+        # input to every later test in the run.
+        modal.hide()
+        modal.deleteLater()
+        QApplication.processEvents()
+
+    window.hide()
+    QApplication.processEvents()
+
+
+def test_click_inside_a_dialog_never_touches_the_selection(window):
+    """Dialogs and popups are their own window()/QWindow — clicking inside
+    one is not a click outside the file list."""
+    from PySide6.QtWidgets import QDialog, QLabel
+
+    _with_two_files(window)
+    window.table.selectRow(0)
+    dlg = QDialog(window)
+    label = QLabel(dlg)
+    try:
+        window._clear_selection_on_outside_click(label)
+        assert len(window.table.selectedItems()) > 0
+    finally:
+        dlg.deleteLater()
