@@ -743,6 +743,49 @@ def test_import_worker_reentrancy_guard(tmp_path, qapp):
         win.lib.close()
 
 
+def test_import_finished_clears_progress_status(window, monkeypatch):
+    """The «در حال وارد کردن 1/1» status must not outlive the import."""
+    from darspack import i18n
+    from darspack.i18n import tr
+
+    monkeypatch.setattr(mw_module.QMessageBox, "information",
+                        lambda *args, **kwargs: None)
+    window._import_progress(1, 1, "foo.pdf")
+    assert tr("import_running").format(1, 1, "foo.pdf") in (
+        window.statusBar().currentMessage())
+
+    window._import_finished(1, 0, 0, [], [])
+
+    message = window.statusBar().currentMessage()
+    assert "در حال وارد کردن" not in message
+    assert tr("import_done_status").format(i18n.num(1)) in message
+
+
+def test_import_finished_clears_progress_before_review_dialog(window, monkeypatch):
+    """The review dialog must not open over a stale progress message."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(mw_module.QMessageBox, "information",
+                        lambda *args, **kwargs: None)
+    seen = []
+
+    class FakeClassifyDialog:
+        def __init__(self, parent, lib, new_ids, prefills=None):
+            seen.append(window.statusBar().currentMessage())
+
+        def exec(self):
+            return False
+
+    monkeypatch.setattr(mw_module.dialogs, "ClassifyDialog",
+                        FakeClassifyDialog)
+    window._worker = SimpleNamespace(result_prefills={})
+    window._import_progress(1, 1, "foo.pdf")
+    window._import_finished(1, 0, 0, [], [42])
+
+    assert seen == [""]
+    assert "در حال وارد کردن" not in window.statusBar().currentMessage()
+
+
 def test_open_selected_file_empty_selection_nudge(tmp_path, qapp):
     """Enter / open_selected_file with empty selection shows status bar message, no modal."""
     from darspack.i18n import tr
