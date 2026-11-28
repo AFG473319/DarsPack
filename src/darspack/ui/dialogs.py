@@ -60,13 +60,16 @@ def polish_dialog(dialog, min_width: int | None = None) -> None:
 
 
 def _wrap_table_widget(widget: QWidget, height: int = 28) -> QWidget:
-    """Center a cell editor inside a padded transparent cell wrapper."""
+    """Center a cell editor inside a padded transparent cell wrapper.
+
+    The editor height grows with the font setting so the editor never
+    clips its own text at large sizes."""
     holder = QWidget()
     holder.setAttribute(Qt.WA_TranslucentBackground, True)
     lay = QHBoxLayout(holder)
     lay.setContentsMargins(3, 6, 3, 6)
     lay.setSpacing(0)
-    widget.setFixedHeight(height)
+    widget.setFixedHeight(theme.scaled_int(height))
     lay.addWidget(widget)
     return holder
 
@@ -821,13 +824,13 @@ class ImportDialog(QDialog):
         pick_files.setObjectName("Primary")
         pick_files.setIcon(icons.icon("file-text", theme.PALETTE["on_accent"], 18))
         pick_files.setIconSize(QSize(18, 18))
-        pick_files.setFixedHeight(38)
+        pick_files.setFixedHeight(theme.scaled_int(38))
 
         pick_folder = QPushButton(tr("import_pick_folder"))
         pick_folder.setObjectName("Secondary")
         pick_folder.setIcon(icons.icon("folder-open", theme.PALETTE["text"], 18))
         pick_folder.setIconSize(QSize(18, 18))
-        pick_folder.setFixedHeight(38)
+        pick_folder.setFixedHeight(theme.scaled_int(38))
 
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -842,7 +845,7 @@ class ImportDialog(QDialog):
         btn_row.addStretch(1)
         cancel_btn = QPushButton(tr("cancel"))
         cancel_btn.setObjectName("Secondary")
-        cancel_btn.setFixedHeight(36)
+        cancel_btn.setFixedHeight(theme.scaled_int(36))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
@@ -937,8 +940,8 @@ class ExportDialog(QDialog):
         btn_filtered.setEnabled(bool(parent.last_rows))
         btn_selected.setObjectName("Primary" if selected_ids else "Secondary")
         btn_filtered.setObjectName("Secondary" if selected_ids else "Primary")
-        btn_selected.setFixedHeight(38)
-        btn_filtered.setFixedHeight(38)
+        btn_selected.setFixedHeight(theme.scaled_int(38))
+        btn_filtered.setFixedHeight(theme.scaled_int(38))
         btn_selected.setIcon(icons.icon(
             "package",
             theme.PALETTE["on_accent"] if selected_ids else theme.PALETTE["muted"],
@@ -1123,7 +1126,7 @@ class ClassifyDialog(QDialog):
         self.table.setFocusPolicy(Qt.ClickFocus)
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.verticalHeader().setDefaultSectionSize(theme.scaled_int(46))
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionMode(QTableWidget.NoSelection)
@@ -1432,7 +1435,7 @@ class VerifyReportDialog(QDialog):
         if report.ok and offer_import:
             btn = QPushButton(tr("pkg_import_btn"))
             btn.setObjectName("Primary")
-            btn.setFixedHeight(38)
+            btn.setFixedHeight(theme.scaled_int(38))
             btn.setIcon(icons.icon("download", theme.PALETTE["on_accent"], 16))
             btn.clicked.connect(self._import_contents)
             layout.addWidget(btn)
@@ -2286,7 +2289,8 @@ class ActivityDialog(QDialog):
                 (tr("hist_time"), tr("hist_action"), tr("hist_detail")))
             self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
             self.event_table.verticalHeader().setVisible(False)
-            self.event_table.verticalHeader().setDefaultSectionSize(38)
+            self.event_table.verticalHeader().setDefaultSectionSize(
+                theme.scaled_int(38))
             self.event_table.setShowGrid(False)
             self.event_table.setAlternatingRowColors(True)
             self.event_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -2354,7 +2358,8 @@ class ActivityDialog(QDialog):
                 (tr("hints_token"), tr("meta_subject"), tr("hints_hits_col")))
             self.rule_table.setEditTriggers(QTableWidget.NoEditTriggers)
             self.rule_table.verticalHeader().setVisible(False)
-            self.rule_table.verticalHeader().setDefaultSectionSize(38)
+            self.rule_table.verticalHeader().setDefaultSectionSize(
+                theme.scaled_int(38))
             self.rule_table.setShowGrid(False)
             self.rule_table.setAlternatingRowColors(True)
             self.rule_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -2665,7 +2670,8 @@ class TrashDialog(QDialog):
         self.table = QTableWidget(0, len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(theme.METRICS["row_height"])
+        self.table.verticalHeader().setDefaultSectionSize(
+            theme.scaled_int(theme.METRICS["row_height"]))
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
@@ -2931,7 +2937,8 @@ class ExamPackDialog(QDialog):
         self.table.setHorizontalHeader(self._chk_header)
         self.table.setHorizontalHeaderLabels(headers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(theme.METRICS["row_height"])
+        self.table.verticalHeader().setDefaultSectionSize(
+            theme.scaled_int(theme.METRICS["row_height"]))
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
@@ -3440,7 +3447,8 @@ class HelpDialog(QDialog):
         vbox.setSpacing(8)
 
         intro = QLabel(f"<b>{tr('help_quick_title')}</b>")
-        intro.setStyleSheet(f"QLabel {{ font-size: 13.5px; color: {theme.PALETTE['accent_text']}; }}")
+        intro.setStyleSheet(f"QLabel {{ font-size: {theme.scaled_px(13.5)}; "
+                            f"color: {theme.PALETTE['accent_text']}; }}")
         vbox.addWidget(intro)
 
         steps = [
@@ -3489,7 +3497,7 @@ class HelpDialog(QDialog):
         table = QTableWidget(len(shortcuts), 2)
         table.setHorizontalHeaderLabels([tr("help_col_key"), tr("help_col_action")])
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(44)
+        table.verticalHeader().setDefaultSectionSize(theme.scaled_int(44))
         table.setShowGrid(False)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -3498,7 +3506,8 @@ class HelpDialog(QDialog):
         table.setItemDelegateForColumn(0, KeycapDelegate(table))
         h_hdr = table.horizontalHeader()
         h_hdr.setSectionResizeMode(0, QHeaderView.Fixed)
-        table.setColumnWidth(0, 165)
+        # Keycap pills paint wider as the font setting grows; give them room.
+        table.setColumnWidth(0, theme.scaled_int(165))
         h_hdr.setSectionResizeMode(1, QHeaderView.Stretch)
         enable_smooth_scroll(table)
         h_hdr.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -3508,7 +3517,10 @@ class HelpDialog(QDialog):
         if table.horizontalHeaderItem(1):
             table.horizontalHeaderItem(1).setTextAlignment(Qt.AlignLeading | Qt.AlignVCenter)
 
-        key_font = QFont("Consolas", 10, QFont.Bold)
+        # Follow the user's font size (10 pt at the default, like before).
+        key_font = QFont("Consolas")
+        key_font.setPointSizeF(theme.current_font_size())
+        key_font.setBold(True)
         key_brush = QBrush(QColor(theme.PALETTE["accent_text"]))
         for i, (k, action) in enumerate(shortcuts):
             k_item = QTableWidgetItem(k)
@@ -3533,7 +3545,8 @@ class HelpDialog(QDialog):
         vbox.setSpacing(6)
 
         intro = QLabel(f"<b>{tr('help_phone_title')}</b>")
-        intro.setStyleSheet(f"QLabel {{ font-size: 13.5px; color: {theme.PALETTE['accent_text']}; }}")
+        intro.setStyleSheet(f"QLabel {{ font-size: {theme.scaled_px(13.5)}; "
+                            f"color: {theme.PALETTE['accent_text']}; }}")
         intro.setWordWrap(True)
         vbox.addWidget(intro)
 
@@ -3625,7 +3638,8 @@ class HelpDialog(QDialog):
         text_box = QVBoxLayout()
         text_box.setSpacing(3)
         title_lbl = QLabel(f"<b>{tr('help_mcp_title')}</b>")
-        title_lbl.setStyleSheet(f"QLabel {{ font-size: 13.5px; color: {theme.PALETTE['accent_text']}; }}")
+        title_lbl.setStyleSheet(f"QLabel {{ font-size: {theme.scaled_px(13.5)}; "
+                                f"color: {theme.PALETTE['accent_text']}; }}")
         text_box.addWidget(title_lbl)
 
         desc_lbl = QLabel(tr("help_mcp_intro"))
@@ -3656,7 +3670,8 @@ class HelpDialog(QDialog):
         auto_lay.setSpacing(8)
 
         step_heading = QLabel(f"<b>{tr('help_mcp_step_heading')}</b>")
-        step_heading.setStyleSheet(f"QLabel {{ font-size: 13px; color: {theme.PALETTE['accent_text']}; }}")
+        step_heading.setStyleSheet(f"QLabel {{ font-size: {theme.scaled_px(13)}; "
+                                   f"color: {theme.PALETTE['accent_text']}; }}")
         auto_lay.addWidget(step_heading)
 
         step_desc = QLabel(tr("help_mcp_step_desc"))
@@ -3666,7 +3681,7 @@ class HelpDialog(QDialog):
         btn_row = QHBoxLayout()
         self.btn_copy_mcp_prompt = QPushButton(tr("help_mcp_btn_copy"))
         self.btn_copy_mcp_prompt.setObjectName("Primary")
-        self.btn_copy_mcp_prompt.setFixedHeight(36)
+        self.btn_copy_mcp_prompt.setFixedHeight(theme.scaled_int(36))
         self.btn_copy_mcp_prompt.setIcon(icons.icon("copy", theme.PALETTE["on_accent"], 16))
         self.btn_copy_mcp_prompt.setCursor(Qt.PointingHandCursor)
 
@@ -3697,11 +3712,14 @@ class HelpDialog(QDialog):
         prompt_box.setReadOnly(True)
         prompt_box.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         prompt_lines = self._mcp_prompt.count("\n") + 4
-        prompt_box.setFixedHeight(max(210, min(320, prompt_lines * 19)))
+        prompt_box.setFixedHeight(max(theme.scaled_int(210),
+                                      min(theme.scaled_int(320),
+                                          prompt_lines * theme.scaled_int(19))))
         prompt_box.setStyleSheet(
             f"QTextEdit#McpCodeBox {{ background: #141720; color: {theme.PALETTE['text']}; "
             f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
-            f"font-family: Consolas, 'Cascadia Code', monospace; font-size: 12px; padding: 12px; }}"
+            f"font-family: Consolas, 'Cascadia Code', monospace; "
+            f"font-size: {theme.scaled_px(12)}; padding: 12px; }}"
         )
         auto_lay.addWidget(prompt_box)
         vbox.addWidget(auto_card)
@@ -3732,7 +3750,8 @@ class HelpDialog(QDialog):
             field.setStyleSheet(
                 f"QLineEdit#McpCliInput {{ background: #141720; color: {theme.PALETTE['text']}; "
                 f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
-                f"font-family: Consolas, monospace; font-size: 12px; padding: 6px 10px; }}"
+                f"font-family: Consolas, monospace; font-size: {theme.scaled_px(12)}; "
+                f"padding: 6px 10px; }}"
             )
             row.addWidget(field, 1)
 
@@ -3796,11 +3815,14 @@ class HelpDialog(QDialog):
         json_box.setReadOnly(True)
         json_box.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         json_lines = self._mcp_json_str.count("\n") + 2
-        json_box.setFixedHeight(max(150, min(260, json_lines * 19)))
+        json_box.setFixedHeight(max(theme.scaled_int(150),
+                                    min(theme.scaled_int(260),
+                                        json_lines * theme.scaled_int(19))))
         json_box.setStyleSheet(
             f"QTextEdit#McpJsonBox {{ background: #141720; color: {theme.PALETTE['text']}; "
             f"border: 1px solid #3a4457; border-radius: {theme.METRICS['radius']}px; "
-            f"font-family: Consolas, monospace; font-size: 12px; padding: 12px; }}"
+            f"font-family: Consolas, monospace; font-size: {theme.scaled_px(12)}; "
+            f"padding: 12px; }}"
         )
         manual_lay.addWidget(json_box)
         vbox.addWidget(manual_card)
@@ -3829,7 +3851,8 @@ class HelpDialog(QDialog):
             c_lay.setSpacing(4)
 
             q_lbl = QLabel(f"<b>{q}</b>")
-            q_lbl.setStyleSheet(f"QLabel {{ font-size: 13px; color: {theme.PALETTE['accent_text']}; }}")
+            q_lbl.setStyleSheet(f"QLabel {{ font-size: {theme.scaled_px(13)}; "
+                                f"color: {theme.PALETTE['accent_text']}; }}")
             q_lbl.setWordWrap(True)
             c_lay.addWidget(q_lbl)
 

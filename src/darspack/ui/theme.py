@@ -11,6 +11,7 @@ it is 2.9:1, so primary buttons use dark text (8.5:1).
 """
 from __future__ import annotations
 
+import re
 import sys
 from string import Template
 
@@ -18,7 +19,7 @@ from PySide6.QtCore import QEvent, QObject, QRect, QRectF, Qt
 from PySide6.QtGui import (
     QColor, QFontDatabase, QFontMetrics, QPainter, QPainterPath, QPalette, QPen,
 )
-from PySide6.QtWidgets import QComboBox, QMenu
+from PySide6.QtWidgets import QApplication, QComboBox, QMenu
 
 from .. import asset_path
 
@@ -26,6 +27,15 @@ FONT_FAMILY = "Vazirmatn"
 # Segoe UI exists only on Windows; on Linux fall back to Noto Sans
 # (Qt falls back further to the system default if that is missing too).
 FONT_FALLBACK = "Segoe UI" if sys.platform == "win32" else "Noto Sans"
+
+# The user-facing font size setting (Settings «اندازه‌ی قلم», 8–18 pt)
+# drives every text size in the UI: the application font covers widgets
+# without an explicit QSS size, and every hardcoded size below is written
+# for the 10 pt base and scaled proportionally so titles stay bigger than
+# body text and captions stay smaller at any setting.
+BASE_FONT_SIZE = 10
+FONT_SIZE_MIN = 8
+FONT_SIZE_MAX = 18
 
 PALETTE = {
     "bg": "#14161b",
@@ -308,10 +318,10 @@ QLabel#DialogTitle { font-size: 14pt; font-weight: 700; }
 QLabel#DialogHint { color: $muted; font-size: 9.5pt; }
 QLabel#Counter { color: $muted; font-size: 8.5pt; }
 QLabel#Muted { color: $muted; }
-QLabel#EmptyHint { color: $muted; font-size: 14px; }
+QLabel#EmptyHint { color: $muted; font-size: 10.5pt; }
 QLabel#SuccessText { color: $success; }
 QLabel#PinDigits {
-    font-size: 30px; font-weight: 700; letter-spacing: 6px;
+    font-size: 22.5pt; font-weight: 700; letter-spacing: 6px;
 }
 QLabel#WarnPill {
     background: $accent_soft; color: $accent_text; border-radius: 11px;
@@ -756,8 +766,73 @@ def load_fonts() -> str:
     return FONT_FAMILY if FONT_FAMILY in families else FONT_FALLBACK
 
 
-def build_qss(palette: dict | None = None) -> str:
-    """The whole stylesheet, with optional palette overrides."""
+def current_font_size(app: QApplication | None = None) -> float:
+    """The size the application font is set to — the user's setting.
+
+    Falls back to BASE_FONT_SIZE before any apply_font_size() has run
+    (early widget construction, plain tests) or when the platform font
+    sits outside the settings range.
+    """
+    app = app or QApplication.instance()
+    size = app.font().pointSize() if app is not None else -1
+    if not FONT_SIZE_MIN <= size <= FONT_SIZE_MAX:
+        return float(BASE_FONT_SIZE)
+    return float(size)
+
+
+def font_scale(font_size: float | None = None) -> float:
+    """Multiplier mapping every hardcoded size onto the user's setting.
+
+    All sizes in the stylesheet and the one-off inline styles are written
+    for the 10 pt default; scaling them by setting / base keeps the
+    relative hierarchy (titles > body > captions) at any font size.
+    Without an explicit size the base scale (1.0) is returned — callers
+    that follow the live setting use scaled_px()/scaled_int() instead.
+    """
+    size = BASE_FONT_SIZE if font_size is None else float(font_size)
+    if not FONT_SIZE_MIN <= size <= FONT_SIZE_MAX:
+        size = float(BASE_FONT_SIZE)
+    return size / BASE_FONT_SIZE
+
+
+def scaled_px(px: float, font_size: float | None = None) -> str:
+    """A one-off QSS size in px, scaled like the fonts around it.
+
+    Follows the application font (the user's setting) unless an explicit
+    size is passed.
+    """
+    if font_size is None:
+        font_size = current_font_size()
+    return f"{px * font_scale(font_size):g}px"
+
+
+def scaled_int(value: int, font_size: float | None = None) -> int:
+    """A pixel height/width sized for the default font, grown for larger
+    settings so scaled-up text never clips (never shrunk below the
+    comfortable default for settings under the base size).
+
+    Follows the application font (the user's setting) unless an explicit
+    size is passed.
+    """
+    if font_size is None:
+        font_size = current_font_size()
+    scale = font_scale(font_size)
+    if scale <= 1.0:
+        return value
+    return max(value, round(value * scale))
+
+
+_FONT_SIZE_RE = re.compile(r"(font-size:\s*)(\d+(?:\.\d+)?)pt\b")
+
+
+def build_qss(palette: dict | None = None, font_size: float | None = None) -> str:
+    """The whole stylesheet, with optional palette overrides.
+
+    `font_size` (the user's setting) scales every font-size in the sheet
+    proportionally: an explicit QSS size overrides the application font,
+    so scaling the sheet is what makes the setting reach the nav rail,
+    titles, chips, dialogs — the whole UI, not just plain widgets.
+    """
     values = dict(PALETTE)
     values.update(METRICS)
     values.update(palette or {})
@@ -782,7 +857,12 @@ def build_qss(palette: dict | None = None) -> str:
     values["header_last_radius"] = (
         "border-top-left-radius: 7px;" if is_fa else "border-top-right-radius: 7px;"
     )
-    return _QSS.substitute(values)
+    qss = _QSS.substitute(values)
+    scale = font_scale(font_size)
+    if scale != 1.0:
+        qss = _FONT_SIZE_RE.sub(
+            lambda m: f"{m.group(1)}{float(m.group(2)) * scale:g}pt", qss)
+    return qss
 
 
 def apply_palette(app) -> None:

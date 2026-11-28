@@ -174,6 +174,31 @@ def test_apply_font_size_bad_value_does_not_crash(qapp):
     assert qapp.font().pointSize() == 18
 
 
+def test_apply_font_size_rebuilds_the_stylesheet(qapp, monkeypatch):
+    """The setting must reach the styled widgets too: apply_font_size
+    sets the app font AND re-applies the QSS with scaled sizes (an
+    explicit QSS font-size overrides the app font). A sentinel sheet
+    keeps the session's widget tree out of a full repolish."""
+    original_font = qapp.font()
+    sizes = []
+
+    def fake_build_qss(palette=None, font_size=None):
+        sizes.append(font_size)
+        return f"SENTINEL-{font_size}"
+
+    monkeypatch.setattr(app_module.theme, "build_qss", fake_build_qss)
+    try:
+        apply_font_size({"font_size": 18}, qapp)
+        assert qapp.font().pointSize() == 18
+        assert qapp.styleSheet() == "SENTINEL-18"
+        apply_font_size({"font_size": 8}, qapp)
+        assert qapp.styleSheet() == "SENTINEL-8"
+    finally:
+        monkeypatch.undo()
+        qapp.setFont(original_font)
+        qapp.setStyleSheet("")
+
+
 # --- H5: SettingsDialog tolerates damaged values ----------------------------
 
 def test_settings_dialog_bad_font_size_does_not_crash(tmp_path, qapp):

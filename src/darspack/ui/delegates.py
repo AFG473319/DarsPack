@@ -38,9 +38,12 @@ class KindBadgeDelegate(QStyledItemDelegate):
         background, foreground = KIND_BADGES.get(text, KIND_BADGES["سایر"])
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
+        # Paint with the cell's font (the app font scaled by the setting)
+        # and size the pill from the same metrics so it never clips.
+        painter.setFont(opt.font)
         metrics = painter.fontMetrics()
         width = max(54, metrics.horizontalAdvance(text) + 20)
-        height = 21
+        height = max(21, metrics.height() + 2)
         rect = QRectF(option.rect.center().x() - width / 2,
                       option.rect.center().y() - height / 2, width, height)
         border_color = QColor(foreground)
@@ -195,7 +198,11 @@ class KeycapDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setLayoutDirection(Qt.LeftToRight)
-        key_font = QFont("Consolas", 9, QFont.Bold)
+        # Follow the user's font size: the item font is the view font
+        # (the app font scaled by the setting); keycaps run one point
+        # smaller, as they did at the 10 pt default.
+        key_font = QFont(opt.font)
+        key_font.setPointSizeF(max(8.0, opt.font.pointSizeF() - 1.0))
         painter.setFont(key_font)
         fm = painter.fontMetrics()
         parts = [p.strip() for p in text.split("+")] if " + " in text else [text]
@@ -203,7 +210,7 @@ class KeycapDelegate(QStyledItemDelegate):
         plus_w = fm.horizontalAdvance("+") + 4
         pill_widths = [max(26, fm.horizontalAdvance(p) + 14) for p in parts]
         total_w = sum(pill_widths) + (len(parts) - 1) * (plus_w + gap * 2)
-        h = 22
+        h = max(22, fm.height() + 8)
         y = option.rect.center().y() - h / 2
         x = option.rect.center().x() - total_w / 2
         for idx, (part, pw) in enumerate(zip(parts, pill_widths)):

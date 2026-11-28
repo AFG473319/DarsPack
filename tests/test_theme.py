@@ -55,6 +55,29 @@ def test_metrics_stay_on_the_4px_grid():
     assert metrics["radius"] == 8
 
 
+def test_qss_font_sizes_follow_the_setting():
+    """Every QSS font-size scales with the setting so one setting drives
+    the whole UI: an explicit QSS size would otherwise override the app
+    font and leave styled widgets (nav rail, titles, chips) fixed."""
+    base = theme.build_qss()
+    big = theme.build_qss(font_size=18)
+    small = theme.build_qss(font_size=8)
+    assert "font-size: 9.5pt" in base          # unchanged at the default
+    assert "font-size: 17.1pt" in big          # 9.5 * 1.8
+    assert "font-size: 7.6pt" in small         # 9.5 * 0.8
+    # The hierarchy survives scaling: dialog title > nav item > nav badge.
+    assert "font-size: 25.2pt" in big and "font-size: 13.5pt" in big
+
+
+def test_scaled_int_grows_only_for_larger_fonts():
+    """Fixed chrome dimensions floor at their default so settings below
+    10 pt never shrink the layout, and grow proportionally above it."""
+    assert theme.scaled_int(38, 10) == 38
+    assert theme.scaled_int(38, 8) == 38
+    assert theme.scaled_int(38, 18) == 68      # Vazirmatn 18pt is 38px tall
+    assert theme.scaled_int(210, 18) == 378    # nav rail
+
+
 def test_table_has_no_single_cell_hover_patch():
     """`QTableWidget::item:hover` paints only the cell under the cursor,
     which looked like a stray coloured box in screenshots and in real
