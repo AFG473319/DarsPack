@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import i18n
+from . import theme
 
 # subject/kind colours are deliberately muted so the eye stays on the names
 KIND_BADGES = {
@@ -21,6 +22,23 @@ KIND_BADGES = {
     "تکلیف": ("#33283c", "#cbb2e2"),
     "سایر": ("#2a2e36", "#aab1bd"),
 }
+
+# Light-mode pairs: a light tinted background with a dark colour of the
+# same hue — an inversion of the dark pairs would leave washed-out text.
+KIND_BADGES_LIGHT = {
+    "جزوه": ("#e2e8f6", "#2f4070"),
+    "نمونه‌سوال": ("#f6ecd4", "#8a6410"),
+    "کاربرگ": ("#ddf0e4", "#2e6e4c"),
+    "تکلیف": ("#ece2f4", "#5f3d82"),
+    "سایر": ("#e8eaee", "#565d69"),
+}
+
+
+def kind_badges() -> dict:
+    """The kind-colour pairs for the active theme (table rows and cards)."""
+    if theme.active_theme() == "light":
+        return KIND_BADGES_LIGHT
+    return KIND_BADGES
 
 
 class KindBadgeDelegate(QStyledItemDelegate):
@@ -35,7 +53,8 @@ class KindBadgeDelegate(QStyledItemDelegate):
         style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
         if not text:
             return
-        background, foreground = KIND_BADGES.get(text, KIND_BADGES["سایر"])
+        badges = kind_badges()
+        background, foreground = badges.get(text, badges["سایر"])
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
         # Paint with the cell's font (the app font scaled by the setting)
@@ -129,11 +148,15 @@ def paint_filename_badge(
                 )
 
         badge_rect = QRectF(bx, cy - ext_h / 2, ext_w, ext_h)
-        painter.setPen(QColor("#3c4860" if selected else "#2c3446"))
-        painter.setBrush(QColor("#263044" if selected else "#1d222e"))
+        pal = theme.PALETTE
+        painter.setPen(QColor(
+            pal["ext_border_sel"] if selected else pal["ext_border"]))
+        painter.setBrush(QColor(
+            pal["ext_bg_sel"] if selected else pal["ext_bg"]))
         painter.drawRoundedRect(badge_rect, 5, 5)
         painter.setFont(badge_font)
-        painter.setPen(QColor("#c7d1e2" if selected else "#949eae"))
+        painter.setPen(QColor(
+            pal["ext_text_sel"] if selected else pal["ext_text"]))
         painter.drawText(badge_rect, Qt.AlignCenter, ext)
 
         painter.setFont(font)
@@ -213,17 +236,18 @@ class KeycapDelegate(QStyledItemDelegate):
         h = max(22, fm.height() + 8)
         y = option.rect.center().y() - h / 2
         x = option.rect.center().x() - total_w / 2
+        pal = theme.PALETTE
         for idx, (part, pw) in enumerate(zip(parts, pill_widths)):
             pill = QRectF(x, y, pw, h)
-            painter.setPen(QColor("#3d4658"))
-            painter.setBrush(QColor("#22262f"))
+            painter.setPen(QColor(pal["keycap_border"]))
+            painter.setBrush(QColor(pal["keycap_bg"]))
             painter.drawRoundedRect(pill, 6, 6)
-            painter.setPen(QColor("#f0c56a"))
+            painter.setPen(QColor(pal["keycap_text"]))
             painter.drawText(pill, Qt.AlignCenter, part)
             x += pw + gap
             if idx < len(parts) - 1:
                 plus_rect = QRectF(x, y, plus_w, h)
-                painter.setPen(QColor("#9aa0ab"))
+                painter.setPen(QColor(pal["keycap_plus"]))
                 painter.drawText(plus_rect, Qt.AlignCenter, "+")
                 x += plus_w + gap
         painter.restore()

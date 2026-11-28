@@ -310,7 +310,7 @@ def test_settings_dialog_writes_json(tmp_path, qapp):
     dlg.fb_endpoint.setText("https://example.test/fb")
     dlg._save()
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved == {"language": "en", "font_size": 14,
+    assert saved == {"language": "en", "font_size": 14, "theme": "dark",
                      "library": str(tmp_path),
                      "feedback_endpoint": "https://example.test/fb",
                      "feedback_form_url": ""}

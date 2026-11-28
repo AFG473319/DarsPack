@@ -75,6 +75,9 @@ def sanitize_settings(settings: dict) -> tuple[dict, bool]:
     if language not in ("fa", "en"):
         settings["language"] = "fa"
         damaged = True
+    if settings.get("theme", "dark") not in ("dark", "light"):
+        settings["theme"] = "dark"
+        damaged = True
     raw_size = settings.get("font_size", 10)
     if isinstance(raw_size, bool) or not isinstance(raw_size, (int, float, str)):
         settings["font_size"] = 10
@@ -200,6 +203,7 @@ def load_settings() -> tuple[dict, Path, bool]:
     settings.setdefault("library", str(library))
     settings.setdefault("language", "fa")
     settings.setdefault("font_size", 10)
+    settings.setdefault("theme", "dark")
     path = library / "settings.json"
     try:
         path.write_text(json.dumps(settings, ensure_ascii=False, indent=2),
@@ -350,8 +354,9 @@ def run() -> None:
         Qt.RightToLeft if i18n.language() == "fa" else Qt.LeftToRight)
     app.setStyle("Fusion")          # one predictable base before the QSS
     theme.load_fonts()
-    theme.apply_palette(app)
-    # Installs both the application font and the scaled stylesheet.
+    theme.apply_theme(app, settings.get("theme", "dark"))
+    # apply_font_size below rebuilds the stylesheet with the font scaled,
+    # reading the palette apply_theme just installed.
     apply_font_size(settings, app)
 
     from .main_window import MainWindow

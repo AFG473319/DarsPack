@@ -57,11 +57,210 @@ PALETTE = {
     "accent_soft": "#3a2f18",
     "accent_text": "#f0c56a",
     "selection": "#2a3a63",
+    "selection_text": "#e9e6df",
+    "text_on_primary": "#e9e6df",
     "danger": "#d9736e",
     "danger_soft": "#3a2020",
     "success": "#8fd08f",
     "scroll": "#475166",
     "scroll_hover": "#5d6a82",
+    "placeholder": "#8e95a2",
+
+    # Navigation rail (previously inline in the QSS)
+    "nav_bg": "#141720",
+    "nav_text": "#cfd4dc",
+    "nav_hover_text": "#ffffff",
+    "nav_hover_bg": "#1d2330",
+    "nav_hover_border": "#2b3446",
+    "nav_pressed_bg": "#181d28",
+    "nav_active_bg": "#202634",
+    "nav_active_text": "#ffffff",
+    "nav_active_border": "#2e384b",
+    "nav_active_hover_bg": "#252c3c",
+    "nav_active_hover_border": "#39455c",
+    "nav_section": "#7b8393",
+    "nav_badge_text": "#f6c453",
+    "nav_divider": "rgba(255, 255, 255, 0.07)",
+    "nav_border_line": "rgba(255, 255, 255, 0.05)",
+
+    # Hairline borders that were rgba(255,...) whites
+    "header_line": "rgba(255, 255, 255, 0.06)",
+    "table_line": "rgba(255, 255, 255, 0.08)",
+
+    # Generic interactive states (chips, buttons, segments, menus)
+    "hover_bg": "#323b4c",
+    "hover_text": "#ffffff",
+    "hover_border": "#4a576e",
+    "hover_border_btn": "#4d5d77",
+    "hover_border_alt": "#4a5870",
+    "hover_border_input": "#455269",
+    "segment_hover_bg": "#2c3547",
+    "ghost_hover_bg": "#283140",
+    "icon_hover_bg": "#2a3444",
+    "iconghost_pressed_bg": "#1e2532",
+    "iconghost_pressed_border": "#3c495e",
+    "star_hover_bg": "#252b36",
+    "star_hover_border": "#3c495e",
+    "check_border": "#4d5669",
+
+    # Custom-painted menus (_MenuStyler)
+    "menu_border": "#3c495e",
+    "menu_hover_border": "#4a5870",
+    "menu_hover_sc": "#d0d7e3",
+    "menu_separator": "#16ffffff",
+
+    # Amber warning tints (text needs a darker partner in light mode)
+    "warn_text": "#f4c96b",
+    "warn_text_hover": "#ffe094",
+
+    # Danger states
+    "danger_hover_bg": "#482323",
+    "danger_hover_border": "#e58782",
+    "danger_hover_text": "#ffffff",
+    "danger_focus_border": "#ff9d96",
+
+    # Saffron primary-button edges
+    "primary_hover_border": "#ffd875",
+    "primary_focus_border": "#ffffff",
+
+    "dropzone_active_bg": "#232d42",
+
+    # Code boxes (MCP dialogs)
+    "code_bg": "#141720",
+    "code_border": "#3a4457",
+
+    # Welcome tour
+    "welcome_badge_bg": "#242a38",
+    "welcome_badge_border": "#354159",
+    "step_dot": "#3c4659",
+
+    # Verify-report problem list
+    "error_text": "#ff9d96",
+
+    # File-type icon tints (table rows)
+    "file_pdf_tint": "#8ca8d9",
+    "file_image_tint": "#8fd0b8",
+
+    # Painted table badges (delegates.py)
+    "ext_border": "#2c3446",
+    "ext_border_sel": "#3c4860",
+    "ext_bg": "#1d222e",
+    "ext_bg_sel": "#263044",
+    "ext_text": "#949eae",
+    "ext_text_sel": "#c7d1e2",
+    "keycap_border": "#3d4658",
+    "keycap_bg": "#22262f",
+    "keycap_text": "#f0c56a",
+    "keycap_plus": "#9aa0ab",
+}
+
+# The dark definitions, frozen at import. PALETTE itself is the *live*
+# palette: apply_theme() swaps its contents in place so every reader of
+# theme.PALETTE (icon tints, painters, delegates) follows the theme with
+# no call-site changes. Switching back restores these exact values, so
+# dark mode stays pixel-identical to the pre-light-theme look.
+DARK_PALETTE: dict = dict(PALETTE)
+
+# Light theme: same keys, light surfaces. Brand colours stay — navy
+# #2d3f6e and saffron #e0a83c remain the accents; only surfaces, text
+# and borders go light.
+LIGHT_PALETTE: dict = {
+    **PALETTE,
+    "bg": "#f3f1ea",
+    "surface": "#fbfaf5",
+    "surface_2": "#f1efe8",
+    "surface_3": "#e7e4da",
+    "header": "#edebe2",
+    "alt_row": "#f6f5ef",
+    "border": "#d8d4c8",
+    "border_soft": "#e4e1d7",
+    "text": "#26282e",
+    "muted": "#656e78",
+    "faint": "#9aa0ab",
+    "selection": "#ccd8f0",
+    "selection_text": "#1f2a44",
+    "text_on_primary": "#ffffff",
+    "danger": "#c0433c",
+    "danger_soft": "#fae7e5",
+    "success": "#2e7d3e",
+    "scroll": "#c3c6cd",
+    "scroll_hover": "#a8adb8",
+    "placeholder": "#8e95a2",
+
+    "nav_bg": "#edece4",
+    "nav_text": "#454b57",
+    "nav_hover_text": "#23272f",
+    "nav_hover_bg": "#e2e0d5",
+    "nav_hover_border": "#c9c5b8",
+    "nav_pressed_bg": "#e7e5da",
+    "nav_active_bg": "#e0e5f2",
+    "nav_active_text": "#1e2b52",
+    "nav_active_border": "#c3cbe0",
+    "nav_active_hover_bg": "#d6deef",
+    "nav_active_hover_border": "#a9b6d4",
+    "nav_section": "#8a8f99",
+    "nav_badge_text": "#8a6410",
+    "nav_divider": "rgba(0, 0, 0, 0.08)",
+    "nav_border_line": "rgba(0, 0, 0, 0.06)",
+
+    "header_line": "rgba(0, 0, 0, 0.07)",
+    "table_line": "rgba(0, 0, 0, 0.08)",
+
+    "hover_bg": "#e4e2d8",
+    "hover_text": "#1f232b",
+    "hover_border": "#c6c3b5",
+    "hover_border_btn": "#b8b5a7",
+    "hover_border_alt": "#b3b0a2",
+    "hover_border_input": "#b5b2a4",
+    "segment_hover_bg": "#dedbd0",
+    "ghost_hover_bg": "#e0ded2",
+    "icon_hover_bg": "#e2e0d5",
+    "iconghost_pressed_bg": "#d8d5ca",
+    "iconghost_pressed_border": "#bab6aa",
+    "star_hover_bg": "#e6e4da",
+    "star_hover_border": "#cbc7bb",
+    "check_border": "#a9a698",
+
+    "menu_border": "#cbc7bb",
+    "menu_hover_border": "#b3b0a2",
+    "menu_hover_sc": "#565b66",
+    "menu_separator": "#19000000",
+
+    "warn_text": "#8a6410",
+    "warn_text_hover": "#6e4e0a",
+
+    "danger_hover_bg": "#fbe7e5",
+    "danger_hover_border": "#d4706a",
+    "danger_hover_text": "#8f2c26",
+    "danger_focus_border": "#c0433c",
+
+    "primary_hover_border": "#c9992f",
+    "primary_focus_border": "#2d3f6e",
+
+    "dropzone_active_bg": "#e7ecf8",
+
+    "code_bg": "#f7f5ef",
+    "code_border": "#d5d1c5",
+
+    "welcome_badge_bg": "#ede9dd",
+    "welcome_badge_border": "#d0cbbc",
+    "step_dot": "#c9c5b9",
+
+    "error_text": "#b23c34",
+
+    "file_pdf_tint": "#4a72b8",
+    "file_image_tint": "#2e8b64",
+
+    "ext_border": "#c3cbd9",
+    "ext_border_sel": "#a9b4c9",
+    "ext_bg": "#e9edf4",
+    "ext_bg_sel": "#dde5f0",
+    "ext_text": "#5f6a7d",
+    "ext_text_sel": "#3e4a63",
+    "keycap_border": "#c7c3b6",
+    "keycap_bg": "#eeece4",
+    "keycap_text": "#8a6410",
+    "keycap_plus": "#6b7078",
 }
 
 METRICS = {
@@ -75,17 +274,17 @@ _QSS = Template("""
 * { font-family: "Vazirmatn", "Segoe UI Variable", "Segoe UI"; }
 QMainWindow, QDialog { background: $bg; }
 QWidget { color: $text; }
-QWidget#AppBar { background: $surface; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+QWidget#AppBar { background: $surface; border-bottom: 1px solid $header_line; }
 QWidget#FilterBar { background: transparent; border: none; }
 
 /* Fluent Windows 11 Navigation Rail */
 QWidget#NavRail {
-    background: #141720;
-    border-left: 1px solid rgba(255, 255, 255, 0.05);
+    background: $nav_bg;
+    border-left: 1px solid $nav_border_line;
 }
 QToolButton#NavItem {
     background: transparent;
-    color: #cfd4dc;
+    color: $nav_text;
     border: 1px solid transparent;
     border-radius: 7px;
     padding: 6px 16px;
@@ -94,22 +293,22 @@ QToolButton#NavItem {
     text-align: right;
 }
 QToolButton#NavItem:hover {
-    background: #1d2330;
-    color: #ffffff;
-    border: 1px solid #2b3446;
+    background: $nav_hover_bg;
+    color: $nav_hover_text;
+    border: 1px solid $nav_hover_border;
 }
 QToolButton#NavItem:pressed {
-    background: #181d28;
+    background: $nav_pressed_bg;
 }
 QToolButton#NavItem[active="true"] {
-    background: #202634;
-    color: #ffffff;
+    background: $nav_active_bg;
+    color: $nav_active_text;
     font-weight: 600;
-    border: 1px solid #2e384b;
+    border: 1px solid $nav_active_border;
 }
 QToolButton#NavItem[active="true"]:hover {
-    background: #252c3c;
-    border: 1px solid #39455c;
+    background: $nav_active_hover_bg;
+    border: 1px solid $nav_active_hover_border;
 }
 QToolButton#NavItem:focus {
     border: 1px solid $accent;
@@ -123,14 +322,14 @@ QFrame#NavIndicator {
     border-radius: 1px;
 }
 QLabel#NavSectionHeader {
-    color: #7b8393;
+    color: $nav_section;
     font-size: 8.5pt;
     font-weight: 700;
     padding: 12px 12px 4px 12px;
 }
 QLabel#NavBadge {
     background: rgba(230, 179, 77, 0.16);
-    color: #f6c453;
+    color: $nav_badge_text;
     border-radius: 9px;
     padding: 0px 6px;
     font-size: 7.5pt;
@@ -138,7 +337,7 @@ QLabel#NavBadge {
     border: 1px solid rgba(230, 179, 77, 0.30);
 }
 QFrame#NavDivider {
-    background: rgba(255, 255, 255, 0.07);
+    background: $nav_divider;
     max-height: 1px;
     margin: 8px 6px;
 }
@@ -146,7 +345,7 @@ QFrame#NavDivider {
 /* Fluent CommandBar & Page Header */
 QWidget#CommandBar {
     background: $surface;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid $header_line;
 }
 QWidget#FilterBar QComboBox, QWidget#FilterBar QToolButton {
     min-height: 16px;
@@ -177,9 +376,9 @@ QToolButton#SegmentBtn {
     padding: 4px 8px;
 }
 QToolButton#SegmentBtn:hover {
-    background: #323b4c;
-    border-color: #4a576e;
-    color: #ffffff;
+    background: $hover_bg;
+    border-color: $hover_border;
+    color: $hover_text;
 }
 QToolButton#SegmentBtn[active="true"] {
     background: $primary;
@@ -201,7 +400,7 @@ QFrame#SegmentGroup QToolButton#SegmentBtn {
     border-radius: 6px;
 }
 QFrame#SegmentGroup QToolButton#SegmentBtn:hover {
-    background: #2c3547;
+    background: $segment_hover_bg;
 }
 QFrame#SegmentGroup QToolButton#SegmentBtn[active="true"] {
     background: $primary;
@@ -255,9 +454,9 @@ QPushButton#FilterChip {
     font-size: 9pt;
 }
 QPushButton#FilterChip:hover {
-    background: #323b4c;
-    color: #ffffff;
-    border-color: #4a576e;
+    background: $hover_bg;
+    color: $hover_text;
+    border-color: $hover_border;
 }
 QPushButton#FilterChip[checked="true"] {
     background: $primary;
@@ -329,7 +528,7 @@ QLabel#WarnPill {
 }
 QPushButton#WarnPill {
     background: rgba(230, 179, 77, 0.08);
-    color: #f4c96b;
+    color: $warn_text;
     border: 1px solid rgba(230, 179, 77, 0.24);
     border-radius: 9px;
     padding: 3px 11px;
@@ -341,7 +540,7 @@ QPushButton#WarnPill {
 QPushButton#WarnPill:hover {
     background: rgba(230, 179, 77, 0.16);
     border-color: rgba(230, 179, 77, 0.45);
-    color: #ffe094;
+    color: $warn_text_hover;
 }
 
 QFrame#BannerCard {
@@ -369,11 +568,11 @@ QFrame#DangerCard {
 }
 QFrame#DropZone {
     background: $surface_2;
-    border: 1.5px dashed #4a5870;
+    border: 1.5px dashed $hover_border_alt;
     border-radius: 10px;
 }
 QFrame#DropZone[dragActive="true"] {
-    background: #232d42;
+    background: $dropzone_active_bg;
     border: 1.5px dashed $accent;
 }
 QFrame#SlideCard {
@@ -394,18 +593,18 @@ QPushButton#BulkBtn {
     border-radius: 6px; padding: 5px 11px; font-size: 9.5pt;
 }
 QPushButton#BulkBtn:hover {
-    background: #323b4c; border-color: #4d5d77; color: #ffffff;
+    background: $hover_bg; border-color: $hover_border_btn; color: $hover_text;
 }
-QPushButton#BulkBtn:pressed { background: $primary; }
+QPushButton#BulkBtn:pressed { background: $primary; color: $text_on_primary; }
 QPushButton#BulkBtn:focus { border: 1px solid $accent; }
 
 QLineEdit, QComboBox, QSpinBox, QTextEdit {
     background: $surface_2; border: 1px solid $border;
     border-radius: $radius; padding: 6px 10px; min-height: 22px;
-    selection-background-color: $primary; selection-color: $text;
+    selection-background-color: $primary; selection-color: $text_on_primary;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QTextEdit:hover {
-    border-color: #455269;
+    border-color: $hover_border_input;
 }
 QLineEdit:read-only {
     background: $surface; color: $muted;
@@ -459,7 +658,7 @@ QComboBox[emptyList="true"]::drop-down { width: 4px; }
 QComboBox QAbstractItemView {
     background: $surface_2; border: 1px solid $border;
     border-radius: $radius; padding: 4px; outline: 0;
-    selection-background-color: $primary; selection-color: $text;
+    selection-background-color: $primary; selection-color: $text_on_primary;
 }
 QSpinBox::up-button, QSpinBox::down-button {
     width: 18px; border: 0; background: transparent;
@@ -477,7 +676,7 @@ QSpinBox::down-arrow {
 QCheckBox { spacing: 8px; }
 QCheckBox::indicator, QAbstractItemView::indicator {
     width: 18px; height: 18px; border-radius: 5px;
-    border: 1px solid #4d5669; background: $surface_2;
+    border: 1px solid $check_border; background: $surface_2;
 }
 QCheckBox::indicator:hover, QAbstractItemView::indicator:hover {
     border-color: $muted;
@@ -503,11 +702,11 @@ QPushButton {
     border-radius: $radius; padding: 7px 14px; min-height: 20px;
 }
 QPushButton:hover {
-    background: #323b4c;
-    border: 1px solid #4d5d77;
-    color: #ffffff;
+    background: $hover_bg;
+    border: 1px solid $hover_border_btn;
+    color: $hover_text;
 }
-QPushButton:pressed { background: $primary; }
+QPushButton:pressed { background: $primary; color: $text_on_primary; }
 QPushButton:disabled {
     background: $surface; color: $faint; border-color: $border_soft;
 }
@@ -518,17 +717,17 @@ QPushButton#Primary {
 }
 QPushButton#Primary:hover {
     background: $accent_hover;
-    border: 1px solid #ffd875;
+    border: 1px solid $primary_hover_border;
 }
 QPushButton#Primary:pressed { background: $accent; }
-QPushButton#Primary:focus { border: 1px solid #ffffff; }
+QPushButton#Primary:focus { border: 1px solid $primary_focus_border; }
 QPushButton#Secondary {
     background: $surface_2; color: $text; border: 1px solid $border;
 }
 QPushButton#Secondary:hover {
-    background: #323b4c;
-    border: 1px solid #4d5d77;
-    color: #ffffff;
+    background: $hover_bg;
+    border: 1px solid $hover_border_btn;
+    color: $hover_text;
 }
 QPushButton#Secondary:focus { border: 1px solid $accent; }
 QPushButton#EmptyCta {
@@ -537,28 +736,28 @@ QPushButton#EmptyCta {
 }
 QPushButton#EmptyCta:hover {
     background: $accent_hover;
-    border: 1px solid #ffd875;
+    border: 1px solid $primary_hover_border;
 }
-QPushButton#EmptyCta:focus { border: 1px solid #ffffff; }
+QPushButton#EmptyCta:focus { border: 1px solid $primary_focus_border; }
 QPushButton#Danger {
     background: transparent; color: $danger; border: 1px solid $danger;
 }
 QPushButton#Danger:hover {
-    background: #482323;
-    border: 1px solid #e58782;
-    color: #ffffff;
+    background: $danger_hover_bg;
+    border: 1px solid $danger_hover_border;
+    color: $danger_hover_text;
 }
 QPushButton#Danger:disabled {
     background: transparent; color: $faint; border-color: $border_soft;
 }
-QPushButton#Danger:focus { border: 1px solid #ff9d96; }
+QPushButton#Danger:focus { border: 1px solid $danger_focus_border; }
 QPushButton#Ghost {
     background: transparent; border: 1px solid $border; color: $muted;
 }
 QPushButton#Ghost:hover {
-    background: #283140;
-    border: 1px solid #455269;
-    color: #ffffff;
+    background: $ghost_hover_bg;
+    border: 1px solid $hover_border_input;
+    color: $hover_text;
 }
 QPushButton#Ghost:focus { border: 1px solid $accent; color: $text; }
 QPushButton#Star {
@@ -566,8 +765,8 @@ QPushButton#Star {
     border-radius: 8px; color: transparent; font-size: 1px;
 }
 QPushButton#Star:hover {
-    background: #252b36;
-    border: 1px solid #3c495e;
+    background: $star_hover_bg;
+    border: 1px solid $star_hover_border;
 }
 
 QToolButton {
@@ -575,11 +774,11 @@ QToolButton {
     border-radius: $radius; padding: 6px 12px; min-height: 20px;
 }
 QToolButton:hover {
-    background: #323b4c;
-    border: 1px solid #4d5d77;
-    color: #ffffff;
+    background: $hover_bg;
+    border: 1px solid $hover_border_btn;
+    color: $hover_text;
 }
-QToolButton:pressed { background: $primary; }
+QToolButton:pressed { background: $primary; color: $text_on_primary; }
 QToolButton:disabled { color: $faint; border-color: $border_soft; }
 QToolButton::menu-indicator {
     image: none;
@@ -602,13 +801,13 @@ QToolButton#IconGhost {
     color: $muted;
 }
 QToolButton#IconGhost:hover {
-    background: #2a3444;
-    border: 1px solid #4a5870;
-    color: #ffffff;
+    background: $icon_hover_bg;
+    border: 1px solid $hover_border_alt;
+    color: $hover_text;
 }
 QToolButton#IconGhost:pressed {
-    background: #1e2532;
-    border: 1px solid #3c495e;
+    background: $iconghost_pressed_bg;
+    border: 1px solid $iconghost_pressed_border;
 }
 QToolButton#IconGhost:focus {
     border: 1px solid $accent;
@@ -616,7 +815,7 @@ QToolButton#IconGhost:focus {
 
 QMenu {
     background: $surface_2;
-    border: 1px solid #3c495e;
+    border: 1px solid $menu_border;
     border-radius: 8px;
     padding: 4px 4px;
     min-width: 240px;
@@ -633,9 +832,9 @@ QMenu::icon {
     left: 14px;
 }
 QMenu::item:selected {
-    background: #323b4c;
-    border-color: #4a5870;
-    color: #ffffff;
+    background: $hover_bg;
+    border-color: $menu_hover_border;
+    color: $hover_text;
 }
 QMenu::item:disabled {
     color: $faint;
@@ -647,18 +846,18 @@ QMenu::item:disabled:selected {
 }
 QMenu::separator {
     height: 1px;
-    background: rgba(255, 255, 255, 0.08);
+    background: $menu_separator;
     margin: 4px 8px;
 }
 
 QTableWidget {
     background: $surface;
     alternate-background-color: $alt_row;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid $table_line;
     border-radius: 8px;
     gridline-color: transparent;
     selection-background-color: $selection;
-    selection-color: $text;
+    selection-color: $selection_text;
 }
 QTableWidget::item {
     padding: 0 10px; border-bottom: 1px solid $border_soft;
@@ -666,14 +865,14 @@ QTableWidget::item {
 QTableWidget#InlineEditTable::item {
     padding: 0 3px;
 }
-QTableWidget::item:selected { background: $selection; color: $text; }
+QTableWidget::item:selected { background: $selection; color: $selection_text; }
 
 QTableWidget QComboBox, QTableWidget QSpinBox, QTableWidget QLineEdit {
     background: $surface_2; border: 1px solid $border;
     border-radius: 6px; padding: 2px 8px; min-height: 20px; font-size: 9.5pt;
 }
 QTableWidget QComboBox:hover, QTableWidget QSpinBox:hover, QTableWidget QLineEdit:hover {
-    border-color: #4a5870;
+    border-color: $hover_border_alt;
 }
 QTableWidget QComboBox:focus, QTableWidget QSpinBox:focus, QTableWidget QLineEdit:focus {
     border-color: $accent; background: $surface_3;
@@ -865,12 +1064,43 @@ def build_qss(palette: dict | None = None, font_size: float | None = None) -> st
     return qss
 
 
-def apply_palette(app) -> None:
-    """Apply dark palette roles that QSS does not cover (e.g. PlaceholderText)."""
+def theme_overrides(name: str) -> dict:
+    """The complete palette for a theme name; unknown names fall back to dark."""
+    return LIGHT_PALETTE if name == "light" else DARK_PALETTE
+
+
+_active_theme = "dark"
+
+
+def active_theme() -> str:
+    """The theme currently applied ("dark" until a light theme is switched on)."""
+    return _active_theme
+
+
+def apply_theme(app, name: str) -> None:
+    """Switch the whole app to a named theme, live.
+
+    PALETTE is swapped in place (icon tints, delegates and the menu
+    painter read it at render time), then the QPalette roles and the
+    app-wide stylesheet are re-applied — every widget repolishes.
+    """
+    global _active_theme
+    pal = theme_overrides(name)
+    _active_theme = "light" if pal is LIGHT_PALETTE else "dark"
+    PALETTE.clear()
+    PALETTE.update(pal)
+    apply_palette(app, palette=dict(pal))
+    app.setStyleSheet(build_qss(palette=dict(pal)))
+
+
+def apply_palette(app, palette: dict | None = None) -> None:
+    """Apply palette roles that QSS does not cover (e.g. PlaceholderText)."""
+    values = dict(PALETTE)
+    values.update(palette or {})
     pal = app.palette()
-    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#8e95a2"))
-    pal.setColor(QPalette.ColorRole.Highlight, QColor(PALETTE["selection"]))
-    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(PALETTE["text"]))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(values["placeholder"]))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(values["selection"]))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor(values["selection_text"]))
     app.setPalette(pal)
 
 
@@ -964,7 +1194,7 @@ class _MenuStyler(QObject):
         path = QPainterPath()
         path.addRoundedRect(bg_rect, 8, 8)
         painter.fillPath(path, QColor(PALETTE["surface_2"]))
-        painter.setPen(QPen(QColor("#3c495e"), 1))
+        painter.setPen(QPen(QColor(PALETTE["menu_border"]), 1))
         painter.drawPath(path)
 
         rtl = menu.layoutDirection() == Qt.RightToLeft
@@ -982,7 +1212,7 @@ class _MenuStyler(QObject):
                 continue
             if act.isSeparator():
                 y = rect.center().y()
-                painter.setPen(QPen(QColor(255, 255, 255, 22), 1))
+                painter.setPen(QPen(QColor(PALETTE["menu_separator"]), 1))
                 painter.drawLine(rect.left() + 10, y, rect.right() - 10, y)
                 continue
 
@@ -991,8 +1221,8 @@ class _MenuStyler(QObject):
 
             pill = rect.adjusted(6, 1, -6, -1)
             if hovered:
-                painter.setBrush(QColor("#323b4c"))
-                painter.setPen(QPen(QColor("#4a5870"), 1))
+                painter.setBrush(QColor(PALETTE["hover_bg"]))
+                painter.setPen(QPen(QColor(PALETTE["menu_hover_border"]), 1))
                 painter.drawRoundedRect(QRectF(pill).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
 
             content = pill.adjusted(10, 0, -10, 0)
@@ -1026,7 +1256,7 @@ class _MenuStyler(QObject):
                 max(20, text_right - text_left + 1), content.height(),
             )
             fg = (
-                QColor("#ffffff") if hovered
+                QColor(PALETTE["hover_text"]) if hovered
                 else QColor(PALETTE["text"] if enabled else PALETTE["faint"])
             )
             painter.setPen(fg)
@@ -1039,7 +1269,7 @@ class _MenuStyler(QObject):
 
             if shortcut:
                 sc_color = (
-                    QColor("#d0d7e3") if hovered
+                    QColor(PALETTE["menu_hover_sc"]) if hovered
                     else QColor(PALETTE["muted"] if enabled else PALETTE["faint"])
                 )
                 painter.setPen(sc_color)
