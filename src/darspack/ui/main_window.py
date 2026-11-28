@@ -224,8 +224,8 @@ class MainWindow(QMainWindow):
         self.resize(1150, 720)
         self.setMinimumSize(1000, 600)
         self._file_icon = icons.icon("file-text", theme.PALETTE["muted"], 16)
-        self._pdf_icon = icons.icon("file-text", "#8ca8d9", 16)
-        self._image_icon = icons.icon("image", "#8fd0b8", 16)
+        self._pdf_icon = icons.icon("file-text", theme.PALETTE["file_pdf_tint"], 16)
+        self._image_icon = icons.icon("image", theme.PALETTE["file_image_tint"], 16)
         self._archive_icon = icons.icon("archive", theme.PALETTE["muted"], 16)
         self._package_icon = icons.icon("package", theme.PALETTE["accent"], 16)
 
@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
             icons.tinted_pixmap("search", theme.PALETTE["muted"], 18))
         search_icon.setFixedSize(18, 18)
         search_icon.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._search_icon_lbl = search_icon   # re-tinted on a theme switch
         shell.addWidget(search_icon)
         self.search_box = QLineEdit()
         self.search_box.setObjectName("SearchField")
@@ -325,6 +326,7 @@ class MainWindow(QMainWindow):
         pkg_chev.setFixedSize(12, 12)
         pkg_chev.setPixmap(icons.tinted_pixmap("chevron-down", theme.PALETTE["muted"], 12))
         pkg_chev.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._pkg_chev_lbl = pkg_chev   # re-tinted on a theme switch
         pkg_overlay.addWidget(pkg_chev, 0, Qt.AlignVCenter)
         toolbar.addWidget(self.packages_button)
 
@@ -342,7 +344,7 @@ class MainWindow(QMainWindow):
             self.more_menu, tr("btn_edit_meta"), "file-text", self._on_shortcut_edit)
         self.delete_action = self._menu_action(
             self.more_menu, tr("btn_delete"), "trash-2",
-            self.delete_selected_files, icon_color=theme.PALETTE["danger"])
+            self.delete_selected_files, icon_color="danger")
         self.edit_action.setEnabled(False)
         self.delete_action.setEnabled(False)
         self.more_menu.addSeparator()
@@ -813,6 +815,7 @@ class MainWindow(QMainWindow):
         button = QToolButton()
         button.setText(text)
         button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button._icon_name = icon_name     # re-tinted on a theme switch
         button.setIcon(icons.icon(icon_name, theme.PALETTE["text"], 15))
         button.setIconSize(QSize(15, 15))
         button.setCursor(Qt.PointingHandCursor)
@@ -821,11 +824,22 @@ class MainWindow(QMainWindow):
 
     def _menu_action(self, menu: QMenu, text: str, icon_name: str,
                      slot, icon_color: str | None = None) -> QAction:
-        color = icon_color or theme.PALETTE["text"]
+        # icon_color is a palette key ("danger") or a literal hex; kept on
+        # the action so a theme switch can re-tint the persistent menus.
+        color = self._icon_color(icon_color)
         action = menu.addAction(
             icons.icon(icon_name, color, 16), text)
+        action._icon_name = icon_name
+        action._icon_color_spec = icon_color
         action.triggered.connect(slot)
         return action
+
+    @staticmethod
+    def _icon_color(spec: str | None) -> str:
+        """Resolve an icon colour spec: a palette key or a literal hex."""
+        if spec is None:
+            return theme.PALETTE["text"]
+        return theme.PALETTE.get(spec, spec)
 
     def _sync_nav_to_filters(self) -> None:
         """Keep the NavRail highlight synchronized with combo-box filter state."""
@@ -932,7 +946,7 @@ class MainWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
 
-        from .delegates import KIND_BADGES
+        from .delegates import kind_badges
 
         cols = 3  # 3 responsive columns
         for idx, row in enumerate(self.last_rows):
@@ -968,7 +982,8 @@ class MainWindow(QMainWindow):
             kind_text = row["kind"] or "سایر"
             k_chip = QLabel(kind_text)
             k_chip.setObjectName("CardKindChip")
-            bg, fg = KIND_BADGES.get(kind_text, KIND_BADGES["سایر"])
+            badges = kind_badges()
+            bg, fg = badges.get(kind_text, badges["سایر"])
             k_chip.setStyleSheet(f"background: {bg}; color: {fg};")
             chips_row.addWidget(k_chip)
             chips_row.addStretch(1)
@@ -1279,13 +1294,16 @@ class MainWindow(QMainWindow):
                 # timer is cancelled if the window is destroyed first.
                 QTimer.singleShot(200, self, self.open_welcome_tour)
 
-    def _apply_dark_titlebar(self) -> None:
-        """Apply native Windows 11 Immersive Dark Mode and Mica backdrop."""
-        if getattr(self, "_dark_titlebar", False):
+    def _apply_dark_titlebar(self, dark: bool = True) -> None:
+        """Apply native Windows 11 Immersive Dark Mode and Mica backdrop.
+
+        dark=False flips the titlebar to the light look (پوسته‌ی روشن);
+        the theme switch calls this again so the change is live."""
+        if dark and getattr(self, "_dark_titlebar", False):
             return
         from . import fluent_win32
-        if fluent_win32.apply_fluent_window_effects(self):
-            self._dark_titlebar = True
+        if fluent_win32.apply_fluent_window_effects(self, dark=dark):
+            self._dark_titlebar = dark
 
     def eventFilter(self, obj, event) -> bool:
         table = getattr(self, "table", None)
@@ -1841,10 +1859,70 @@ class MainWindow(QMainWindow):
         if dialogs.SettingsDialog(self, self.settings,
                                   self.settings_path).exec():
             from .app import apply_font_size
+            # Theme first: apply_font_size builds the stylesheet from the
+            # live palette, so the palette must already be the new theme's.
+            # (apply_theme sets an unscaled stylesheet; apply_font_size
+            # right after re-scales it, then metrics follow the font.)
+            self._apply_theme_setting()
             apply_font_size(self.settings)
             self.apply_font_metrics()
             if self.settings.get("library") != old_library:
                 self._offer_restart_for_library_change()
+
+    def _apply_theme_setting(self) -> None:
+        """Live-apply the saved theme (پوسته): QSS, QPalette, icons, titlebar."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme.apply_theme(app, self.settings.get("theme", "dark"))
+        self._refresh_theme_icons()
+        self._apply_dark_titlebar(theme.active_theme() != "light")
+
+    def _refresh_theme_icons(self) -> None:
+        """Re-tint the pixmaps that were baked at construction time.
+
+        A live theme switch repolishes every QSS-driven widget, and the
+        painters (menus, delegates) read the live palette — but QIcon
+        pixmaps keep the colour they were rendered with until re-made.
+        The table rows and card grid re-bake via refresh().
+        """
+        p = theme.PALETTE
+        self._file_icon = icons.icon("file-text", p["muted"], 16)
+        self._pdf_icon = icons.icon("file-text", p["file_pdf_tint"], 16)
+        self._image_icon = icons.icon("image", p["file_image_tint"], 16)
+        self._archive_icon = icons.icon("archive", p["muted"], 16)
+        self._package_icon = icons.icon("package", p["accent"], 16)
+        self._search_icon_lbl.setPixmap(
+            icons.tinted_pixmap("search", p["muted"], 18))
+        self.clear_search_button.setIcon(icons.icon("x", p["muted"], 14))
+        self._pkg_chev_lbl.setPixmap(
+            icons.tinted_pixmap("chevron-down", p["muted"], 12))
+        self.more_button.setIcon(
+            icons.icon("ellipsis-vertical", p["muted"], 16))
+        self.empty_guide_button.setIcon(
+            icons.icon("circle-help", p["text"], 16))
+        self.info_bar_close.setIcon(icons.icon("x", p["muted"], 14))
+        for btn in (self.packages_button, self.duplicates_button,
+                    self.share_button):
+            name = getattr(btn, "_icon_name", None)
+            if name:
+                btn.setIcon(icons.icon(name, p["text"], 15))
+        for menu in (self.packages_menu, self.more_menu):
+            for act in menu.actions():
+                name = getattr(act, "_icon_name", None)
+                if name:
+                    color = self._icon_color(
+                        getattr(act, "_icon_color_spec", None))
+                    act.setIcon(icons.icon(name, color, 16))
+        self._sync_nav_to_filters()
+        # View-segment icons: white sits on the navy active pill in both
+        # themes; the inactive one follows the palette.
+        is_cards = self.card_scroll.isVisible()
+        self.btn_view_table.setIcon(icons.icon(
+            "list", p["muted"] if is_cards else "#ffffff", 16))
+        self.btn_view_cards.setIcon(icons.icon(
+            "grid", "#ffffff" if is_cards else p["muted"], 16))
+        self.refresh()
 
     def _offer_restart_for_library_change(self) -> None:
         """The library folder only takes effect after a restart (H6):

@@ -9,8 +9,11 @@ from __future__ import annotations
 import sys
 
 
-def apply_fluent_window_effects(window) -> bool:
-    """Apply native Windows 11 Mica backdrop and dark titlebar styling."""
+def apply_fluent_window_effects(window, dark: bool = True) -> bool:
+    """Apply native Windows 11 Mica backdrop and titlebar styling.
+
+    dark=False switches the titlebar (and Mica tint) to the light look,
+    matching the light theme (پوسته‌ی روشن)."""
     if sys.platform != "win32":
         return False
 
@@ -25,7 +28,7 @@ def apply_fluent_window_effects(window) -> bool:
         dwmapi = ctypes.windll.dwmapi
 
         # 1. Immersive Dark Mode Titlebar (Windows 10 1809+ / Windows 11)
-        dark_value = ctypes.c_int(1)
+        dark_value = ctypes.c_int(1 if dark else 0)
         for attr in (20, 19):  # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE, 19 = older Win10
             if dwmapi.DwmSetWindowAttribute(
                 wintypes.HWND(hwnd),
